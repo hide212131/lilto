@@ -2,6 +2,7 @@ import { createLogger, type Logger } from "./logger";
 import type { ClaudeAuthService } from "./auth-service";
 import type { ProviderSettings } from "./provider-settings";
 import { isCustomProviderReady } from "./provider-settings";
+import { shouldPrioritizeAgentBrowser } from "./skill-runtime";
 
 type AgentError = {
   code: string;
@@ -80,7 +81,9 @@ export function standardizeError(
 export async function createPiSessionFromSdk(options: {
   apiKey: string | null;
   model?: PiModel;
+  cwd?: string;
 }): Promise<PiSession> {
+  const sessionCwd = options.cwd ?? process.cwd();
   const { AuthStorage, createAgentSession, ModelRegistry, SessionManager } = (await importEsm(
     "@mariozechner/pi-coding-agent"
   )) as {
@@ -93,7 +96,10 @@ export async function createPiSessionFromSdk(options: {
       model?: PiModel;
     }) => Promise<{ session: unknown }>;
     ModelRegistry: new (authStorage: unknown) => unknown;
-    SessionManager: { inMemory: () => unknown };
+    SessionManager: {
+      inMemory: (cwd?: string) => unknown;
+      create?: (cwd: string) => unknown;
+    };
   };
 
   const authStorage = AuthStorage.create();
@@ -104,11 +110,14 @@ export async function createPiSessionFromSdk(options: {
   }
   const modelRegistry = new ModelRegistry(authStorage);
 
+  const sessionManager =
+    typeof SessionManager.create === "function" ? SessionManager.create(sessionCwd) : SessionManager.inMemory(sessionCwd);
+
   const { session } = await createAgentSession({
-    sessionManager: SessionManager.inMemory(),
+    sessionManager,
     authStorage,
     modelRegistry,
-    cwd: process.cwd(),
+    cwd: sessionCwd,
     model: options.model
   });
 
@@ -210,32 +219,41 @@ function isLocalOllamaUrl(baseUrl: string): boolean {
 }
 
 export class AgentRuntime {
-  private readonly createSession: (options: { apiKey: string | null; model?: PiModel }) => Promise<PiSession>;
+  private readonly createSession: (options: { apiKey: string | null; model?: PiModel; cwd?: string }) => Promise<PiSession>;
   private readonly authService: Pick<ClaudeAuthService, "getState" | "getApiKey">;
   private readonly logger: Logger;
+  private readonly workspaceDir?: string;
+  private readonly availableSkillNames: Set<string>;
   private session: PiSession | null = null;
   private sessionKey: string | null = null;
 
   constructor({
     createSession = createPiSessionFromSdk,
     authService,
+    workspaceDir,
+    availableSkills = [],
     logger = createLogger("agent")
   }: {
-    createSession?: (options: { apiKey: string | null; model?: PiModel }) => Promise<PiSession>;
+    createSession?: (options: { apiKey: string | null; model?: PiModel; cwd?: string }) => Promise<PiSession>;
     authService: Pick<ClaudeAuthService, "getState" | "getApiKey">;
+    workspaceDir?: string;
+    availableSkills?: Array<{ name: string }>;
     logger?: Logger;
   }) {
     this.createSession = createSession;
     this.authService = authService;
     this.logger = logger;
+    this.workspaceDir = workspaceDir;
+    this.availableSkillNames = new Set(availableSkills.map((skill) => skill.name));
   }
 
-  private async ensureSession(options: { apiKey: string | null; model?: PiModel }): Promise<PiSession> {
+  private async ensureSession(options: { apiKey: string | null; model?: PiModel; cwd?: string }): Promise<PiSession> {
     const signature = JSON.stringify({
       apiKey: options.apiKey,
       provider: options.model?.provider ?? "anthropic",
       model: options.model?.id ?? "default",
-      baseUrl: options.model?.baseUrl ?? ""
+      baseUrl: options.model?.baseUrl ?? "",
+      cwd: options.cwd ?? process.cwd()
     });
 
     if (this.session && this.sessionKey === signature) {
@@ -247,7 +265,10 @@ export class AgentRuntime {
     return this.session;
   }
 
-  private async runSessionPrompt(text: string, options: { apiKey: string | null; model?: PiModel }): Promise<AgentResult> {
+  private async runSessionPrompt(
+    text: string,
+    options: { apiKey: string | null; model?: PiModel; cwd?: string }
+  ): Promise<AgentResult> {
     const session = await this.ensureSession(options);
     let streamOutput = "";
     let finalOutput = "";
@@ -288,6 +309,19 @@ export class AgentRuntime {
     return { ok: true, text: output };
   }
 
+  private buildPromptWithSkillHint(text: string): string {
+    if (!this.availableSkillNames.has("agent-browser")) {
+      return text;
+    }
+    if (!shouldPrioritizeAgentBrowser(text)) {
+      return text;
+    }
+    if (text.trimStart().startsWith("/skill:")) {
+      return text;
+    }
+    return `/skill:agent-browser\n\n${text}`;
+  }
+
   async submitPrompt(text: string, providerSettings: ProviderSettings): Promise<AgentResult> {
     this.logger.info("agent_prompt_received", {
       textLength: text.length,
@@ -300,6 +334,9 @@ export class AgentRuntime {
         this.logger.info("agent_prompt_mock_completed", { outputLength: mock.length });
         return { ok: true, text: mock };
       }
+
+      const promptText = this.buildPromptWithSkillHint(text);
+      const runOptionsBase = { cwd: this.workspaceDir };
 
       if (providerSettings.activeProvider === "custom-openai-completions") {
         if (!isCustomProviderReady(providerSettings)) {
@@ -322,7 +359,7 @@ export class AgentRuntime {
             : isLocalOllamaUrl(model.baseUrl)
               ? "ollama"
               : "not-required";
-        return await this.runSessionPrompt(text, { apiKey, model });
+        return await this.runSessionPrompt(promptText, { apiKey, model, ...runOptionsBase });
       }
 
       const authState = this.authService.getState() as AuthSnapshot;
@@ -351,7 +388,7 @@ export class AgentRuntime {
         };
       }
 
-      return await this.runSessionPrompt(text, { apiKey, model: undefined });
+      return await this.runSessionPrompt(promptText, { apiKey, model: undefined, ...runOptionsBase });
     } catch (error) {
       const normalized = standardizeError(error);
       this.logger.error("agent_prompt_failed", normalized);

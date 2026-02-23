@@ -29,3 +29,9 @@
 1. `npm run e2e:electron` を実行する
 2. コマンドが成功終了することを確認する
 3. `test/artifacts/electron-e2e.png` が生成されることを確認する
+
+## Agent Skills (Live) E2E
+1. 事前にアプリで Claude OAuth を完了し、`.lilto-auth.json` が作成されていることを確認する
+2. `npm run e2e:electron:skills-live` を実行する（`LILTO_E2E_MOCK` は未設定または `0`）
+3. コマンドが成功終了することを確認する
+4. `test/artifacts/electron-e2e-agent-skills-live.png` が生成されることを確認する

@@ -55,7 +55,8 @@ test("認証済みなら SDK 応答を返す", async () => {
     apiKey: "oauth-api-key",
     provider: "anthropic",
     model: "default",
-    baseUrl: ""
+    baseUrl: "",
+    cwd: process.cwd()
   });
 
   const result = await runtime.submitPrompt("test", createProviderSettings());
@@ -249,4 +250,54 @@ test("SDK 失敗時に標準化エラーを返す", async () => {
   assert.equal(result.ok, false);
   assert.equal(result.error.code, "AGENT_EXECUTION_FAILED");
   assert.equal(result.error.retryable, true);
+});
+
+test("ブラウザ依頼時は agent-browser スキルを優先する", async () => {
+  let receivedPrompt = "";
+  const runtime = new AgentRuntime({
+    authService: createAuthService("authenticated"),
+    createSession: async () => ({
+      subscribe(listener) {
+        listener({
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: "ok" }
+        });
+        return () => {};
+      },
+      async prompt(text) {
+        receivedPrompt = text;
+      }
+    }),
+    availableSkills: [{ name: "agent-browser" }],
+    logger: { info() {}, error() {} }
+  });
+
+  const result = await runtime.submitPrompt("ブラウザで動作確認して", createProviderSettings());
+  assert.equal(result.ok, true);
+  assert.equal(receivedPrompt.startsWith("/skill:agent-browser"), true);
+});
+
+test("agent-browser が無い場合はスキル接頭辞を付けない", async () => {
+  let receivedPrompt = "";
+  const runtime = new AgentRuntime({
+    authService: createAuthService("authenticated"),
+    createSession: async () => ({
+      subscribe(listener) {
+        listener({
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: "ok" }
+        });
+        return () => {};
+      },
+      async prompt(text) {
+        receivedPrompt = text;
+      }
+    }),
+    availableSkills: [],
+    logger: { info() {}, error() {} }
+  });
+
+  const result = await runtime.submitPrompt("ブラウザで動作確認して", createProviderSettings());
+  assert.equal(result.ok, true);
+  assert.equal(receivedPrompt, "ブラウザで動作確認して");
 });

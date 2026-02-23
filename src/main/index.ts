@@ -8,6 +8,7 @@ import { HeartbeatScheduler } from "./heartbeat";
 import { registerAgentIpcHandlers } from "./ipc";
 import { createLogger } from "./logger";
 import { ProviderSettingsService } from "./provider-settings";
+import { setupSkillRuntime } from "./skill-runtime";
 
 const config = readConfig();
 const logger = createLogger("main");
@@ -17,7 +18,6 @@ let isQuitting = false;
 
 const authService = new ClaudeAuthService({ logger: createLogger("auth") });
 const providerSettingsService = new ProviderSettingsService({ logger: createLogger("providers") });
-const agentRuntime = new AgentRuntime({ logger: createLogger("agent"), authService });
 
 const heartbeat = new HeartbeatScheduler({
   intervalMs: config.heartbeatIntervalMs,
@@ -54,6 +54,39 @@ function createWindow(): void {
 }
 
 void app.whenReady().then(() => {
+  let skillRuntime;
+  try {
+    skillRuntime = setupSkillRuntime({
+      appDataDir: app.getPath("userData"),
+      projectName: path.basename(process.cwd()),
+      workspaceTtlHours: Number(process.env.LILTO_PI_WORKSPACE_TTL_HOURS || 24 * 7)
+    });
+    logger.info("skill_runtime_initialized", {
+      appSkillsDir: skillRuntime.appSkillsDir,
+      workspaceDir: skillRuntime.workspaceDir,
+      skills: skillRuntime.availableSkills.map((skill) => skill.name),
+      updatedSettings: skillRuntime.updatedSettings,
+      removedWorkspaces: skillRuntime.removedWorkspaces
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error("skill_runtime_init_failed", { message });
+    skillRuntime = {
+      appSkillsDir: "",
+      workspaceDir: process.cwd(),
+      availableSkills: [],
+      updatedSettings: [],
+      removedWorkspaces: []
+    };
+  }
+
+  const agentRuntime = new AgentRuntime({
+    logger: createLogger("agent"),
+    authService,
+    workspaceDir: skillRuntime.workspaceDir,
+    availableSkills: skillRuntime.availableSkills
+  });
+
   registerAgentIpcHandlers({ agentRuntime, authService, providerSettingsService });
   createWindow();
   heartbeat.start();
