@@ -5,7 +5,7 @@
   "description": "Lilt-o desktop shell with Pi SDK bridge",
   "main": "dist/main/index.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && vite build",
     "start": "npm run build && electron .",
     "test": "npm run build && node --test",
     "e2e:electron": "npm run build && node scripts/e2e-electron-agent-browser.js"
@@ -17,6 +17,8 @@
   "devDependencies": {
     "agent-browser": "^0.13.0",
     "electron": "^31.7.7",
-    "typescript": "^5.7.3"
+    "lit": "^3.3.2",
+    "typescript": "^5.7.3",
+    "vite": "^7.3.1"
   }
 }

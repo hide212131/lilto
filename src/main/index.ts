@@ -44,7 +44,7 @@ function createWindow(): void {
     title: config.appName
   });
 
-  void mainWindow.loadFile(path.join(process.cwd(), "src", "renderer", "index.html"));
+  void mainWindow.loadFile(path.join(process.cwd(), "dist", "renderer", "index.html"));
 
   mainWindow.on("close", (event) => {
     if (isQuitting) return;
