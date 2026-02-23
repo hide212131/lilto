@@ -1,6 +1,6 @@
 ## Context
 
-現状の Lilt-AI は Main 側で Pi SDK を動作させる基盤と最小 UI を備える一方、会話体験としてのチャット UI と、`pi-web-ui` 系からの移植方針が十分に定義されていない。  
+現状の Lilt-o は Main 側で Pi SDK を動作させる基盤と最小 UI を備える一方、会話体験としてのチャット UI と、`pi-web-ui` 系からの移植方針が十分に定義されていない。  
 本変更では Renderer 側にチャット UI を追加しつつ、Renderer が扱う責務と Main 側へ移す責務を明確化し、`docs/ui-porting-guidelines.md` を実装判断の一次情報にする。
 
 制約:

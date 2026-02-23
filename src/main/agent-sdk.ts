@@ -116,7 +116,7 @@ export class AgentRuntime {
   async submitPrompt(text: string): Promise<AgentResult> {
     this.logger.info("agent_prompt_received", { textLength: text.length });
     try {
-      if (process.env.LILT_E2E_MOCK === "1") {
+      if (process.env.LILTO_E2E_MOCK === "1") {
         const mock = `[E2E_MOCK] ${text}`;
         this.logger.info("agent_prompt_mock_completed", { outputLength: mock.length });
         return { ok: true, text: mock };

@@ -27,7 +27,7 @@ type AuthCodeResult =
   | { ok: false; error: { code: string; message: string } };
 
 interface Window {
-  lilt: {
+  lilto: {
     submitPrompt: (text: string) => Promise<SubmitResult>;
     startClaudeOauth: () => Promise<AuthStartResult>;
     submitAuthCode: (code: string) => Promise<AuthCodeResult>;
@@ -109,14 +109,14 @@ function renderAuthState(state: AuthState): void {
 
 async function hydrateAuthState(): Promise<void> {
   try {
-    const state = await window.lilt.getAuthState();
+    const state = await window.lilto.getAuthState();
     renderAuthState(state);
   } catch (error) {
     authStatusEl.textContent = `認証状態の取得に失敗: ${String(error)}`;
   }
 }
 
-window.lilt.onAuthStateChanged((state) => {
+window.lilto.onAuthStateChanged((state) => {
   renderAuthState(state);
 });
 
@@ -144,7 +144,7 @@ window.addEventListener("keydown", (event) => {
 
 authStartEl.addEventListener("click", async () => {
   authStatusEl.textContent = "OAuth を開始しています...";
-  const result = await window.lilt.startClaudeOauth();
+  const result = await window.lilto.startClaudeOauth();
   renderAuthState(result.state);
 });
 
@@ -155,7 +155,7 @@ authCodeSubmitEl.addEventListener("click", async () => {
     return;
   }
 
-  const result = await window.lilt.submitAuthCode(code);
+  const result = await window.lilto.submitAuthCode(code);
   if (result.ok) {
     authCodeEl.value = "";
     renderAuthState(result.state);
@@ -197,7 +197,7 @@ sendEl.addEventListener("click", async () => {
   statusEl.textContent = "送信中...";
 
   try {
-    const result = await window.lilt.submitPrompt(text);
+    const result = await window.lilto.submitPrompt(text);
     if (result.ok) {
       pendingMessage.classList.remove("msg-pending");
       pendingMessage.textContent = result.response.text;

@@ -4,7 +4,7 @@
 システムは、アプリ起動時に Electron Main プロセスを初期化し、Renderer UI を利用可能な状態で起動しなければならない（MUST）。
 
 #### Scenario: 初回起動でUIが利用可能になる
-- **WHEN** ユーザーが Lilt-AI を起動する
+- **WHEN** ユーザーが Lilt-o を起動する
 - **THEN** Main プロセスが起動し、Renderer 画面が表示される
 
 ### Requirement: Main と Renderer の責務分離

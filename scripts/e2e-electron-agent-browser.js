@@ -3,7 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const rootDir = path.resolve(__dirname, "..");
-const sessionName = "lilt-electron-e2e";
+const sessionName = "lilto-electron-e2e";
 const cdpPort = "9222";
 const screenshotPath = path.join(rootDir, "test", "artifacts", "electron-e2e.png");
 
@@ -87,7 +87,7 @@ async function main() {
     cwd: rootDir,
     env: {
       ...process.env,
-      LILT_E2E_MOCK: "1"
+      LILTO_E2E_MOCK: "1"
     },
     stdio: ["ignore", "pipe", "pipe"]
   });
@@ -105,7 +105,7 @@ async function main() {
 
     agentBrowser(["connect", cdpPort]);
     const title = agentBrowser(["get", "title"]);
-    if (!title.includes("Lilt-AI")) {
+    if (!title.includes("Lilt-o")) {
       throw new Error(`Unexpected title: ${title}`);
     }
 

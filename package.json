@@ -1,8 +1,8 @@
 {
-  "name": "lilt-ai",
+  "name": "lilt-o",
   "version": "0.1.0",
   "private": true,
-  "description": "Lilt-AI desktop shell with Pi SDK bridge",
+  "description": "Lilt-o desktop shell with Pi SDK bridge",
   "main": "dist/main/index.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",

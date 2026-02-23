@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 
-contextBridge.exposeInMainWorld("lilt", {
+contextBridge.exposeInMainWorld("lilto", {
   submitPrompt: async (text: string) => ipcRenderer.invoke("agent:submitPrompt", { text }),
   startClaudeOauth: async () => ipcRenderer.invoke("auth:startClaudeOauth"),
   submitAuthCode: async (code: string) => ipcRenderer.invoke("auth:submitCode", { code }),

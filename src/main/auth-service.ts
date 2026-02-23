@@ -88,7 +88,7 @@ export class ClaudeAuthService {
   constructor({
     logger = createLogger("auth"),
     providerFactory = defaultProviderFactory,
-    authPath = path.join(process.cwd(), ".lilt-auth.json"),
+    authPath = path.join(process.cwd(), ".lilto-auth.json"),
     openExternal = (url: string) => shell.openExternal(url)
   }: {
     logger?: Logger;
@@ -102,7 +102,7 @@ export class ClaudeAuthService {
     this.openExternal = openExternal;
     this.loadPersistedCredentials();
 
-    if (process.env.LILT_E2E_MOCK === "1") {
+    if (process.env.LILTO_E2E_MOCK === "1") {
       this.setState("authenticated", "E2E モック認証済み", null);
     } else if (this.credentials) {
       this.setState("authenticated", "認証情報を読み込みました。", null);
@@ -224,7 +224,7 @@ export class ClaudeAuthService {
   }
 
   async getApiKey(): Promise<string | null> {
-    if (process.env.LILT_E2E_MOCK === "1") {
+    if (process.env.LILTO_E2E_MOCK === "1") {
       return "mock-anthropic-access-token";
     }
 

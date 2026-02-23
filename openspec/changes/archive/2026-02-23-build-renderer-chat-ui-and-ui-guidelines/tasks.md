@@ -1,6 +1,6 @@
 ## 1. UI ポーティング方針の具体化
 
-- [x] 1.1 `pi-web-ui` / `pi-web-ui-example` の構成要素を棚卸しし、Lilt-AI で流用する要素と変更する要素を整理する
+- [x] 1.1 `pi-web-ui` / `pi-web-ui-example` の構成要素を棚卸しし、Lilt-o で流用する要素と変更する要素を整理する
 - [x] 1.2 Renderer で禁止する依存（ファイル I/O、Node/Electron Main 専用 API）と Main 側へ移管する基準を `docs/ui-porting-guidelines.md` へ反映する
 
 ## 2. Renderer チャット UI 実装

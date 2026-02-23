@@ -1,7 +1,7 @@
 .DS_Store
 .claude/settings.local.json
 .env
-.lilt-auth.json
+.lilto-auth.json
 node_modules
 dist
 test/artifacts/

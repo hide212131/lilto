@@ -13,7 +13,7 @@
   - Renderer は UI 状態管理に集中し、問い合わせ実行は IPC 経由で Main に委譲
 
 ## 構成要素の棚卸し（`pi-web-ui-example` ベース）
-| 参照元 | Lilt-AIでの扱い | 実装先/備考 |
+| 参照元 | Lilt-oでの扱い | 実装先/備考 |
 |---|---|---|
 | `packages/web-ui/src/components/AgentInterface.ts` | 一部流用（責務のみ） | Renderer 側で「入力 + メッセージ表示 + 送信状態管理」を実装。Agent 実行自体は流用しない。 |
 | `packages/web-ui/src/components/Messages.ts` | 一部流用（表示責務） | `src/renderer/renderer.ts` で user/assistant/error メッセージ描画を実装。 |
