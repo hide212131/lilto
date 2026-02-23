@@ -21,6 +21,7 @@ PC作業を人間の代わりに実行する、軽量なAIアシスタント。
 ## 現在の実装スコープ（初期）
 - Electron の Main/Renderer 最小構成
 - Renderer から Main への IPC 経由で Pi SDK を呼び出す Agent Bridge
+- Pi `ai` パッケージによる Claude OAuth 認証導線（外部ブラウザ起動 + コード入力 + 状態表示）
 - 固定間隔ハートビートと登録ジョブ実行
 - エラーの標準化レスポンスとログ出力
 

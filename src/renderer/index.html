@@ -61,6 +61,40 @@
         align-items: center;
       }
 
+      .auth {
+        margin-top: 14px;
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 10px;
+        padding: 12px;
+      }
+
+      .auth-row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+
+      .auth-code-row {
+        margin-top: 10px;
+        display: flex;
+      }
+
+      .auth-code-row input {
+        flex: 1;
+        min-width: 280px;
+        border-radius: 8px;
+        border: 1px solid #cbd5e1;
+        padding: 8px;
+      }
+
+      .auth-help {
+        margin-top: 8px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
       button {
         background: var(--accent);
         color: white;
@@ -93,9 +127,22 @@
       <div class="panel">
         <h1>Lilt-AI</h1>
         <p>Pi SDK を Main プロセスから呼び出す最小エージェントブリッジ。</p>
+        <div class="auth">
+          <div class="auth-row">
+            <button id="auth-start">Claude OAuth で認証</button>
+            <span class="status" id="auth-status">未認証です。認証を開始してください。</span>
+          </div>
+          <div class="auth-row auth-code-row" id="auth-code-row">
+            <input id="auth-code" placeholder="Authentication Code（code#state）を貼り付け" />
+            <button id="auth-code-submit">コード送信</button>
+          </div>
+          <div class="auth-help">
+            Claude 画面の「Authentication Code / Paste this into Claude Code:」で表示された値を貼り付けて送信してください。
+          </div>
+        </div>
         <textarea id="prompt" placeholder="依頼内容を入力"></textarea>
         <div class="actions">
-          <button id="send">送信</button>
+          <button id="send" disabled>送信</button>
           <span class="status" id="status">待機中</span>
         </div>
         <pre id="output">ここに応答が表示されます。</pre>

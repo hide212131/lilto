@@ -63,6 +63,18 @@ async function waitForStatus(timeoutMs = 15000) {
   throw new Error("Timed out waiting for status transition");
 }
 
+async function waitForAuthReady(timeoutMs = 15000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const authStatus = agentBrowser(["get", "text", "#auth-status"]);
+    if (authStatus.includes("認証完了") || authStatus.includes("認証済み")) {
+      return authStatus;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error("Timed out waiting for auth ready");
+}
+
 async function main() {
   fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
 
@@ -98,10 +110,11 @@ async function main() {
     }
 
     const initialStatus = agentBrowser(["get", "text", "#status"]);
-    if (!initialStatus.includes("待機中")) {
+    if (!initialStatus.includes("待機中") && !initialStatus.includes("認証が必要")) {
       throw new Error(`Unexpected initial status: ${initialStatus}`);
     }
 
+    await waitForAuthReady();
     agentBrowser(["fill", "#prompt", "E2E smoke from agent-browser"]);
     agentBrowser(["click", "#send"]);
     const finalStatus = await waitForStatus();

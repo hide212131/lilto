@@ -1,7 +1,8 @@
 import path from "node:path";
 import { app, BrowserWindow } from "electron";
 
-import { PiAgentBridge } from "./agent-sdk";
+import { AgentRuntime } from "./agent-sdk";
+import { ClaudeAuthService } from "./auth-service";
 import { readConfig } from "./config";
 import { HeartbeatScheduler } from "./heartbeat";
 import { registerAgentIpcHandlers } from "./ipc";
@@ -13,7 +14,8 @@ const logger = createLogger("main");
 let mainWindow: BrowserWindow | null = null;
 let isQuitting = false;
 
-const agentBridge = new PiAgentBridge({ logger: createLogger("agent") });
+const authService = new ClaudeAuthService({ logger: createLogger("auth") });
+const agentRuntime = new AgentRuntime({ logger: createLogger("agent"), authService });
 
 const heartbeat = new HeartbeatScheduler({
   intervalMs: config.heartbeatIntervalMs,
@@ -50,7 +52,7 @@ function createWindow(): void {
 }
 
 void app.whenReady().then(() => {
-  registerAgentIpcHandlers({ agentBridge });
+  registerAgentIpcHandlers({ agentRuntime, authService });
   createWindow();
   heartbeat.start();
 
@@ -66,6 +68,7 @@ void app.whenReady().then(() => {
 app.on("before-quit", () => {
   isQuitting = true;
   heartbeat.stop();
+  authService.dispose();
 });
 
 app.on("window-all-closed", () => {

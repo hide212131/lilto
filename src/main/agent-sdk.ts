@@ -1,9 +1,11 @@
 import { createLogger, type Logger } from "./logger";
+import type { ClaudeAuthService } from "./auth-service";
 
 type AgentError = {
   code: string;
   message: string;
   details: string | null;
+  retryable: boolean;
 };
 
 type AgentSuccess = { ok: true; text: string };
@@ -23,28 +25,50 @@ type PiSession = {
   subscribe: (listener: (event: AgentEvent) => void) => () => void;
 };
 
-export function standardizeError(error: unknown, code = "AGENT_EXECUTION_FAILED"): AgentError {
+const importEsm = new Function("specifier", "return import(specifier)") as (specifier: string) => Promise<unknown>;
+
+export function standardizeError(
+  error: unknown,
+  code = "AGENT_EXECUTION_FAILED",
+  retryable = true
+): AgentError {
   if (error instanceof Error) {
     return {
       code,
       message: error.message,
-      details: error.stack ?? null
+      details: error.stack ?? null,
+      retryable
     };
   }
 
   return {
     code,
     message: String(error),
-    details: null
+    details: null,
+    retryable
   };
 }
 
-export async function createPiSessionFromSdk(): Promise<PiSession> {
-  const { AuthStorage, createAgentSession, ModelRegistry, SessionManager } = await import(
+export async function createPiSessionFromSdk(apiKey: string | null): Promise<PiSession> {
+  const { AuthStorage, createAgentSession, ModelRegistry, SessionManager } = (await importEsm(
     "@mariozechner/pi-coding-agent"
-  );
+  )) as {
+    AuthStorage: { create: () => unknown };
+    createAgentSession: (args: {
+      sessionManager: unknown;
+      authStorage: unknown;
+      modelRegistry: unknown;
+      cwd: string;
+    }) => Promise<{ session: unknown }>;
+    ModelRegistry: new (authStorage: unknown) => unknown;
+    SessionManager: { inMemory: () => unknown };
+  };
 
   const authStorage = AuthStorage.create();
+  const authStorageWithRuntimeKey = authStorage as { setRuntimeApiKey?: (provider: string, key: string) => void };
+  if (apiKey && typeof authStorageWithRuntimeKey.setRuntimeApiKey === "function") {
+    authStorageWithRuntimeKey.setRuntimeApiKey("anthropic", apiKey);
+  }
   const modelRegistry = new ModelRegistry(authStorage);
 
   const { session } = await createAgentSession({
@@ -57,25 +81,35 @@ export async function createPiSessionFromSdk(): Promise<PiSession> {
   return session as PiSession;
 }
 
-export class PiAgentBridge {
-  private readonly createSession: () => Promise<PiSession>;
+type AuthSnapshot = {
+  phase: "unauthenticated" | "auth_in_progress" | "awaiting_code" | "authenticated" | "auth_failed";
+};
+
+export class AgentRuntime {
+  private readonly createSession: (apiKey: string | null) => Promise<PiSession>;
+  private readonly authService: Pick<ClaudeAuthService, "getState" | "getApiKey">;
   private readonly logger: Logger;
   private session: PiSession | null = null;
+  private sessionApiKey: string | null = null;
 
   constructor({
     createSession = createPiSessionFromSdk,
+    authService,
     logger = createLogger("agent")
   }: {
-    createSession?: () => Promise<PiSession>;
+    createSession?: (apiKey: string | null) => Promise<PiSession>;
+    authService: Pick<ClaudeAuthService, "getState" | "getApiKey">;
     logger?: Logger;
-  } = {}) {
+  }) {
     this.createSession = createSession;
+    this.authService = authService;
     this.logger = logger;
   }
 
-  private async ensureSession(): Promise<PiSession> {
-    if (this.session) return this.session;
-    this.session = await this.createSession();
+  private async ensureSession(apiKey: string | null): Promise<PiSession> {
+    if (this.session && this.sessionApiKey === apiKey) return this.session;
+    this.session = await this.createSession(apiKey);
+    this.sessionApiKey = apiKey;
     return this.session;
   }
 
@@ -88,7 +122,33 @@ export class PiAgentBridge {
         return { ok: true, text: mock };
       }
 
-      const session = await this.ensureSession();
+      const authState = this.authService.getState() as AuthSnapshot;
+      if (authState.phase !== "authenticated") {
+        return {
+          ok: false,
+          error: {
+            code: "AUTH_REQUIRED",
+            message: "Claude を利用するには OAuth 認証が必要です。",
+            details: null,
+            retryable: true
+          }
+        };
+      }
+
+      const apiKey = await this.authService.getApiKey();
+      if (!apiKey) {
+        return {
+          ok: false,
+          error: {
+            code: "AUTH_REQUIRED",
+            message: "認証情報を取得できませんでした。再認証してください。",
+            details: null,
+            retryable: true
+          }
+        };
+      }
+
+      const session = await this.ensureSession(apiKey);
       let output = "";
 
       const unsubscribe = session.subscribe((event) => {
@@ -113,3 +173,6 @@ export class PiAgentBridge {
     }
   }
 }
+
+// Backward-compatible alias for existing imports.
+export { AgentRuntime as PiAgentBridge };

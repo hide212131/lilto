@@ -4,6 +4,7 @@ const fs = require("node:fs");
 
 const targets = [
   "src/main/agent-sdk.ts",
+  "src/main/auth-service.ts",
   "src/main/index.ts",
   "src/main/ipc.ts"
 ];
