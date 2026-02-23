@@ -3,6 +3,7 @@
 ## 事前準備
 - `npm install`
 - 必要な認証情報を環境変数または Pi の設定として用意する
+- GUI 変更がある場合は `npm run e2e:electron` を実行できる状態にする
 
 ## desktop-shell
 1. `npm start` でアプリを起動する
@@ -17,3 +18,8 @@
 ## heartbeat-jobs
 1. Main プロセスログで `heartbeat_tick` が定期出力されることを確認する
 2. 失敗するジョブを追加しても後続ジョブが実行されることをログで確認する
+
+## GUI 変更時の必須チェック
+1. `npm run e2e:electron` を実行する
+2. コマンドが成功終了することを確認する
+3. `test/artifacts/electron-e2e.png` が生成されることを確認する

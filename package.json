@@ -7,12 +7,14 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "npm run build && electron .",
-    "test": "npm run build && node --test"
+    "test": "npm run build && node --test",
+    "e2e:electron": "npm run build && node scripts/e2e-electron-agent-browser.js"
   },
   "dependencies": {
     "@mariozechner/pi-coding-agent": "latest"
   },
   "devDependencies": {
+    "agent-browser": "^0.13.0",
     "electron": "^31.7.7",
     "typescript": "^5.7.3"
   }

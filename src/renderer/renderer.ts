@@ -2,14 +2,10 @@ type SubmitResult =
   | { ok: true; response: { text: string } }
   | { ok: false; error?: { code?: string; message?: string } };
 
-export {};
-
-declare global {
-  interface Window {
-    lilt: {
-      submitPrompt: (text: string) => Promise<SubmitResult>;
-    };
-  }
+interface Window {
+  lilt: {
+    submitPrompt: (text: string) => Promise<SubmitResult>;
+  };
 }
 
 const promptEl = document.getElementById("prompt") as HTMLTextAreaElement;
