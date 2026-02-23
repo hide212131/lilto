@@ -55,7 +55,7 @@ async function waitForStatus(timeoutMs = 15000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     const statusText = agentBrowser(["get", "text", "#status"]);
-    if (statusText.includes("完了") || statusText.includes("エラー")) {
+    if (statusText.includes("待機中") || statusText.includes("エラー")) {
       return statusText;
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
@@ -118,13 +118,13 @@ async function main() {
     agentBrowser(["fill", "#prompt", "E2E smoke from agent-browser"]);
     agentBrowser(["click", "#send"]);
     const finalStatus = await waitForStatus();
-    if (!finalStatus.includes("完了")) {
+    if (!finalStatus.includes("待機中")) {
       throw new Error(`Unexpected final status: ${finalStatus}`);
     }
 
-    const output = agentBrowser(["get", "text", "#output"]);
-    if (!output.includes("[E2E_MOCK] E2E smoke from agent-browser")) {
-      throw new Error(`Unexpected output: ${output}`);
+    const conversation = agentBrowser(["get", "text", "#messages"]);
+    if (!conversation.includes("[E2E_MOCK] E2E smoke from agent-browser")) {
+      throw new Error(`Unexpected conversation: ${conversation}`);
     }
 
     agentBrowser(["screenshot", screenshotPath]);

@@ -18,6 +18,9 @@ PC作業を人間の代わりに実行する、軽量なAIアシスタント。
 - Electron の Renderer プロセスで動くUIは、[pi-web-ui](https://github.com/badlogic/pi-mono/tree/main/packages/web-ui) およびそれをベースにした [pi-web-ui-example](https://github.com/badlogic/pi-mono/blob/main/packages/web-ui/example) に近い構成を目指す
 - ただし上記UIは [pi-agent-core](https://github.com/badlogic/pi-mono/tree/main/packages/agent) などファイル入出力を伴うライブラリに依存するため、そのままでは Electron の Renderer では利用できない。必要に応じて Main 側で動作するようにポーティングする
 
+## UIポーティング方針
+- 詳細は `docs/ui-porting-guidelines.md` を参照
+
 ## 現在の実装スコープ（初期）
 - Electron の Main/Renderer 最小構成
 - Renderer から Main への IPC 経由で Pi SDK を呼び出す Agent Bridge
