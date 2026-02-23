@@ -19,6 +19,6 @@
 
 ## 4. 検証と運用準備
 
-- [ ] 4.1 `desktop-shell` / `agent-bridge` / `heartbeat-jobs` の受け入れシナリオを手動テストとして実施する
+- [x] 4.1 `desktop-shell` / `agent-bridge` / `heartbeat-jobs` の受け入れシナリオを手動テストとして実施する
 - [x] 4.2 ログ出力と最低限のデバッグ情報（IPC 入出力・ジョブ実行結果）を整備する
 - [x] 4.3 音声機能を非対象とする境界を README と実装メモに明記する
