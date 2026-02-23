@@ -6,6 +6,8 @@ import "./components/message-list.js";
 import "./components/composer.js";
 import "./components/settings-modal.js";
 import type { LiltComposer } from "./components/composer.js";
+import type { AgentLoopEvent, LoopState } from "../shared/agent-loop.js";
+import { createInitialLoopState, reduceLoopState } from "../shared/agent-loop.js";
 
 @customElement("lilt-app")
 export class LiltApp extends LitElement {
@@ -23,10 +25,14 @@ export class LiltApp extends LitElement {
   @property({ type: Array }) messages: Message[] = [];
   @property({ type: Boolean }) isSending = false;
   @property({ type: Boolean }) settingsOpen = false;
+  @property({ type: Object }) loopState: LoopState = createInitialLoopState();
 
   @query("lilt-composer") private _composer!: LiltComposer;
 
   private _unsubscribeAuthListener: (() => void) | null = null;
+  private _unsubscribeLoopListener: (() => void) | null = null;
+  private _pendingAssistantIndex: number | null = null;
+  private _progressLines: string[] = [];
 
   static styles = css`
     :host {
@@ -65,12 +71,17 @@ export class LiltApp extends LitElement {
       this.authState = state;
       this._syncSendability();
     });
+    this._unsubscribeLoopListener = window.lilto.onAgentLoopEvent((event) => {
+      this._onLoopEvent(event);
+    });
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
     this._unsubscribeAuthListener?.();
+    this._unsubscribeLoopListener?.();
     this._unsubscribeAuthListener = null;
+    this._unsubscribeLoopListener = null;
   }
 
   private async _hydrate() {
@@ -93,7 +104,13 @@ export class LiltApp extends LitElement {
   }
 
   private _statusText(): string {
-    if (this.isSending) return "送信中...";
+    if (this.isSending || this.loopState.status === "running") {
+      if (this.loopState.activeTools.length > 0) {
+        return `ツール実行中 (${this.loopState.activeTools.length})`;
+      }
+      return "送信中...";
+    }
+    if (this.loopState.status === "failed") return "実行失敗";
     if (this._canSend()) return "待機中";
     if (this.providerSettings.activeProvider === "claude") return "Claude 認証が必要です";
     return "Custom Provider の設定が必要です";
@@ -157,13 +174,20 @@ export class LiltApp extends LitElement {
     }
 
     this._addMessage("user", text);
-    const pendingIdx = this._addPendingMessage("assistant", "処理中...");
+    const pendingIdx = this._addPendingMessage("assistant", "実行開始を待っています...");
+    this._pendingAssistantIndex = pendingIdx;
+    this._progressLines = [];
+    this.loopState = {
+      ...createInitialLoopState(),
+      status: "running"
+    };
     this.isSending = true;
 
     try {
       const result = await window.lilto.submitPrompt(text);
       if (result.ok) {
-        this._resolvePendingMessage(pendingIdx, result.response.text);
+        const prefix = this._progressLines.length > 0 ? `${this._progressLines.join("\n")}\n\n` : "";
+        this._resolvePendingMessage(pendingIdx, `${prefix}${result.response.text}`);
         await this.updateComplete;
         this._composer?.focusInput();
         return;
@@ -179,7 +203,67 @@ export class LiltApp extends LitElement {
       this._addMessage("error", `UNEXPECTED: ${String(err)}`);
     } finally {
       this.isSending = false;
+      this._pendingAssistantIndex = null;
+      this._progressLines = [];
     }
+  }
+
+  private _onLoopEvent(event: AgentLoopEvent) {
+    this.loopState = reduceLoopState(this.loopState, event);
+    this._appendProgressLineFromLoopEvent(event);
+  }
+
+  private _appendProgressLineFromLoopEvent(event: AgentLoopEvent) {
+    if (this._pendingAssistantIndex === null) return;
+
+    let lines: string[] = [];
+    switch (event.type) {
+      case "run_start":
+        lines = ["実行を開始しました"];
+        break;
+      case "thinking_start":
+        lines = ["考え中..."];
+        break;
+      case "thinking_end":
+        lines = [];
+        break;
+      case "tool_execution_start":
+        lines = [`ツール開始: ${event.toolName}`];
+        {
+          const detail = this._formatToolArgs(event.args);
+          if (detail) lines.push(`  詳細: ${detail}`);
+        }
+        break;
+      case "tool_execution_end":
+        lines = [];
+        break;
+      case "run_end":
+        lines = event.status === "failed" || event.status === "aborted"
+          ? [`実行失敗: ${event.errorMessage ?? "不明なエラー"}`]
+          : [];
+        break;
+      default:
+        lines = [];
+    }
+
+    if (lines.length === 0) return;
+    this._progressLines = [...this._progressLines, ...lines];
+    this._updatePendingMessageText(this._pendingAssistantIndex, this._progressLines.join("\n"));
+  }
+
+  private _formatToolArgs(args: unknown): string {
+    if (!args || typeof args !== "object") return "";
+    const argRecord = args as Record<string, unknown>;
+    const summaryCandidates = ["command", "query", "path", "url", "pattern", "tool", "fn"];
+    for (const key of summaryCandidates) {
+      const value = argRecord[key];
+      if (typeof value === "string" && value.trim()) {
+        return `${key}=${value}`;
+      }
+    }
+    const preview = JSON.stringify(argRecord);
+    if (!preview || preview === "{}") return "";
+    return preview.length > 120 ? `${preview.slice(0, 117)}...` : preview;
   }
 
   private _addMessage(role: Message["role"], text: string): number {
@@ -197,6 +281,12 @@ export class LiltApp extends LitElement {
   private _resolvePendingMessage(idx: number, text: string) {
     this.messages = this.messages.map((m, i) =>
       i === idx ? { ...m, text, pending: false } : m
+    );
+  }
+
+  private _updatePendingMessageText(idx: number, text: string) {
+    this.messages = this.messages.map((m, i) =>
+      i === idx ? { ...m, text, pending: true } : m
     );
   }
 

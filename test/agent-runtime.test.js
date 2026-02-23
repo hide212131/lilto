@@ -301,3 +301,90 @@ test("agent-browser が無い場合はスキル接頭辞を付けない", async 
   assert.equal(result.ok, true);
   assert.equal(receivedPrompt, "ブラウザで動作確認して");
 });
+
+test("loop event 正規化: tool start/end を送出する", async () => {
+  const loopEvents = [];
+  const runtime = new AgentRuntime({
+    authService: createAuthService("authenticated"),
+    createSession: async () => ({
+      subscribe(listener) {
+        listener({
+          type: "tool_execution_start",
+          toolCallId: "call-1",
+          toolName: "bash"
+        });
+        listener({
+          type: "tool_execution_end",
+          toolCallId: "call-1",
+          toolName: "bash",
+          isError: false
+        });
+        listener({
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: "ok" }
+        });
+        return () => {};
+      },
+      async prompt() {}
+    }),
+    logger: { info() {}, error() {} }
+  });
+
+  const result = await runtime.submitPrompt("test", createProviderSettings(), {
+    requestId: "req-1",
+    onLoopEvent: (event) => {
+      loopEvents.push(event);
+    }
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(loopEvents, [
+    { type: "tool_execution_start", requestId: "req-1", toolCallId: "call-1", toolName: "bash" },
+    { type: "tool_execution_end", requestId: "req-1", toolCallId: "call-1", toolName: "bash", isError: false }
+  ]);
+});
+
+test("loop event 正規化: tool error を送出する", async () => {
+  const loopEvents = [];
+  const runtime = new AgentRuntime({
+    authService: createAuthService("authenticated"),
+    createSession: async () => ({
+      subscribe(listener) {
+        listener({
+          type: "tool_execution_start",
+          toolCallId: "call-err",
+          toolName: "edit"
+        });
+        listener({
+          type: "tool_execution_end",
+          toolCallId: "call-err",
+          toolName: "edit",
+          isError: true
+        });
+        listener({
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: "failed" }
+        });
+        return () => {};
+      },
+      async prompt() {}
+    }),
+    logger: { info() {}, error() {} }
+  });
+
+  const result = await runtime.submitPrompt("test", createProviderSettings(), {
+    requestId: "req-2",
+    onLoopEvent: (event) => {
+      loopEvents.push(event);
+    }
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(loopEvents.at(-1), {
+    type: "tool_execution_end",
+    requestId: "req-2",
+    toolCallId: "call-err",
+    toolName: "edit",
+    isError: true
+  });
+});

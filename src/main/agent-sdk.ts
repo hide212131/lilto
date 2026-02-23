@@ -3,6 +3,7 @@ import type { ClaudeAuthService } from "./auth-service";
 import type { ProviderSettings } from "./provider-settings";
 import { isCustomProviderReady } from "./provider-settings";
 import { shouldPrioritizeAgentBrowser } from "./skill-runtime";
+import type { AgentLoopEvent } from "../shared/agent-loop";
 
 type AgentError = {
   code: string;
@@ -17,6 +18,10 @@ export type AgentResult = AgentSuccess | AgentFailure;
 
 type AgentEvent = {
   type: string;
+  toolCallId?: string;
+  toolName?: string;
+  args?: unknown;
+  isError?: boolean;
   assistantMessageEvent?: {
     type?: string;
     delta?: string;
@@ -267,13 +272,49 @@ export class AgentRuntime {
 
   private async runSessionPrompt(
     text: string,
-    options: { apiKey: string | null; model?: PiModel; cwd?: string }
+    options: { apiKey: string | null; model?: PiModel; cwd?: string },
+    hooks?: { requestId: string; onLoopEvent?: (event: AgentLoopEvent) => void }
   ): Promise<AgentResult> {
     const session = await this.ensureSession(options);
     let streamOutput = "";
     let finalOutput = "";
 
     const unsubscribe = session.subscribe((event) => {
+      if (hooks?.onLoopEvent) {
+        if (event.type === "thinking_start") {
+          hooks.onLoopEvent({ type: "thinking_start", requestId: hooks.requestId });
+        } else if (event.type === "thinking_end") {
+          hooks.onLoopEvent({ type: "thinking_end", requestId: hooks.requestId });
+        } else if (
+          event.type === "tool_execution_start" &&
+          typeof event.toolCallId === "string" &&
+          typeof event.toolName === "string"
+        ) {
+          const startEvent: AgentLoopEvent = {
+            type: "tool_execution_start",
+            requestId: hooks.requestId,
+            toolCallId: event.toolCallId,
+            toolName: event.toolName
+          };
+          if (event.args !== undefined) {
+            startEvent.args = event.args;
+          }
+          hooks.onLoopEvent(startEvent);
+        } else if (
+          event.type === "tool_execution_end" &&
+          typeof event.toolCallId === "string" &&
+          typeof event.toolName === "string"
+        ) {
+          hooks.onLoopEvent({
+            type: "tool_execution_end",
+            requestId: hooks.requestId,
+            toolCallId: event.toolCallId,
+            toolName: event.toolName,
+            isError: event.isError === true
+          });
+        }
+      }
+
       if (event.type === "message_update") {
         if (event.assistantMessageEvent?.type === "text_delta" && typeof event.assistantMessageEvent.delta === "string") {
           streamOutput += event.assistantMessageEvent.delta;
@@ -297,8 +338,11 @@ export class AgentRuntime {
       }
     });
 
-    await session.prompt(text);
-    unsubscribe();
+    try {
+      await session.prompt(text);
+    } finally {
+      unsubscribe();
+    }
 
     let output = finalOutput.trim() ? finalOutput : streamOutput;
     if (!output.trim()) {
@@ -322,7 +366,11 @@ export class AgentRuntime {
     return `/skill:agent-browser\n\n${text}`;
   }
 
-  async submitPrompt(text: string, providerSettings: ProviderSettings): Promise<AgentResult> {
+  async submitPrompt(
+    text: string,
+    providerSettings: ProviderSettings,
+    hooks?: { requestId: string; onLoopEvent?: (event: AgentLoopEvent) => void }
+  ): Promise<AgentResult> {
     this.logger.info("agent_prompt_received", {
       textLength: text.length,
       provider: providerSettings.activeProvider
@@ -359,7 +407,7 @@ export class AgentRuntime {
             : isLocalOllamaUrl(model.baseUrl)
               ? "ollama"
               : "not-required";
-        return await this.runSessionPrompt(promptText, { apiKey, model, ...runOptionsBase });
+        return await this.runSessionPrompt(promptText, { apiKey, model, ...runOptionsBase }, hooks);
       }
 
       const authState = this.authService.getState() as AuthSnapshot;
@@ -388,7 +436,7 @@ export class AgentRuntime {
         };
       }
 
-      return await this.runSessionPrompt(promptText, { apiKey, model: undefined, ...runOptionsBase });
+      return await this.runSessionPrompt(promptText, { apiKey, model: undefined, ...runOptionsBase }, hooks);
     } catch (error) {
       const normalized = standardizeError(error);
       this.logger.error("agent_prompt_failed", normalized);

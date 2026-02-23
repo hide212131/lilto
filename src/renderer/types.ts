@@ -1,3 +1,5 @@
+import type { AgentLoopEvent } from "../shared/agent-loop.js";
+
 export type AuthPhase =
   | "unauthenticated"
   | "auth_in_progress"
@@ -38,6 +40,7 @@ declare global {
       submitPrompt: (
         text: string
       ) => Promise<
+        // 既存契約との互換性維持: submitPrompt の戻り値は変更しない。
         | { ok: true; response: { text: string } }
         | { ok: false; error?: { code?: string; message?: string; retryable?: boolean } }
       >;
@@ -56,6 +59,7 @@ declare global {
         | { ok: true; state: ProviderSettings }
         | { ok: false; error: { code: string; message: string } }
       >;
+      onAgentLoopEvent: (listener: (event: AgentLoopEvent) => void) => () => void;
       onAuthStateChanged: (listener: (state: AuthState) => void) => () => void;
     };
   }

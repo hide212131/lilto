@@ -1,4 +1,6 @@
 export type PromptPayload = { text: string };
+// 既存 submitPrompt の request/response 契約は維持し、loop event は別チャネルで追加する。
+export const AGENT_LOOP_EVENT_CHANNEL = "agent:loopEvent";
 
 export type PromptValidationError = {
   ok: false;

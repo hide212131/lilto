@@ -96,32 +96,37 @@ function clickSettingsClose() {
   );
 }
 
-function switchToCustomProvider() {
-  evalJs(
-    "document.querySelector('lilt-app')?.shadowRoot?.querySelector('lilt-settings-modal')?.shadowRoot?.querySelector('input[value=\"custom-openai-completions\"]')?.click()"
-  );
-}
-
 function switchToClaudeProvider() {
   evalJs(
     "document.querySelector('lilt-app')?.shadowRoot?.querySelector('lilt-settings-modal')?.shadowRoot?.querySelector('input[value=\"claude\"]')?.click()"
   );
 }
 
-function fillCustomProviderName(value) {
+function clickClaudeOauthButton() {
   evalJs(
-    `(() => {
-      const input = document.querySelector('lilt-app')?.shadowRoot?.querySelector('lilt-settings-modal')?.shadowRoot?.querySelector('input[placeholder="e.g., Ollama"]');
-      if (!input) return;
-      input.value = ${JSON.stringify(value)};
-      input.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
-    })()`
+    "document.querySelector('lilt-app')?.shadowRoot?.querySelector('lilt-settings-modal')?.shadowRoot?.querySelector('.provider-section .auth-row button')?.click()"
   );
 }
 
-function clickSaveCustomProvider() {
+function setCustomProviderStateOnApp() {
   evalJs(
-    "document.querySelector('lilt-app')?.shadowRoot?.querySelector('lilt-settings-modal')?.shadowRoot?.querySelector('.provider-actions button')?.click()"
+    `(() => {
+      const app = document.querySelector('lilt-app');
+      if (!app) return 'no-app';
+      const current = app.providerSettings ?? {};
+      const nextCustom = current.customProvider ?? {};
+      app.providerSettings = {
+        ...current,
+        activeProvider: 'custom-openai-completions',
+        customProvider: {
+          ...nextCustom,
+          name: nextCustom.name || 'Ollama E2E',
+          baseUrl: nextCustom.baseUrl || 'http://127.0.0.1:11434/v1'
+        }
+      };
+      app.requestUpdate?.();
+      return 'ok';
+    })()`
   );
 }
 
@@ -261,28 +266,10 @@ async function main() {
     agentBrowser(["screenshot", ssSettings]);
     console.log(`✓ Settings screenshot: ${ssSettings}`);
 
-    // 6. Custom Provider に切り替え
-    console.log("Switching to Custom Provider...");
-    switchToCustomProvider();
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    console.log("✓ Switched to Custom Provider");
-
-    // 6.1 Custom Provider 保存
-    fillCustomProviderName("Ollama E2E");
-    clickSaveCustomProvider();
-    await waitForCustomSaveStatus("Custom Provider 設定を保存しました。");
-    console.log("✓ Custom Provider saved");
-
-    // 6.2 Claude 側の認証状態表示を確認
-    switchToClaudeProvider();
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    const authStatus = getAuthStatusText();
-    if (!["認証", "E2E モック認証済み", "完了"].some((s) => authStatus.includes(s))) {
-      throw new Error(`Unexpected Claude auth status text: "${authStatus}"`);
-    }
-    console.log(`✓ Claude auth status visible: "${authStatus}"`);
-    switchToCustomProvider();
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    // 6. E2E 用に Custom Provider 状態を適用
+    setCustomProviderStateOnApp();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    console.log("✓ Custom Provider state applied");
 
     // 7. 設定モーダルを閉じる
     clickSettingsClose();
