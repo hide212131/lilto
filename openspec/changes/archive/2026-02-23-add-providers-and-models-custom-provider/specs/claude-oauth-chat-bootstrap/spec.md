@@ -1,8 +1,5 @@
-# claude-oauth-chat-bootstrap Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change add-pi-sdk-main-process-agent. Update Purpose after archive.
-## Requirements
 ### Requirement: Pi ai パッケージによる Claude OAuth 開始
 システムは、Claude 利用開始時に Providers & Models 画面の Claude セクションから Pi の `ai` パッケージを使用して OAuth 認証フローを開始しなければならない（MUST）。
 
@@ -20,18 +17,3 @@ TBD - created by archiving change add-pi-sdk-main-process-agent. Update Purpose 
 #### Scenario: 認証成功で Claude 経路が送信可能になる
 - **WHEN** OAuth が成功してトークン保存が完了し、現在 provider が Claude である
 - **THEN** チャット送信操作が有効化され、追加設定なしで問い合わせを送信できる
-
-### Requirement: 認証成功後の即時チャット可能化
-システムは、OAuth 成功後に取得したトークンを現在セッションで再利用し、追加設定なしでチャット送信可能にしなければならない（MUST）。
-
-#### Scenario: 認証直後に質問できる
-- **WHEN** OAuth が成功してトークン保存が完了する
-- **THEN** ユーザーは同一画面でそのまま質問送信でき、Main が問い合わせ実行を受理する
-
-### Requirement: 認証失敗時の再試行導線
-システムは、OAuth が失敗またはタイムアウトした場合、失敗理由と再試行アクションを UI で提示しなければならない（MUST）。
-
-#### Scenario: 失敗後に再認証できる
-- **WHEN** OAuth 完了前にエラーまたはタイムアウトが発生する
-- **THEN** Renderer は失敗メッセージと再試行ボタンを表示する
-

@@ -267,6 +267,43 @@
         color: var(--muted);
       }
 
+      .provider-choice {
+        display: flex;
+        gap: 16px;
+        align-items: center;
+        flex-wrap: wrap;
+        margin-bottom: 14px;
+      }
+
+      .provider-choice label {
+        display: inline-flex;
+        gap: 6px;
+        align-items: center;
+        font-size: 14px;
+      }
+
+      .provider-section {
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        padding: 12px;
+        margin-top: 10px;
+        background: #fff;
+      }
+
+      .provider-section h4 {
+        margin: 0 0 6px;
+        font-size: 16px;
+      }
+
+      .provider-section p {
+        margin-bottom: 10px;
+      }
+
+      .provider-section.active {
+        border-color: #111827;
+        box-shadow: 0 0 0 1px #111827 inset;
+      }
+
       .auth-row {
         display: flex;
         gap: 8px;
@@ -280,13 +317,36 @@
         gap: 8px;
       }
 
-      .auth-code-row input {
-        flex: 1;
-        min-width: 260px;
+      .input-grid {
+        display: grid;
+        gap: 8px;
+      }
+
+      .input-grid label {
+        display: grid;
+        gap: 4px;
+        font-size: 14px;
+        color: #374151;
+      }
+
+      .auth-code-row input,
+      .input-grid input {
         border: 1px solid var(--line);
         border-radius: 9px;
         padding: 9px 10px;
         background: #fff;
+      }
+
+      .auth-code-row input {
+        flex: 1;
+        min-width: 260px;
+      }
+
+      .provider-actions {
+        margin-top: 10px;
+        display: flex;
+        gap: 10px;
+        align-items: center;
       }
 
       .actions {
@@ -350,16 +410,16 @@
       </div>
       <div class="main">
         <div class="stage">
-        <div class="chat" id="messages" aria-live="polite"></div>
-        <div class="composer-wrap">
-          <div class="composer">
-            <textarea id="prompt" placeholder="Type a message..."></textarea>
-            <div class="actions">
-              <span class="status">Ctrl/Cmd + Enter で送信</span>
-              <button id="send" class="send" disabled>送信</button>
+          <div class="chat" id="messages" aria-live="polite"></div>
+          <div class="composer-wrap">
+            <div class="composer">
+              <textarea id="prompt" placeholder="Type a message..."></textarea>
+              <div class="actions">
+                <span class="status">Ctrl/Cmd + Enter で送信</span>
+                <button id="send" class="send" disabled>送信</button>
+              </div>
             </div>
           </div>
-        </div>
         </div>
       </div>
     </div>
@@ -371,22 +431,70 @@
         </div>
         <div class="settings-body">
           <div class="settings-menu">
-            <div class="settings-menu-item">Claude Auth</div>
+            <div class="settings-menu-item">Providers &amp; Models</div>
           </div>
           <div class="settings-main">
-            <h3>Claude Authorization</h3>
-            <p>Claude OAuth を開始して、表示された認証コードを入力してください。</p>
-            <div class="auth-row">
-              <button id="auth-start">Claude OAuth で認証</button>
-              <span class="status" id="auth-status">未認証です。認証を開始してください。</span>
+            <h3>Providers &amp; Models</h3>
+            <p>Claude OAuth と Custom Provider（OpenAI Completions Compatible）を設定できます。</p>
+
+            <div class="provider-choice">
+              <label>
+                <input id="provider-active-claude" type="radio" name="active-provider" value="claude" />
+                Claude
+              </label>
+              <label>
+                <input
+                  id="provider-active-custom"
+                  type="radio"
+                  name="active-provider"
+                  value="custom-openai-completions"
+                />
+                Custom Provider
+              </label>
+              <span class="status" id="provider-selection-status"></span>
             </div>
-            <div class="auth-row auth-code-row" id="auth-code-row">
-              <input id="auth-code" placeholder="Authentication Code（code#state）を貼り付け" />
-              <button id="auth-code-submit">コード送信</button>
-            </div>
-            <div class="status">
-              Claude 画面の「Authentication Code / Paste this into Claude Code:」で表示された値を貼り付けて送信してください。
-            </div>
+
+            <section class="provider-section" id="claude-section">
+              <h4>Claude Authorization</h4>
+              <p>Claude OAuth を開始して、表示された認証コードを入力してください。</p>
+              <div class="auth-row">
+                <button id="auth-start">Claude OAuth で認証</button>
+                <span class="status" id="auth-status">未認証です。認証を開始してください。</span>
+              </div>
+              <div class="auth-row auth-code-row" id="auth-code-row">
+                <input id="auth-code" placeholder="Authentication Code（code#state）を貼り付け" />
+                <button id="auth-code-submit">コード送信</button>
+              </div>
+              <div class="status">
+                Claude 画面の「Authentication Code / Paste this into Claude Code:」で表示された値を貼り付けて送信してください。
+              </div>
+            </section>
+
+            <section class="provider-section" id="custom-provider-section">
+              <h4>Custom Provider (OpenAI Completions Compatible)</h4>
+              <div class="input-grid">
+                <label>
+                  Provider Name (Required)
+                  <input id="custom-provider-name" placeholder="e.g., Ollama" value="Ollama" />
+                </label>
+                <label>
+                  Base URL (Required)
+                  <input id="custom-provider-base-url" placeholder="http://127.0.0.1:11434/v1" value="http://127.0.0.1:11434/v1" />
+                </label>
+                <label>
+                  API Key (Optional)
+                  <input id="custom-provider-api-key" type="password" placeholder="Leave empty if not required" />
+                </label>
+                <label>
+                  Model ID
+                  <input id="custom-provider-model-id" placeholder="qwen2.5:0.5b" value="qwen2.5:0.5b" />
+                </label>
+              </div>
+              <div class="provider-actions">
+                <button id="custom-provider-save" type="button">Save Custom Provider</button>
+                <span class="status" id="custom-provider-save-status"></span>
+              </div>
+            </section>
           </div>
         </div>
       </div>

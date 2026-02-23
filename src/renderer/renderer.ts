@@ -26,12 +26,31 @@ type AuthCodeResult =
   | { ok: true; state: AuthState }
   | { ok: false; error: { code: string; message: string } };
 
+type ActiveProvider = "claude" | "custom-openai-completions";
+
+type ProviderSettings = {
+  activeProvider: ActiveProvider;
+  customProvider: {
+    name: string;
+    baseUrl: string;
+    apiKey: string;
+    modelId: string;
+  };
+  updatedAt: number;
+};
+
+type ProviderSaveResult =
+  | { ok: true; state: ProviderSettings }
+  | { ok: false; error: { code: string; message: string } };
+
 interface Window {
   lilto: {
     submitPrompt: (text: string) => Promise<SubmitResult>;
     startClaudeOauth: () => Promise<AuthStartResult>;
     submitAuthCode: (code: string) => Promise<AuthCodeResult>;
     getAuthState: () => Promise<AuthState>;
+    getProviderSettings: () => Promise<ProviderSettings>;
+    saveProviderSettings: (settings: ProviderSettings) => Promise<ProviderSaveResult>;
     onAuthStateChanged: (listener: (state: AuthState) => void) => () => void;
   };
 }
@@ -48,16 +67,77 @@ const authCodeRowEl = document.getElementById("auth-code-row") as HTMLDivElement
 const settingsOpenEl = document.getElementById("settings-open") as HTMLButtonElement;
 const settingsCloseEl = document.getElementById("settings-close") as HTMLButtonElement;
 const settingsModalEl = document.getElementById("settings-modal") as HTMLDivElement;
+const providerActiveClaudeEl = document.getElementById("provider-active-claude") as HTMLInputElement;
+const providerActiveCustomEl = document.getElementById("provider-active-custom") as HTMLInputElement;
+const providerSelectionStatusEl = document.getElementById("provider-selection-status") as HTMLSpanElement;
+const claudeSectionEl = document.getElementById("claude-section") as HTMLElement;
+const customProviderSectionEl = document.getElementById("custom-provider-section") as HTMLElement;
+const customProviderNameEl = document.getElementById("custom-provider-name") as HTMLInputElement;
+const customProviderBaseUrlEl = document.getElementById("custom-provider-base-url") as HTMLInputElement;
+const customProviderApiKeyEl = document.getElementById("custom-provider-api-key") as HTMLInputElement;
+const customProviderModelIdEl = document.getElementById("custom-provider-model-id") as HTMLInputElement;
+const customProviderSaveEl = document.getElementById("custom-provider-save") as HTMLButtonElement;
+const customProviderSaveStatusEl = document.getElementById("custom-provider-save-status") as HTMLSpanElement;
 
 let authState: AuthState | null = null;
+let providerSettings: ProviderSettings = {
+  activeProvider: "claude",
+  customProvider: {
+    name: "Ollama",
+    baseUrl: "http://127.0.0.1:11434/v1",
+    apiKey: "",
+    modelId: "qwen2.5:0.5b"
+  },
+  updatedAt: Date.now()
+};
 let isSending = false;
 
+function isClaudeReady(): boolean {
+  return !!authState && authState.phase === "authenticated";
+}
+
+function isCustomProviderReady(): boolean {
+  return Boolean(providerSettings.customProvider.name.trim() && providerSettings.customProvider.baseUrl.trim());
+}
+
+function requiredStateMessage(): string {
+  if (providerSettings.activeProvider === "claude") {
+    return "Claude 認証が必要です";
+  }
+  return "Custom Provider の設定が必要です";
+}
+
 function canSendPrompt(): boolean {
-  return !!authState && authState.phase === "authenticated" && !isSending;
+  if (isSending) return false;
+  if (providerSettings.activeProvider === "claude") return isClaudeReady();
+  return isCustomProviderReady();
+}
+
+function updateIdleStatus(): void {
+  if (isSending) return;
+  statusEl.textContent = canSendPrompt() ? "待機中" : requiredStateMessage();
+}
+
+function syncProviderSelectionUi(): void {
+  providerActiveClaudeEl.checked = providerSettings.activeProvider === "claude";
+  providerActiveCustomEl.checked = providerSettings.activeProvider === "custom-openai-completions";
+
+  claudeSectionEl.classList.toggle("active", providerSettings.activeProvider === "claude");
+  customProviderSectionEl.classList.toggle("active", providerSettings.activeProvider === "custom-openai-completions");
+  providerSelectionStatusEl.textContent =
+    providerSettings.activeProvider === "claude" ? "現在: Claude" : "現在: Custom Provider";
+}
+
+function syncCustomProviderForm(): void {
+  customProviderNameEl.value = providerSettings.customProvider.name;
+  customProviderBaseUrlEl.value = providerSettings.customProvider.baseUrl;
+  customProviderApiKeyEl.value = providerSettings.customProvider.apiKey;
+  customProviderModelIdEl.value = providerSettings.customProvider.modelId || "qwen2.5:0.5b";
 }
 
 function syncSendControl(): void {
   sendEl.disabled = !canSendPrompt();
+  updateIdleStatus();
 }
 
 function openSettingsModal(): void {
@@ -93,14 +173,8 @@ function renderAuthState(state: AuthState): void {
   authCodeSubmitEl.disabled = !codeInputEnabled;
   authStartEl.disabled = state.phase === "auth_in_progress" || state.phase === "awaiting_code";
   syncSendControl();
-  if (state.phase === "authenticated") {
+  if (state.phase === "authenticated" && providerSettings.activeProvider === "claude") {
     closeSettingsModal();
-    if (statusEl.textContent === "認証が必要です") {
-      statusEl.textContent = "待機中";
-    }
-  }
-  if (state.phase !== "authenticated" && statusEl.textContent === "待機中") {
-    statusEl.textContent = "認証が必要です";
   }
   if (codeInputEnabled) {
     authCodeEl.focus();
@@ -116,11 +190,39 @@ async function hydrateAuthState(): Promise<void> {
   }
 }
 
+async function hydrateProviderSettings(): Promise<void> {
+  try {
+    const settings = await window.lilto.getProviderSettings();
+    providerSettings = settings;
+    syncProviderSelectionUi();
+    syncCustomProviderForm();
+    syncSendControl();
+  } catch (error) {
+    customProviderSaveStatusEl.textContent = `設定の取得に失敗: ${String(error)}`;
+  }
+}
+
+async function persistProviderSettings(next: ProviderSettings, successMessage?: string): Promise<void> {
+  const result = await window.lilto.saveProviderSettings(next);
+  if (!result.ok) {
+    customProviderSaveStatusEl.textContent = `${result.error.code}: ${result.error.message}`;
+    return;
+  }
+
+  providerSettings = result.state;
+  syncProviderSelectionUi();
+  syncCustomProviderForm();
+  syncSendControl();
+  if (successMessage) {
+    customProviderSaveStatusEl.textContent = successMessage;
+  }
+}
+
 window.lilto.onAuthStateChanged((state) => {
   renderAuthState(state);
 });
 
-void hydrateAuthState();
+void Promise.all([hydrateAuthState(), hydrateProviderSettings()]);
 
 settingsOpenEl.addEventListener("click", () => {
   openSettingsModal();
@@ -140,6 +242,24 @@ window.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     closeSettingsModal();
   }
+});
+
+providerActiveClaudeEl.addEventListener("change", async () => {
+  if (!providerActiveClaudeEl.checked) return;
+  const next: ProviderSettings = {
+    ...providerSettings,
+    activeProvider: "claude"
+  };
+  await persistProviderSettings(next);
+});
+
+providerActiveCustomEl.addEventListener("change", async () => {
+  if (!providerActiveCustomEl.checked) return;
+  const next: ProviderSettings = {
+    ...providerSettings,
+    activeProvider: "custom-openai-completions"
+  };
+  await persistProviderSettings(next);
 });
 
 authStartEl.addEventListener("click", async () => {
@@ -171,14 +291,37 @@ authCodeEl.addEventListener("keydown", (event) => {
   }
 });
 
+customProviderSaveEl.addEventListener("click", async () => {
+  const next: ProviderSettings = {
+    ...providerSettings,
+    customProvider: {
+      name: customProviderNameEl.value.trim(),
+      baseUrl: customProviderBaseUrlEl.value.trim(),
+      apiKey: customProviderApiKeyEl.value,
+      modelId: customProviderModelIdEl.value.trim() || "qwen2.5:0.5b"
+    }
+  };
+
+  if (!next.customProvider.name || !next.customProvider.baseUrl) {
+    customProviderSaveStatusEl.textContent = "name と baseUrl は必須です。";
+    return;
+  }
+
+  await persistProviderSettings(next, "Custom Provider 設定を保存しました。");
+});
+
 sendEl.addEventListener("click", async () => {
   if (isSending) {
     return;
   }
 
-  if (!authState || authState.phase !== "authenticated") {
-    statusEl.textContent = "認証が必要です";
-    addMessage("system", "Claude OAuth 認証を完了してから送信してください。");
+  if (!canSendPrompt()) {
+    statusEl.textContent = requiredStateMessage();
+    if (providerSettings.activeProvider === "claude") {
+      addMessage("system", "Claude OAuth 認証を完了してから送信してください。");
+    } else {
+      addMessage("system", "Custom Provider の name / baseUrl を設定して保存してから送信してください。");
+    }
     openSettingsModal();
     return;
   }
@@ -209,8 +352,9 @@ sendEl.addEventListener("click", async () => {
     const error = result.error || { code: "UNKNOWN", message: "不明なエラー" };
     pendingMessage.remove();
     addMessage("error", `${error.code}: ${error.message}`);
-    if (error.code === "AUTH_REQUIRED") {
-      statusEl.textContent = "認証が必要です";
+    if (error.code === "AUTH_REQUIRED" || error.code === "PROVIDER_CONFIG_REQUIRED") {
+      statusEl.textContent = requiredStateMessage();
+      openSettingsModal();
       return;
     }
     statusEl.textContent = "エラー";

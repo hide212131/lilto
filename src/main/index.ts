@@ -7,6 +7,7 @@ import { readConfig } from "./config";
 import { HeartbeatScheduler } from "./heartbeat";
 import { registerAgentIpcHandlers } from "./ipc";
 import { createLogger } from "./logger";
+import { ProviderSettingsService } from "./provider-settings";
 
 const config = readConfig();
 const logger = createLogger("main");
@@ -15,6 +16,7 @@ let mainWindow: BrowserWindow | null = null;
 let isQuitting = false;
 
 const authService = new ClaudeAuthService({ logger: createLogger("auth") });
+const providerSettingsService = new ProviderSettingsService({ logger: createLogger("providers") });
 const agentRuntime = new AgentRuntime({ logger: createLogger("agent"), authService });
 
 const heartbeat = new HeartbeatScheduler({
@@ -52,7 +54,7 @@ function createWindow(): void {
 }
 
 void app.whenReady().then(() => {
-  registerAgentIpcHandlers({ agentRuntime, authService });
+  registerAgentIpcHandlers({ agentRuntime, authService, providerSettingsService });
   createWindow();
   heartbeat.start();
 

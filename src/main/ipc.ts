@@ -3,6 +3,7 @@ import type { AgentRuntime } from "./agent-sdk";
 import type { ClaudeAuthService } from "./auth-service";
 import { validatePrompt } from "./ipc-contract";
 import { createLogger } from "./logger";
+import type { ProviderSettingsService } from "./provider-settings";
 
 function broadcastAuthState(authService: Pick<ClaudeAuthService, "getState">): void {
   const state = authService.getState();
@@ -13,10 +14,12 @@ function broadcastAuthState(authService: Pick<ClaudeAuthService, "getState">): v
 
 export function registerAgentIpcHandlers({
   agentRuntime,
-  authService
+  authService,
+  providerSettingsService
 }: {
   agentRuntime: AgentRuntime;
   authService: ClaudeAuthService;
+  providerSettingsService: ProviderSettingsService;
 }): void {
   const logger = createLogger("ipc");
   authService.subscribe(() => {
@@ -31,7 +34,8 @@ export function registerAgentIpcHandlers({
     }
 
     const text = (payload as { text: string }).text;
-    const result = await agentRuntime.submitPrompt(text);
+    const providerSettings = providerSettingsService.getState();
+    const result = await agentRuntime.submitPrompt(text, providerSettings);
     if (!result.ok) {
       return result;
     }
@@ -64,5 +68,13 @@ export function registerAgentIpcHandlers({
       const message = error instanceof Error ? error.message : String(error);
       return { ok: false, error: { code: "AUTH_CODE_REJECTED", message } };
     }
+  });
+
+  ipcMain.handle("providers:getSettings", () => {
+    return providerSettingsService.getState();
+  });
+
+  ipcMain.handle("providers:saveSettings", (_event, payload: unknown) => {
+    return providerSettingsService.save(payload);
   });
 }

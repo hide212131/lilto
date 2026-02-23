@@ -14,6 +14,20 @@ function createAuthService(phase, apiKey = "oauth-api-key") {
   };
 }
 
+function createProviderSettings(overrides = {}) {
+  return {
+    activeProvider: "claude",
+    customProvider: {
+      name: "",
+      baseUrl: "",
+      apiKey: "",
+      modelId: "gpt-4.1-mini"
+    },
+    updatedAt: Date.now(),
+    ...overrides
+  };
+}
+
 test("認証済みなら SDK 応答を返す", async () => {
   const runtime = new AgentRuntime({
     authService: createAuthService("authenticated"),
@@ -27,7 +41,6 @@ test("認証済みなら SDK 応答を返す", async () => {
     logger: { info() {}, error() {} }
   });
 
-  // Inject text delta through a custom session to emulate SDK output.
   runtime["session"] = {
     subscribe(listener) {
       listener({
@@ -38,9 +51,14 @@ test("認証済みなら SDK 応答を返す", async () => {
     },
     async prompt() {}
   };
-  runtime["sessionApiKey"] = "oauth-api-key";
+  runtime["sessionKey"] = JSON.stringify({
+    apiKey: "oauth-api-key",
+    provider: "anthropic",
+    model: "default",
+    baseUrl: ""
+  });
 
-  const result = await runtime.submitPrompt("test");
+  const result = await runtime.submitPrompt("test", createProviderSettings());
   assert.equal(result.ok, true);
   assert.equal(result.text, "hello");
 });
@@ -54,9 +72,163 @@ test("未認証なら AUTH_REQUIRED を返す", async () => {
     logger: { info() {}, error() {} }
   });
 
-  const result = await runtime.submitPrompt("test");
+  const result = await runtime.submitPrompt("test", createProviderSettings());
   assert.equal(result.ok, false);
   assert.equal(result.error.code, "AUTH_REQUIRED");
+});
+
+test("Custom Provider 未設定なら PROVIDER_CONFIG_REQUIRED を返す", async () => {
+  const runtime = new AgentRuntime({
+    authService: createAuthService("authenticated"),
+    createSession: async () => {
+      throw new Error("should not be called");
+    },
+    logger: { info() {}, error() {} }
+  });
+
+  const result = await runtime.submitPrompt(
+    "test",
+    createProviderSettings({
+      activeProvider: "custom-openai-completions"
+    })
+  );
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "PROVIDER_CONFIG_REQUIRED");
+});
+
+test("Custom Provider 設定済みなら custom model で実行される", async () => {
+  let receivedOptions;
+  const runtime = new AgentRuntime({
+    authService: createAuthService("authenticated"),
+    createSession: async (options) => {
+      receivedOptions = options;
+      return {
+        subscribe(listener) {
+          listener({
+            type: "message_update",
+            assistantMessageEvent: { type: "text_delta", delta: "custom-ok" }
+          });
+          return () => {};
+        },
+        async prompt() {}
+      };
+    },
+    logger: { info() {}, error() {} }
+  });
+
+  const result = await runtime.submitPrompt(
+    "test",
+    createProviderSettings({
+      activeProvider: "custom-openai-completions",
+      customProvider: {
+        name: "my-custom",
+        baseUrl: "https://example.com/v1",
+        apiKey: "custom-key",
+        modelId: "gpt-4o-mini"
+      }
+    })
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.text, "custom-ok");
+  assert.equal(receivedOptions.apiKey, "custom-key");
+  assert.equal(receivedOptions.model.provider, "custom-openai-completions");
+  assert.equal(receivedOptions.model.baseUrl, "https://example.com/v1");
+  assert.equal(receivedOptions.model.id, "gpt-4o-mini");
+});
+
+test("Custom Provider の Ollama URL は /v1 を補完する", async () => {
+  let receivedOptions;
+  const runtime = new AgentRuntime({
+    authService: createAuthService("authenticated"),
+    createSession: async (options) => {
+      receivedOptions = options;
+      return {
+        subscribe(listener) {
+          listener({
+            type: "message_update",
+            assistantMessageEvent: { type: "text_delta", delta: "ok" }
+          });
+          return () => {};
+        },
+        async prompt() {}
+      };
+    },
+    logger: { info() {}, error() {} }
+  });
+
+  const result = await runtime.submitPrompt(
+    "test",
+    createProviderSettings({
+      activeProvider: "custom-openai-completions",
+      customProvider: {
+        name: "Ollama",
+        baseUrl: "http://127.0.0.1:11434",
+        apiKey: "",
+        modelId: "qwen2.5:0.5b"
+      }
+    })
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(receivedOptions.model.baseUrl, "http://127.0.0.1:11434/v1");
+  assert.equal(receivedOptions.apiKey, "ollama");
+});
+
+test("text_delta がなくても done イベントから応答を復元する", async () => {
+  const runtime = new AgentRuntime({
+    authService: createAuthService("authenticated"),
+    createSession: async () => ({
+      subscribe(listener) {
+        listener({
+          type: "message_update",
+          assistantMessageEvent: {
+            type: "done",
+            message: {
+              content: [{ type: "text", text: "done-text" }]
+            }
+          }
+        });
+        return () => {};
+      },
+      async prompt() {}
+    }),
+    logger: { info() {}, error() {} }
+  });
+
+  const result = await runtime.submitPrompt("test", createProviderSettings());
+  assert.equal(result.ok, true);
+  assert.equal(result.text, "done-text");
+});
+
+test("delta と done が両方来ても重複せず最終テキストを返す", async () => {
+  const runtime = new AgentRuntime({
+    authService: createAuthService("authenticated"),
+    createSession: async () => ({
+      subscribe(listener) {
+        listener({
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: "partial" }
+        });
+        listener({
+          type: "message_update",
+          assistantMessageEvent: {
+            type: "done",
+            message: {
+              content: [{ type: "text", text: "final" }]
+            }
+          }
+        });
+        return () => {};
+      },
+      async prompt() {}
+    }),
+    logger: { info() {}, error() {} }
+  });
+
+  const result = await runtime.submitPrompt("test", createProviderSettings());
+  assert.equal(result.ok, true);
+  assert.equal(result.text, "final");
 });
 
 test("SDK 失敗時に標準化エラーを返す", async () => {
@@ -73,7 +245,7 @@ test("SDK 失敗時に標準化エラーを返す", async () => {
     logger: { info() {}, error() {} }
   });
 
-  const result = await runtime.submitPrompt("test");
+  const result = await runtime.submitPrompt("test", createProviderSettings());
   assert.equal(result.ok, false);
   assert.equal(result.error.code, "AGENT_EXECUTION_FAILED");
   assert.equal(result.error.retryable, true);
