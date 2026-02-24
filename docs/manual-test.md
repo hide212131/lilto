@@ -33,5 +33,9 @@
 ## Agent Skills (Live) E2E
 1. 事前にアプリで Claude OAuth を完了し、`.lilto-auth.json` が作成されていることを確認する
 2. `npm run e2e:electron:skills-live` を実行する（`LILTO_E2E_MOCK` は未設定または `0`）
-3. コマンドが成功終了することを確認する
-4. `test/artifacts/electron-e2e-agent-skills-live.png` が生成されることを確認する
+3. 実行前クリーンアップで `~/.pi/skills` 配下のうち `SKILL.md` に `[[LILTO_SKILL_E2E_MAGIC]]` を含むスキルのみ削除され、他スキルが残ることを確認する
+4. E2E が以下を順に成功させることを確認する
+   - 通常の情報取得（Example Domain タイトル取得）
+   - 「再現できるようにスキル化」指示で `lilto-e2e-example-title` を生成（`[[LILTO_SKILL_E2E_MAGIC]]` 埋め込み）
+   - 生成スキル呼び出しで同じ成果を再取得
+5. コマンドが成功終了し、`test/artifacts/electron-e2e-agent-skills-live.png` が生成されることを確認する

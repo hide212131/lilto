@@ -8,6 +8,7 @@ const {
   parseSkillMarkdown,
   discoverSkillMetadata,
   ensureSkillDirInPiSettings,
+  setupSkillRuntime,
   resolveWorkspaceDir,
   cleanupOldWorkspaces
 } = require("../dist/main/skill-runtime.js");
@@ -60,6 +61,20 @@ test("settings.json に skills 配列を追加・重複回避できる", () => {
   assert.deepEqual(saved.skills, ["/tmp/app/skills"]);
 });
 
+test("settings.json に複数スキルディレクトリを追加できる", () => {
+  const root = tempDir("skills-settings-multi");
+  const settingsPath = path.join(root, "settings.json");
+
+  const updated = ensureSkillDirInPiSettings({
+    skillDirs: ["/tmp/pi/skills", "/tmp/app/skills/bundled"],
+    settingsPaths: [settingsPath]
+  });
+  assert.equal(updated.length, 1);
+
+  const saved = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+  assert.deepEqual(saved.skills, ["/tmp/pi/skills", "/tmp/app/skills/bundled"]);
+});
+
 test("作業フォルダは ~/.pi/workspaces/<project> に固定される", () => {
   const workspace = resolveWorkspaceDir("Lilt AI", "/home/demo");
   assert.equal(workspace, path.join("/home/demo", ".pi", "workspaces", "lilt-ai"));
@@ -87,4 +102,70 @@ test("TTL を超えた古いワークスペースを削除する", () => {
   assert.equal(fs.existsSync(stale), false);
   assert.equal(fs.existsSync(current), true);
   assert.equal(fs.existsSync(fresh), true);
+});
+
+test("同名スキルがある場合は user skills を優先する", () => {
+  const root = tempDir("skills-priority");
+  const userDir = path.join(root, "user");
+  const bundledDir = path.join(root, "bundled");
+  fs.mkdirSync(path.join(userDir, "demo"), { recursive: true });
+  fs.mkdirSync(path.join(bundledDir, "demo"), { recursive: true });
+  fs.writeFileSync(
+    path.join(userDir, "demo", "SKILL.md"),
+    `---\nname: demo\ndescription: user version\n---\nUser`
+  );
+  fs.writeFileSync(
+    path.join(bundledDir, "demo", "SKILL.md"),
+    `---\nname: demo\ndescription: bundled version\n---\nBundled`
+  );
+
+  const skills = discoverSkillMetadata([userDir, bundledDir]);
+  assert.equal(skills.length, 1);
+  assert.equal(skills[0].description, "user version");
+});
+
+test("setupSkillRuntime は bundled/user の両方を設定して skill-creator を一覧化する", () => {
+  const root = tempDir("setup-runtime");
+  const projectRoot = path.join(root, "project");
+  const appDataDir = path.join(root, "app-data");
+  const homeDir = path.join(root, "home");
+  const settingsPath = path.join(root, "settings.json");
+  fs.mkdirSync(projectRoot, { recursive: true });
+
+  fs.mkdirSync(path.join(projectRoot, "node_modules", "agent-browser", "skills", "agent-browser"), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectRoot, "node_modules", "agent-browser", "skills", "agent-browser", "SKILL.md"),
+    `---\nname: agent-browser\ndescription: bundled browser\n---\n`
+  );
+
+  fs.mkdirSync(path.join(projectRoot, "skills", "bundled", "skill-creator"), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectRoot, "skills", "bundled", "skill-creator", "SKILL.md"),
+    `---\nname: skill-creator\ndescription: bundled skill creator\n---\n`
+  );
+
+  fs.mkdirSync(path.join(homeDir, ".pi", "skills", "custom-one"), { recursive: true });
+  fs.writeFileSync(
+    path.join(homeDir, ".pi", "skills", "custom-one", "SKILL.md"),
+    `---\nname: custom-one\ndescription: user custom\n---\n`
+  );
+
+  const runtime = setupSkillRuntime({
+    appDataDir,
+    projectName: "Lilt AI",
+    workspaceTtlHours: 0,
+    homeDir,
+    settingsPaths: [settingsPath],
+    projectRoot
+  });
+
+  assert.equal(runtime.bundledSkillsDir, path.join(appDataDir, "skills", "bundled"));
+  assert.equal(runtime.userSkillsDir, path.join(homeDir, ".pi", "skills"));
+  assert.deepEqual(
+    runtime.availableSkills.map((skill) => skill.name).sort(),
+    ["agent-browser", "custom-one", "skill-creator"]
+  );
+
+  const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+  assert.deepEqual(settings.skills, [path.join(homeDir, ".pi", "skills"), path.join(appDataDir, "skills", "bundled")]);
 });

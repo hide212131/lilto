@@ -63,6 +63,8 @@ void app.whenReady().then(() => {
     });
     logger.info("skill_runtime_initialized", {
       appSkillsDir: skillRuntime.appSkillsDir,
+      bundledSkillsDir: skillRuntime.bundledSkillsDir,
+      userSkillsDir: skillRuntime.userSkillsDir,
       workspaceDir: skillRuntime.workspaceDir,
       skills: skillRuntime.availableSkills.map((skill) => skill.name),
       updatedSettings: skillRuntime.updatedSettings,
@@ -73,6 +75,8 @@ void app.whenReady().then(() => {
     logger.error("skill_runtime_init_failed", { message });
     skillRuntime = {
       appSkillsDir: "",
+      bundledSkillsDir: "",
+      userSkillsDir: "",
       workspaceDir: process.cwd(),
       availableSkills: [],
       updatedSettings: [],

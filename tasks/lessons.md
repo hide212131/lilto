@@ -52,3 +52,14 @@
 | `visualize-agent-loop-ui` の apply 実装で Main->Renderer ループイベント可視化を追加し、GUI E2E まで完了。 | preload から Main モジュール定数を参照すると、環境差異で `window.lilto` 初期化不全の切り分けが難しくなる。 | preload は依存を最小化し、IPC チャネル名はローカル定数で定義して bridge 初期化の単純性を優先する。 |
 | 進行可視化を上部パネルからアシスタント返信内の逐次ログ表示へ変更し、live E2E で確認。 | 進行表示を別UI（上部パネル）に分離すると、ユーザーの会話文脈から離れて「作業過程が見えない」印象になる。 | 進行イベントは pending assistant メッセージ本文に追記し、最終回答時もログを残して「増えていく表示」を維持する。 |
 | 進行ログを「開始＋詳細表示」に調整し、`ツール完了/実行完了` 行を削除。 | 進行イベントを対称的に全表示すると、ユーザーには完了通知が冗長でノイズになりやすい。 | 進行ログは `tool_execution_start` を主軸にし、開始時の引数要約（command/path など）を追記して情報密度を上げる。 |
+
+## 2026-02-24
+
+| 変更内容 | ミス/課題 | 再発防止ルール |
+|---|---|---|
+| `add-bundled-skill-creator-skill` の proposal を作成し、`skill-creator` 同梱とスキル化依頼時の優先選択方針を定義。 | 新規 capability 追加と既存 capability 変更の境界を曖昧にすると、後続の specs で requirement の責務が重複しやすい。 | proposal 作成時に「新規挙動は New Capabilities、既存 discovery の挙動拡張は Modified Capabilities」と責務を分離して記述する。 |
+| スキル保存先を再検討し、組み込みとユーザー生成で分離する方針を proposal/policy に反映。 | `~/.pi/workspaces` は TTL クリーンアップ対象のため、再利用前提スキルを置くと消失リスクがある。 | 再利用資産はクリーンアップ対象外の永続ディレクトリ（`~/.pi/skills`）に保存し、組み込み資産は `<app data>/skills/bundled` と分離して管理する。 |
+| `openspec-ff-change` で `add-bundled-skill-creator-skill` の design/specs/tasks を一括作成。 | Modified capability の spec で requirement 名が既存 spec と一致しないと、archive 同期時に意図した更新として扱われない。 | `## MODIFIED Requirements` を書く前に `openspec/specs/<capability>/spec.md` の `### Requirement:` 見出しを確認し、同一見出し名で全文更新する。 |
+| `add-bundled-skill-creator-skill` の tasks に E2E 最終検証（事前クリーンアップ + 再現実行）を追加。 | テスト用スキル削除条件を曖昧にすると、`~/.pi/skills` 内の手作業スキルまで誤削除する事故が起きる。 | E2E 用スキルには固定マジックワード（`[[LILTO_SKILL_E2E_MAGIC]]`）を必ず埋め込み、削除処理はその文字列を検出したスキルに限定する。 |
+| `openspec-apply-change` で `add-bundled-skill-creator-skill` を実装し、live E2E（取得→スキル化→再現）を完了。 | 組み込みスキルの同梱元を単一路径に固定すると、依存配置差異（node_modules/ローカル同梱）で起動時に欠落しやすい。 | 組み込みスキルは複数候補パスから解決し、見つからない場合はスキル名付きで明示エラーにして検知を早める。 |
+| `skill-creator` を「ビルド時に最新取得・非Git管理」へ運用変更。 | 同梱スキルをリポジトリ管理すると更新頻度の高い upstream 差分でノイズが増え、最新版追従も手動化しやすい。 | upstream 追従が必要な同梱資産は `prebuild` で同期し、生成先ディレクトリを `.gitignore` で除外してソース管理対象を最小化する。 |

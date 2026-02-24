@@ -277,6 +277,57 @@ test("ブラウザ依頼時は agent-browser スキルを優先する", async ()
   assert.equal(receivedPrompt.startsWith("/skill:agent-browser"), true);
 });
 
+test("スキル化依頼時は skill-creator スキルを優先する", async () => {
+  let receivedPrompt = "";
+  const runtime = new AgentRuntime({
+    authService: createAuthService("authenticated"),
+    createSession: async () => ({
+      subscribe(listener) {
+        listener({
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: "ok" }
+        });
+        return () => {};
+      },
+      async prompt(text) {
+        receivedPrompt = text;
+      }
+    }),
+    availableSkills: [{ name: "agent-browser" }, { name: "skill-creator" }],
+    logger: { info() {}, error() {} }
+  });
+
+  const result = await runtime.submitPrompt("この手順を再現できるようにスキルにして", createProviderSettings());
+  assert.equal(result.ok, true);
+  assert.equal(receivedPrompt.startsWith("/skill:skill-creator"), true);
+});
+
+test("明示 /skill 指定がある場合は自動補正しない", async () => {
+  let receivedPrompt = "";
+  const runtime = new AgentRuntime({
+    authService: createAuthService("authenticated"),
+    createSession: async () => ({
+      subscribe(listener) {
+        listener({
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: "ok" }
+        });
+        return () => {};
+      },
+      async prompt(text) {
+        receivedPrompt = text;
+      }
+    }),
+    availableSkills: [{ name: "agent-browser" }, { name: "skill-creator" }],
+    logger: { info() {}, error() {} }
+  });
+
+  const explicit = "/skill:agent-browser\n\nこの手順をスキル化して";
+  const result = await runtime.submitPrompt(explicit, createProviderSettings());
+  assert.equal(result.ok, true);
+  assert.equal(receivedPrompt, explicit);
+});
+
 test("agent-browser が無い場合はスキル接頭辞を付けない", async () => {
   let receivedPrompt = "";
   const runtime = new AgentRuntime({

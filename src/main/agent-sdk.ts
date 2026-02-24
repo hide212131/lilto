@@ -2,7 +2,7 @@ import { createLogger, type Logger } from "./logger";
 import type { ClaudeAuthService } from "./auth-service";
 import type { ProviderSettings } from "./provider-settings";
 import { isCustomProviderReady } from "./provider-settings";
-import { shouldPrioritizeAgentBrowser } from "./skill-runtime";
+import { shouldPrioritizeAgentBrowser, shouldPrioritizeSkillCreator } from "./skill-runtime";
 import type { AgentLoopEvent } from "../shared/agent-loop";
 
 type AgentError = {
@@ -354,16 +354,19 @@ export class AgentRuntime {
   }
 
   private buildPromptWithSkillHint(text: string): string {
-    if (!this.availableSkillNames.has("agent-browser")) {
-      return text;
-    }
-    if (!shouldPrioritizeAgentBrowser(text)) {
-      return text;
-    }
     if (text.trimStart().startsWith("/skill:")) {
       return text;
     }
-    return `/skill:agent-browser\n\n${text}`;
+
+    if (this.availableSkillNames.has("skill-creator") && shouldPrioritizeSkillCreator(text)) {
+      return `/skill:skill-creator\n\n${text}`;
+    }
+
+    if (this.availableSkillNames.has("agent-browser") && shouldPrioritizeAgentBrowser(text)) {
+      return `/skill:agent-browser\n\n${text}`;
+    }
+
+    return text;
   }
 
   async submitPrompt(

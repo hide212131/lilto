@@ -5,6 +5,7 @@
   "description": "Lilt-o desktop shell with Pi SDK bridge",
   "main": "dist/main/index.js",
   "scripts": {
+    "prebuild": "node scripts/sync-skill-creator.js",
     "build": "tsc -p tsconfig.json && vite build",
     "start": "npm run build && electron .",
     "test": "npm run build && node --test",

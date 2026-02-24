@@ -1,11 +1,14 @@
 const { spawn, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 
 const rootDir = path.resolve(__dirname, "..");
 const sessionName = "lilto-electron-e2e-live";
 const cdpPort = process.env.LILTO_E2E_CDP_PORT || "9223";
 const screenshotPath = path.join(rootDir, "test", "artifacts", "electron-e2e-agent-skills-live.png");
+const e2eMagicWord = "[[LILTO_SKILL_E2E_MAGIC]]";
+const e2eSkillName = "lilto-e2e-example-title";
 
 function run(cmd, args, options = {}) {
   const result = spawnSync(cmd, args, {
@@ -61,6 +64,36 @@ function preflightChecks() {
 
   const shell = process.platform === "win32" ? "npx.cmd" : "npx";
   run(shell, ["agent-browser", "--version"]);
+}
+
+function cleanupPriorE2ESkills() {
+  const userSkillsDir = path.join(os.homedir(), ".pi", "skills");
+  if (!fs.existsSync(userSkillsDir)) return [];
+
+  const removed = [];
+  const entries = fs.readdirSync(userSkillsDir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const skillDir = path.join(userSkillsDir, entry.name);
+    const skillPath = path.join(skillDir, "SKILL.md");
+    if (!fs.existsSync(skillPath)) continue;
+
+    let content = "";
+    try {
+      content = fs.readFileSync(skillPath, "utf8");
+    } catch (_error) {
+      continue;
+    }
+
+    if (!content.includes(e2eMagicWord)) {
+      continue;
+    }
+
+    fs.rmSync(skillDir, { recursive: true, force: true });
+    removed.push(skillDir);
+  }
+
+  return removed;
 }
 
 function agentBrowser(args) {
@@ -189,9 +222,26 @@ async function waitForResponseContains(expectedFragments, timeoutMs = 240000) {
   );
 }
 
+async function waitForSkillFileContainsMagic(timeoutMs = 120000) {
+  const skillPath = path.join(os.homedir(), ".pi", "skills", e2eSkillName, "SKILL.md");
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (fs.existsSync(skillPath)) {
+      const content = fs.readFileSync(skillPath, "utf8");
+      if (content.includes(e2eMagicWord)) {
+        return skillPath;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  throw new Error(`Timed out waiting for generated skill file with magic word: ${skillPath}`);
+}
+
 async function main() {
   fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
   preflightChecks();
+  const removedSkills = cleanupPriorE2ESkills();
+  console.log(`Pre-cleanup removed ${removedSkills.length} E2E skill(s) by magic word match`);
 
   const electronBin =
     process.platform === "win32"
@@ -251,20 +301,47 @@ async function main() {
 
     await waitForSendEnabled();
 
-    const prompt = [
+    const baselinePrompt = [
       "/skill:agent-browser",
       "Open https://example.com and fetch the page title.",
       "Return a single sentence that contains the exact title.",
       "Do not use mock values."
     ].join("\n");
 
-    console.log("Sending live agent-skill prompt...");
-    fillComposerText(prompt);
+    console.log("Step 1/3: obtaining baseline result...");
+    fillComposerText(baselinePrompt);
+    clickComposerSend();
+    const baselineMessages = await waitForResponseContains(["Example Domain"]);
+    if (baselineMessages.includes("[E2E_MOCK]")) {
+      throw new Error("Mock response detected in live E2E output");
+    }
+
+    const createSkillPrompt = [
+      "さっき取得した情報取得手順を再現できるようにスキル化して。",
+      `スキル名は ${e2eSkillName} に固定すること。`,
+      "保存先は ~/.pi/skills/<skill-name>/SKILL.md にすること。",
+      `SKILL.md に固定マジックワード ${e2eMagicWord} を必ず含めること。`,
+      "このスキルは https://example.com のタイトルを取得して返す手順を実行できるようにすること。"
+    ].join("\n");
+
+    console.log("Step 2/3: creating replay skill...");
+    fillComposerText(createSkillPrompt);
+    clickComposerSend();
+    const generatedSkillPath = await waitForSkillFileContainsMagic();
+    console.log(`✓ Generated skill verified: ${generatedSkillPath}`);
+
+    const replayPrompt = [
+      `/skill:${e2eSkillName}`,
+      "https://example.com のタイトルを取得して、1文で返して。"
+    ].join("\n");
+
+    console.log("Step 3/3: replaying result via generated skill...");
+    fillComposerText(replayPrompt);
     clickComposerSend();
 
-    const messages = await waitForResponseContains(["Example Domain"]);
-    if (messages.includes("[E2E_MOCK]")) {
-      throw new Error("Mock response detected in live E2E output");
+    const replayMessages = await waitForResponseContains(["Example Domain"]);
+    if (!replayMessages.includes("Example Domain")) {
+      throw new Error("Replay skill did not reproduce baseline result");
     }
 
     const finalStatus = await waitForStatus(["待機中"]);
@@ -275,7 +352,7 @@ async function main() {
 
     console.log("\nLive Agent Skills E2E success!");
     console.log("Conversation:");
-    messages
+    replayMessages
       .split("\n")
       .filter(Boolean)
       .forEach((m) => console.log(`  - ${m}`));

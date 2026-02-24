@@ -11,13 +11,15 @@ export type SkillMetadata = {
 
 export type SkillRuntimeSetup = {
   appSkillsDir: string;
+  bundledSkillsDir: string;
+  userSkillsDir: string;
   workspaceDir: string;
   availableSkills: SkillMetadata[];
   updatedSettings: string[];
   removedWorkspaces: string[];
 };
 
-const BUNDLED_SKILL_NAME = "agent-browser";
+const BUNDLED_SKILL_NAMES = ["agent-browser", "skill-creator"] as const;
 
 function parseInlineValue(raw: string): unknown {
   const value = raw.trim();
@@ -192,18 +194,22 @@ function updateSettingsFile(settingsPath: string, skillDir: string): boolean {
 }
 
 export function ensureSkillDirInPiSettings(options: {
-  skillDir: string;
+  skillDir?: string;
+  skillDirs?: string[];
   homeDir?: string;
   settingsPaths?: string[];
 }): string[] {
   const homeDir = options.homeDir ?? os.homedir();
   const settingsPaths =
     options.settingsPaths ?? [path.join(homeDir, ".pi", "settings.json"), path.join(homeDir, ".pi", "agent", "settings.json")];
+  const skillDirs = options.skillDirs ?? (options.skillDir ? [options.skillDir] : []);
 
   const updated: string[] = [];
-  for (const settingsPath of settingsPaths) {
-    if (updateSettingsFile(settingsPath, options.skillDir)) {
-      updated.push(settingsPath);
+  for (const skillDir of skillDirs) {
+    for (const settingsPath of settingsPaths) {
+      if (updateSettingsFile(settingsPath, skillDir) && !updated.includes(settingsPath)) {
+        updated.push(settingsPath);
+      }
     }
   }
 
@@ -264,34 +270,66 @@ export function cleanupOldWorkspaces(options: {
   return removed;
 }
 
-export function ensureBundledAgentBrowserSkill(options: {
-  appSkillsDir: string;
-  projectRoot?: string;
-}): string {
-  const projectRoot = options.projectRoot ?? process.cwd();
-  const sourceDir = path.join(projectRoot, "node_modules", "agent-browser", "skills", BUNDLED_SKILL_NAME);
-  const targetDir = path.join(options.appSkillsDir, BUNDLED_SKILL_NAME);
+function resolveBundledSkillSource(options: {
+  projectRoot: string;
+  skillName: string;
+}): string | null {
+  const candidates = [
+    path.join(options.projectRoot, "node_modules", "agent-browser", "skills", options.skillName),
+    path.join(options.projectRoot, "skills", "bundled", options.skillName)
+  ];
 
-  if (!fs.existsSync(sourceDir)) {
-    throw new Error(`Bundled skill not found: ${sourceDir}`);
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+export function ensureBundledSkills(options: {
+  bundledSkillsDir: string;
+  projectRoot?: string;
+}): string[] {
+  const projectRoot = options.projectRoot ?? process.cwd();
+  fs.mkdirSync(options.bundledSkillsDir, { recursive: true });
+
+  const installed: string[] = [];
+  for (const skillName of BUNDLED_SKILL_NAMES) {
+    const sourceDir = resolveBundledSkillSource({ projectRoot, skillName });
+    if (!sourceDir) {
+      throw new Error(`Bundled skill not found: ${skillName}`);
+    }
+    const targetDir = path.join(options.bundledSkillsDir, skillName);
+    fs.cpSync(sourceDir, targetDir, { recursive: true, force: true });
+    installed.push(path.join(targetDir, "SKILL.md"));
   }
 
-  fs.mkdirSync(options.appSkillsDir, { recursive: true });
-  fs.cpSync(sourceDir, targetDir, { recursive: true, force: true });
-
-  return path.join(targetDir, "SKILL.md");
+  return installed;
 }
 
 export function setupSkillRuntime(options: {
   appDataDir: string;
   projectName: string;
   workspaceTtlHours?: number;
+  homeDir?: string;
+  settingsPaths?: string[];
+  projectRoot?: string;
 }): SkillRuntimeSetup {
+  const homeDir = options.homeDir ?? os.homedir();
   const appSkillsDir = path.join(options.appDataDir, "skills");
-  ensureBundledAgentBrowserSkill({ appSkillsDir });
+  const bundledSkillsDir = path.join(appSkillsDir, "bundled");
+  const userSkillsDir = path.join(homeDir, ".pi", "skills");
 
-  const updatedSettings = ensureSkillDirInPiSettings({ skillDir: appSkillsDir });
-  const availableSkills = discoverSkillMetadata([appSkillsDir]);
+  ensureBundledSkills({ bundledSkillsDir, projectRoot: options.projectRoot });
+  fs.mkdirSync(userSkillsDir, { recursive: true });
+
+  const updatedSettings = ensureSkillDirInPiSettings({
+    skillDirs: [userSkillsDir, bundledSkillsDir],
+    homeDir,
+    settingsPaths: options.settingsPaths
+  });
+  const availableSkills = discoverSkillMetadata([userSkillsDir, bundledSkillsDir]);
 
   const workspaceDir = resolveWorkspaceDir(options.projectName);
   const workspaceRoot = path.dirname(workspaceDir);
@@ -306,6 +344,8 @@ export function setupSkillRuntime(options: {
 
   return {
     appSkillsDir,
+    bundledSkillsDir,
+    userSkillsDir,
     workspaceDir,
     availableSkills,
     updatedSettings,
@@ -322,5 +362,18 @@ export function shouldPrioritizeAgentBrowser(text: string): boolean {
     text.includes("ブラウザ") ||
     text.includes("サイト") ||
     text.includes("ウェブ")
+  );
+}
+
+export function shouldPrioritizeSkillCreator(text: string): boolean {
+  const lowered = text.toLowerCase();
+  return (
+    lowered.includes("make a skill") ||
+    lowered.includes("create a skill") ||
+    lowered.includes("turn this into a skill") ||
+    lowered.includes("skillize") ||
+    text.includes("スキルにして") ||
+    text.includes("スキル化して") ||
+    text.includes("再現できるようにスキル")
   );
 }
