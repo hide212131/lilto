@@ -63,3 +63,5 @@
 | `add-bundled-skill-creator-skill` の tasks に E2E 最終検証（事前クリーンアップ + 再現実行）を追加。 | テスト用スキル削除条件を曖昧にすると、`~/.pi/skills` 内の手作業スキルまで誤削除する事故が起きる。 | E2E 用スキルには固定マジックワード（`[[LILTO_SKILL_E2E_MAGIC]]`）を必ず埋め込み、削除処理はその文字列を検出したスキルに限定する。 |
 | `openspec-apply-change` で `add-bundled-skill-creator-skill` を実装し、live E2E（取得→スキル化→再現）を完了。 | 組み込みスキルの同梱元を単一路径に固定すると、依存配置差異（node_modules/ローカル同梱）で起動時に欠落しやすい。 | 組み込みスキルは複数候補パスから解決し、見つからない場合はスキル名付きで明示エラーにして検知を早める。 |
 | `skill-creator` を「ビルド時に最新取得・非Git管理」へ運用変更。 | 同梱スキルをリポジトリ管理すると更新頻度の高い upstream 差分でノイズが増え、最新版追従も手動化しやすい。 | upstream 追従が必要な同梱資産は `prebuild` で同期し、生成先ディレクトリを `.gitignore` で除外してソース管理対象を最小化する。 |
+| `start-new-session-with-plus-button` の artifacts（proposal/design/specs/tasks）を `openspec-ff-change` で一括作成。 | 既存仕様にある Requirement 名を確認せずに `MODIFIED` を書くと、同期時に意図しない差分適用になりやすい。 | `specs` 作成前に `openspec/specs/<capability>/spec.md` の Requirement 見出しを確認し、変更は既存見出しに寄せて全文更新する。 |
+| `start-new-session-with-plus-button` を apply 実装し、＋ボタンで新規セッション開始と GUI E2E を完了。 | E2E で非同期 UI 状態（送信中 disabled）を瞬間値で検証すると、モック応答が速い環境でフレークしやすい。 | 非同期状態の E2E 検証は時間依存の瞬間観測を避け、制御可能な状態（例: `isSending` の明示切替）で deterministic に確認する。 |

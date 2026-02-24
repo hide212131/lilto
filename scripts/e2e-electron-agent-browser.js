@@ -90,6 +90,12 @@ function clickSettingsButton() {
   );
 }
 
+function clickNewSessionButton() {
+  evalJs(
+    "document.querySelector('lilt-app')?.shadowRoot?.querySelector('lilt-top-bar')?.shadowRoot?.querySelector('button[title=\"New\"]')?.click()"
+  );
+}
+
 function clickSettingsClose() {
   evalJs(
     "document.querySelector('lilt-app')?.shadowRoot?.querySelector('lilt-settings-modal')?.shadowRoot?.querySelector('button[title=\"Close\"]')?.click()"
@@ -152,6 +158,32 @@ function isSendDisabled() {
     "document.querySelector('lilt-app')?.shadowRoot?.querySelector('lilt-composer')?.shadowRoot?.querySelector('button')?.disabled ?? true"
   );
   return result === "true";
+}
+
+function isNewSessionDisabled() {
+  const result = evalJs(
+    "document.querySelector('lilt-app')?.shadowRoot?.querySelector('lilt-top-bar')?.shadowRoot?.querySelector('button[title=\"New\"]')?.disabled ?? true"
+  );
+  return result === "true";
+}
+
+function getMessageCount() {
+  const result = evalJs(
+    "String(document.querySelector('lilt-app')?.shadowRoot?.querySelector('lilt-message-list')?.shadowRoot?.querySelectorAll('.msg')?.length ?? 0)"
+  );
+  const normalized = String(result).replaceAll("\"", "").trim();
+  return Number.parseInt(normalized, 10);
+}
+
+function setAppSendingState(isSending) {
+  evalJs(
+    `(() => {
+      const app = document.querySelector('lilt-app');
+      if (!app) return;
+      app.isSending = ${isSending ? "true" : "false"};
+      app.requestUpdate?.();
+    })()`
+  );
 }
 
 async function waitForStatus(expected, timeoutMs = 15000) {
@@ -281,22 +313,41 @@ async function main() {
     const statusAfterSwitch = getStatusText();
     console.log(`✓ Status after provider switch: "${statusAfterSwitch}"`);
 
-    // 9. メッセージ送信
+    // 9. isSending 連動で New ボタンが無効化されることを確認
+    setAppSendingState(true);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    if (!isNewSessionDisabled()) throw new Error("New session button should be disabled when app isSending=true");
+    setAppSendingState(false);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    if (isNewSessionDisabled()) throw new Error("New session button should be enabled when app isSending=false");
+    console.log("✓ New session button enable/disable state toggles with isSending");
+
+    // 10. メッセージ送信
     const testMessage = "E2E smoke from agent-browser";
     console.log(`Sending: "${testMessage}"...`);
     fillComposerText(testMessage);
     clickComposerSend();
 
-    // 10. モック応答確認
+    // 11. モック応答確認
     const expectedMock = `[E2E_MOCK] ${testMessage}`;
     await waitForResponse(expectedMock);
     console.log(`✓ Mock response received: "${expectedMock}"`);
 
-    // 11. 最終ステータス確認
+    // 12. 最終ステータス確認
     const finalStatus = await waitForStatus(["待機中"]);
     console.log(`✓ Final status: "${finalStatus}"`);
 
-    // 12. 最終スクリーンショット
+    // 13. 新規セッション開始で会話履歴を初期化
+    const countBeforeReset = getMessageCount();
+    if (countBeforeReset < 2) throw new Error(`Unexpected message count before reset: ${countBeforeReset}`);
+    clickNewSessionButton();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const countAfterReset = getMessageCount();
+    if (countAfterReset !== 0) throw new Error(`Expected cleared messages after new session, got: ${countAfterReset}`);
+    if (isNewSessionDisabled()) throw new Error("New session button should be enabled after sending");
+    console.log("✓ New session reset cleared conversation");
+
+    // 14. 最終スクリーンショット
     agentBrowser(["screenshot", screenshotPath]);
     console.log(`✓ Final screenshot: ${screenshotPath}`);
 

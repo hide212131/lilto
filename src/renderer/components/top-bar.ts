@@ -4,6 +4,7 @@ import { customElement, property } from "lit/decorators.js";
 @customElement("lilt-top-bar")
 export class LiltTopBar extends LitElement {
   @property() statusText = "待機中";
+  @property({ type: Boolean }) newSessionDisabled = false;
 
   static styles = css`
     :host {
@@ -58,7 +59,15 @@ export class LiltTopBar extends LitElement {
       <div class="topbar">
         <div class="topbar-left">
           <button class="icon-btn" type="button" title="History">↺</button>
-          <button class="icon-btn" type="button" title="New">＋</button>
+          <button
+            class="icon-btn"
+            @click=${this._startNewSession}
+            ?disabled=${this.newSessionDisabled}
+            type="button"
+            title="New"
+          >
+            ＋
+          </button>
           <div class="topbar-title">Lilt-o</div>
         </div>
         <div class="topbar-right">
@@ -71,5 +80,10 @@ export class LiltTopBar extends LitElement {
 
   private _openSettings() {
     this.dispatchEvent(new CustomEvent("open-settings", { bubbles: true, composed: true }));
+  }
+
+  private _startNewSession() {
+    if (this.newSessionDisabled) return;
+    this.dispatchEvent(new CustomEvent("new-session", { bubbles: true, composed: true }));
   }
 }

@@ -125,6 +125,8 @@ export class LiltApp extends LitElement {
     return html`
       <lilt-top-bar
         statusText=${this._statusText()}
+        .newSessionDisabled=${this.isSending}
+        @new-session=${this._onStartNewSession}
         @open-settings=${() => { this.settingsOpen = true; }}
       ></lilt-top-bar>
 
@@ -157,6 +159,14 @@ export class LiltApp extends LitElement {
   private _onProviderSettingsChanged(e: CustomEvent<ProviderSettings>) {
     this.providerSettings = e.detail;
     this._syncSendability();
+  }
+
+  private _onStartNewSession() {
+    if (this.isSending) return;
+    this.messages = [];
+    this.loopState = createInitialLoopState();
+    this._pendingAssistantIndex = null;
+    this._progressLines = [];
   }
 
   private async _onSendMessage(e: CustomEvent<{ text: string }>) {
