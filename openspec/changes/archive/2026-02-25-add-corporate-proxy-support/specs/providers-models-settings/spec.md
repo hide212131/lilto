@@ -1,8 +1,5 @@
-# providers-models-settings Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change add-providers-and-models-custom-provider. Update Purpose after archive.
-## Requirements
 ### Requirement: Providers & Models 設定画面の提供
 システムは、Settings モーダル内の設定メニューを `Providers & Models` として提供し、Claude と Custom Provider の設定導線を同一画面で提示しなければならない（MUST）。また同一画面でネットワーク Proxy 設定導線を提示しなければならない（MUST）。
 
@@ -36,15 +33,3 @@ TBD - created by archiving change add-providers-and-models-custom-provider. Upda
 #### Scenario: 無効な Proxy URL は保存を拒否する
 - **WHEN** ユーザーが URL 形式でない `httpProxy` または `httpsProxy` を入力して保存操作を実行する
 - **THEN** システムは保存を行わず、Proxy 設定の入力不備を示すエラーを表示する
-
-### Requirement: Provider 別の実行可否表示
-システムは、現在選択されている provider の準備状態に応じて、送信可否と不足条件を UI へ表示しなければならない（MUST）。
-
-#### Scenario: Claude 未認証時に不足条件を表示する
-- **WHEN** 現在 provider が Claude で OAuth 未完了の状態である
-- **THEN** UI は送信を無効化し、Claude 認証が必要である旨を表示する
-
-#### Scenario: Custom Provider 未設定時に不足条件を表示する
-- **WHEN** 現在 provider が Custom Provider で必須設定が未完了である
-- **THEN** UI は送信を無効化し、不足している設定項目を表示する
-

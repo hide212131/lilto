@@ -65,3 +65,12 @@
 | `skill-creator` を「ビルド時に最新取得・非Git管理」へ運用変更。 | 同梱スキルをリポジトリ管理すると更新頻度の高い upstream 差分でノイズが増え、最新版追従も手動化しやすい。 | upstream 追従が必要な同梱資産は `prebuild` で同期し、生成先ディレクトリを `.gitignore` で除外してソース管理対象を最小化する。 |
 | `start-new-session-with-plus-button` の artifacts（proposal/design/specs/tasks）を `openspec-ff-change` で一括作成。 | 既存仕様にある Requirement 名を確認せずに `MODIFIED` を書くと、同期時に意図しない差分適用になりやすい。 | `specs` 作成前に `openspec/specs/<capability>/spec.md` の Requirement 見出しを確認し、変更は既存見出しに寄せて全文更新する。 |
 | `start-new-session-with-plus-button` を apply 実装し、＋ボタンで新規セッション開始と GUI E2E を完了。 | E2E で非同期 UI 状態（送信中 disabled）を瞬間値で検証すると、モック応答が速い環境でフレークしやすい。 | 非同期状態の E2E 検証は時間依存の瞬間観測を避け、制御可能な状態（例: `isSending` の明示切替）で deterministic に確認する。 |
+
+## 2026-02-25
+
+| 変更内容 | ミス/課題 | 再発防止ルール |
+|---|---|---|
+| `add-corporate-proxy-support` の OpenSpec change を新規作成し、初回 artifact 指示（proposal）まで取得。 | 受け入れ条件に「擬似Proxy必須環境での疎通確認」がある変更は、名前や初期スコープが曖昧だと後続 artifact で検証要件が抜け落ちやすい。 | `openspec new change` 前に完了条件を1行で固定し、それを含む change 名（例: proxy 必須動作）にしてから `status` と `instructions` 取得で停止する。 |
+| `openspec-ff-change` で `add-corporate-proxy-support` の proposal/design/specs/tasks を一括作成。 | Modified capability の delta spec で既存 Requirement 見出しを変えると、archive 同期時に意図した更新として扱われない。 | `MODIFIED Requirements` を書くときは `openspec/specs/<capability>/spec.md` の見出し名を厳密一致で再利用し、作成後に `openspec status --change <name>` で `4/4` を確認する。 |
+| `openspec-apply-change` で `add-corporate-proxy-support` を実装し、擬似 Proxy 必須 E2E（未設定失敗→設定成功）まで完了。 | Proxy 必須検証を既存 E2E に後付けすると、テスト環境準備（擬似外部API/擬似Proxy）と UI 操作の責務が混ざり、失敗原因の切り分けが遅れる。 | Proxy 系 E2E は先に `scripts` へ環境フィクスチャ（ターゲット/Proxy）を分離実装し、シナリオ側は「未設定失敗・設定成功」の観測に専念させる。 |
+| `add-corporate-proxy-support` を同期付きで archive し、main specs へ反映。 | archive 前の同期確認を省くと、delta spec の更新内容（追加/変更件数）が把握できず、意図した仕様反映かを説明しづらい。 | `archive` 実行時は同期サマリ（`+/-/~` 件数と capability 別内訳）を必ず確認し、完了報告に「どの spec が何件更新されたか」を明記する。 |

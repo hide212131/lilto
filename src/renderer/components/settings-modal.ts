@@ -14,6 +14,11 @@ export class LiltSettingsModal extends LitElement {
       apiKey: "",
       modelId: "qwen2.5:0.5b"
     },
+    networkProxy: {
+      httpProxy: "",
+      httpsProxy: "",
+      noProxy: ""
+    },
     updatedAt: Date.now()
   };
 
@@ -22,11 +27,13 @@ export class LiltSettingsModal extends LitElement {
   @state() private _customBaseUrl = "";
   @state() private _customApiKey = "";
   @state() private _customModelId = "";
+  @state() private _httpProxy = "";
+  @state() private _httpsProxy = "";
+  @state() private _noProxy = "";
   @state() private _authCodeValue = "";
   @state() private _saveStatus = "";
   @state() private _providerSelStatus = "";
 
-  private _formInitialized = false;
   private _boundKeydown = (e: KeyboardEvent) => {
     if (e.key === "Escape" && this.open) this._close();
   };
@@ -42,14 +49,17 @@ export class LiltSettingsModal extends LitElement {
   }
 
   willUpdate(changedProps: Map<string, unknown>) {
-    // Initialize form from providerSettings on first update or external change
-    if (changedProps.has("providerSettings") && !this._formInitialized) {
+    // Sync form state from provider settings when external state changes.
+    if (changedProps.has("providerSettings")) {
       const cp = this.providerSettings.customProvider;
+      const np = this.providerSettings.networkProxy;
       this._customName = cp.name;
       this._customBaseUrl = cp.baseUrl;
       this._customApiKey = cp.apiKey;
       this._customModelId = cp.modelId;
-      this._formInitialized = true;
+      this._httpProxy = np.httpProxy;
+      this._httpsProxy = np.httpsProxy;
+      this._noProxy = np.noProxy;
     }
     if (changedProps.has("authState")) {
       const as = this.authState;
@@ -336,6 +346,7 @@ export class LiltSettingsModal extends LitElement {
                   <label>
                     Provider Name (Required)
                     <input
+                      id="custom-provider-name"
                       placeholder="e.g., Ollama"
                       .value=${this._customName}
                       @input=${(e: InputEvent) => {
@@ -346,6 +357,7 @@ export class LiltSettingsModal extends LitElement {
                   <label>
                     Base URL (Required)
                     <input
+                      id="custom-base-url"
                       placeholder="http://127.0.0.1:11434/v1"
                       .value=${this._customBaseUrl}
                       @input=${(e: InputEvent) => {
@@ -356,6 +368,7 @@ export class LiltSettingsModal extends LitElement {
                   <label>
                     API Key (Optional)
                     <input
+                      id="custom-api-key"
                       type="password"
                       placeholder="Leave empty if not required"
                       .value=${this._customApiKey}
@@ -367,6 +380,7 @@ export class LiltSettingsModal extends LitElement {
                   <label>
                     Model ID
                     <input
+                      id="custom-model-id"
                       placeholder="qwen2.5:0.5b"
                       .value=${this._customModelId}
                       @input=${(e: InputEvent) => {
@@ -375,8 +389,44 @@ export class LiltSettingsModal extends LitElement {
                     />
                   </label>
                 </div>
+                <h4>Network Proxy</h4>
+                <div class="input-grid">
+                  <label>
+                    HTTP Proxy
+                    <input
+                      id="http-proxy"
+                      placeholder="http://proxy.example.local:8080"
+                      .value=${this._httpProxy}
+                      @input=${(e: InputEvent) => {
+                        this._httpProxy = (e.target as HTMLInputElement).value;
+                      }}
+                    />
+                  </label>
+                  <label>
+                    HTTPS Proxy
+                    <input
+                      id="https-proxy"
+                      placeholder="http://proxy.example.local:8080"
+                      .value=${this._httpsProxy}
+                      @input=${(e: InputEvent) => {
+                        this._httpsProxy = (e.target as HTMLInputElement).value;
+                      }}
+                    />
+                  </label>
+                  <label>
+                    NO_PROXY
+                    <input
+                      id="no-proxy"
+                      placeholder="localhost,127.0.0.1,.internal.local"
+                      .value=${this._noProxy}
+                      @input=${(e: InputEvent) => {
+                        this._noProxy = (e.target as HTMLInputElement).value;
+                      }}
+                    />
+                  </label>
+                </div>
                 <div class="provider-actions">
-                  <button @click=${this._saveCustomProvider}>Save Custom Provider</button>
+                  <button @click=${this._saveProviderAndProxy}>Save Provider Settings</button>
                   <span class="status">${this._saveStatus}</span>
                 </div>
               </section>
@@ -410,7 +460,7 @@ export class LiltSettingsModal extends LitElement {
     }
   }
 
-  private async _saveCustomProvider() {
+  private async _saveProviderAndProxy() {
     if (!this._customName.trim() || !this._customBaseUrl.trim()) {
       this._saveStatus = "name と baseUrl は必須です。";
       return;
@@ -422,11 +472,16 @@ export class LiltSettingsModal extends LitElement {
         baseUrl: this._customBaseUrl.trim(),
         apiKey: this._customApiKey,
         modelId: this._customModelId.trim() || "qwen2.5:0.5b"
+      },
+      networkProxy: {
+        httpProxy: this._httpProxy.trim(),
+        httpsProxy: this._httpsProxy.trim(),
+        noProxy: this._noProxy.trim()
       }
     };
     const result = await window.lilto.saveProviderSettings(next);
     if (result.ok) {
-      this._saveStatus = "Custom Provider 設定を保存しました。";
+      this._saveStatus = "Provider 設定を保存しました。";
       this.dispatchEvent(
         new CustomEvent("provider-settings-changed", {
           detail: result.state,

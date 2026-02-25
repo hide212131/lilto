@@ -1,21 +1,20 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createLogger, type Logger } from "./logger";
+import {
+  DEFAULT_NETWORK_PROXY_SETTINGS,
+  type ActiveProvider,
+  type CustomProviderSettings,
+  type NetworkProxySettings,
+  type ProviderSettings
+} from "../shared/provider-settings";
 
-export type ActiveProvider = "claude" | "custom-openai-completions";
-
-export type CustomProviderSettings = {
-  name: string;
-  baseUrl: string;
-  apiKey: string;
-  modelId: string;
-};
-
-export type ProviderSettings = {
-  activeProvider: ActiveProvider;
-  customProvider: CustomProviderSettings;
-  updatedAt: number;
-};
+export type {
+  ActiveProvider,
+  CustomProviderSettings,
+  NetworkProxySettings,
+  ProviderSettings
+} from "../shared/provider-settings";
 
 export type ProviderSettingsSaveResult =
   | { ok: true; state: ProviderSettings }
@@ -31,6 +30,7 @@ const DEFAULT_SETTINGS: ProviderSettings = {
     apiKey: "",
     modelId: DEFAULT_MODEL_ID
   },
+  networkProxy: { ...DEFAULT_NETWORK_PROXY_SETTINGS },
   updatedAt: Date.now()
 };
 
@@ -48,6 +48,10 @@ function normalizeSettings(value: unknown): ProviderSettings {
     record.customProvider && typeof record.customProvider === "object"
       ? (record.customProvider as Record<string, unknown>)
       : {};
+  const proxy =
+    record.networkProxy && typeof record.networkProxy === "object"
+      ? (record.networkProxy as Record<string, unknown>)
+      : {};
 
   return {
     activeProvider: normalizeActiveProvider(record.activeProvider),
@@ -57,13 +61,29 @@ function normalizeSettings(value: unknown): ProviderSettings {
       apiKey: typeof custom.apiKey === "string" ? custom.apiKey : "",
       modelId: toTrimmedString(custom.modelId, DEFAULT_MODEL_ID) || DEFAULT_MODEL_ID
     },
+    networkProxy: {
+      httpProxy: toTrimmedString(proxy.httpProxy),
+      httpsProxy: toTrimmedString(proxy.httpsProxy),
+      noProxy: toTrimmedString(proxy.noProxy)
+    },
     updatedAt: typeof record.updatedAt === "number" ? record.updatedAt : Date.now()
   };
+}
+
+function isValidProxyUrl(value: string): boolean {
+  if (!value.trim()) return true;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function isValidSavePayload(payload: unknown): payload is {
   activeProvider: ActiveProvider;
   customProvider: CustomProviderSettings;
+  networkProxy?: NetworkProxySettings;
 } {
   if (!payload || typeof payload !== "object") return false;
   const record = payload as Record<string, unknown>;
@@ -75,11 +95,20 @@ function isValidSavePayload(payload: unknown): payload is {
   }
 
   const custom = record.customProvider as Record<string, unknown>;
-  return (
+  const customValid =
     typeof custom.name === "string" &&
     typeof custom.baseUrl === "string" &&
     typeof custom.apiKey === "string" &&
-    typeof custom.modelId === "string"
+    typeof custom.modelId === "string";
+  if (!customValid) return false;
+
+  if (record.networkProxy === undefined) return true;
+  if (!record.networkProxy || typeof record.networkProxy !== "object") return false;
+  const proxy = record.networkProxy as Record<string, unknown>;
+  return (
+    typeof proxy.httpProxy === "string" &&
+    typeof proxy.httpsProxy === "string" &&
+    typeof proxy.noProxy === "string"
   );
 }
 
@@ -120,7 +149,8 @@ export class ProviderSettingsService {
   getState(): ProviderSettings {
     return {
       ...this.state,
-      customProvider: { ...this.state.customProvider }
+      customProvider: { ...this.state.customProvider },
+      networkProxy: { ...this.state.networkProxy }
     };
   }
 
@@ -135,7 +165,18 @@ export class ProviderSettingsService {
       };
     }
 
-    this.state = normalizeSettings(payload);
+    const normalized = normalizeSettings(payload);
+    if (!isValidProxyUrl(normalized.networkProxy.httpProxy) || !isValidProxyUrl(normalized.networkProxy.httpsProxy)) {
+      return {
+        ok: false,
+        error: {
+          code: "INVALID_PROVIDER_SETTINGS",
+          message: "Proxy URL は http(s) 形式で入力してください"
+        }
+      };
+    }
+
+    this.state = normalized;
     this.state.updatedAt = Date.now();
     this.persist();
 

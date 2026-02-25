@@ -23,6 +23,11 @@ function createProviderSettings(overrides = {}) {
       apiKey: "",
       modelId: "gpt-4.1-mini"
     },
+    networkProxy: {
+      httpProxy: "",
+      httpsProxy: "",
+      noProxy: ""
+    },
     updatedAt: Date.now(),
     ...overrides
   };
@@ -250,6 +255,39 @@ test("SDK 失敗時に標準化エラーを返す", async () => {
   assert.equal(result.ok, false);
   assert.equal(result.error.code, "AGENT_EXECUTION_FAILED");
   assert.equal(result.error.retryable, true);
+});
+
+test("Proxy precheck 失敗時に標準化エラーを返す", async () => {
+  process.env.LILTO_E2E_MOCK = "1";
+  process.env.LILTO_PROXY_TEST_URL = "http://127.0.0.1:1/probe";
+  try {
+    const runtime = new AgentRuntime({
+      authService: createAuthService("authenticated"),
+      createSession: async () => {
+        throw new Error("should not create session");
+      },
+      logger: { info() {}, error() {} }
+    });
+
+    const result = await runtime.submitPrompt(
+      "test",
+      createProviderSettings({
+        activeProvider: "custom-openai-completions",
+        customProvider: {
+          name: "my-custom",
+          baseUrl: "https://example.com/v1",
+          apiKey: "custom-key",
+          modelId: "gpt-4o-mini"
+        }
+      })
+    );
+
+    assert.equal(result.ok, false);
+    assert.equal(result.error.code, "PROXY_CONNECTION_FAILED");
+  } finally {
+    delete process.env.LILTO_E2E_MOCK;
+    delete process.env.LILTO_PROXY_TEST_URL;
+  }
 });
 
 test("ブラウザ依頼時は agent-browser スキルを優先する", async () => {

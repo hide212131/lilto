@@ -1,3 +1,4 @@
+import http from "node:http";
 import { createLogger, type Logger } from "./logger";
 import type { ClaudeAuthService } from "./auth-service";
 import type { ProviderSettings } from "./provider-settings";
@@ -223,6 +224,136 @@ function isLocalOllamaUrl(baseUrl: string): boolean {
   }
 }
 
+function normalizeNoProxyEntries(noProxyValue: string): string[] {
+  return noProxyValue
+    .split(",")
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function shouldBypassProxyForHost(hostname: string, noProxyValue: string): boolean {
+  const normalizedHost = hostname.trim().toLowerCase();
+  if (!normalizedHost) return false;
+  const entries = normalizeNoProxyEntries(noProxyValue);
+  return entries.some((entry) => {
+    if (entry === "*") return true;
+    if (entry.startsWith(".")) {
+      return normalizedHost.endsWith(entry);
+    }
+    return normalizedHost === entry;
+  });
+}
+
+function resolveProxyForTarget(targetUrl: URL, settings: ProviderSettings): string {
+  if (shouldBypassProxyForHost(targetUrl.hostname, settings.networkProxy.noProxy)) {
+    return "";
+  }
+  if (targetUrl.protocol === "https:") {
+    return settings.networkProxy.httpsProxy.trim() || settings.networkProxy.httpProxy.trim();
+  }
+  if (targetUrl.protocol === "http:") {
+    return settings.networkProxy.httpProxy.trim();
+  }
+  return "";
+}
+
+async function runProxyPrecheckIfEnabled(settings: ProviderSettings): Promise<void> {
+  const probeUrl = process.env.LILTO_PROXY_TEST_URL?.trim();
+  if (!probeUrl) return;
+
+  const targetUrl = new URL(probeUrl);
+  if (targetUrl.protocol !== "http:") {
+    throw new Error("LILTO_PROXY_TEST_URL は http URL のみサポートします");
+  }
+
+  const proxyUrlText = resolveProxyForTarget(targetUrl, settings);
+  await new Promise<void>((resolve, reject) => {
+    const finishWithResponse = (statusCode: number | undefined, body: string) => {
+      if (statusCode && statusCode >= 200 && statusCode < 300) {
+        resolve();
+        return;
+      }
+      reject(new Error(`proxy precheck failed: status=${statusCode ?? "unknown"} body=${body.trim()}`));
+    };
+
+    if (!proxyUrlText) {
+      const directReq = http.request(
+        {
+          protocol: targetUrl.protocol,
+          hostname: targetUrl.hostname,
+          port: targetUrl.port || "80",
+          method: "GET",
+          path: `${targetUrl.pathname}${targetUrl.search}`
+        },
+        (res) => {
+          let body = "";
+          res.setEncoding("utf8");
+          res.on("data", (chunk) => {
+            body += chunk;
+          });
+          res.on("end", () => finishWithResponse(res.statusCode, body));
+        }
+      );
+      directReq.on("error", reject);
+      directReq.end();
+      return;
+    }
+
+    const proxyUrl = new URL(proxyUrlText);
+    const proxyReq = http.request(
+      {
+        protocol: proxyUrl.protocol,
+        hostname: proxyUrl.hostname,
+        port: proxyUrl.port || (proxyUrl.protocol === "https:" ? "443" : "80"),
+        method: "GET",
+        path: targetUrl.toString(),
+        headers: {
+          host: targetUrl.host
+        }
+      },
+      (res) => {
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => {
+          body += chunk;
+        });
+        res.on("end", () => finishWithResponse(res.statusCode, body));
+      }
+    );
+    proxyReq.on("error", reject);
+    proxyReq.end();
+  });
+}
+
+function withScopedProxyEnvironment(settings: ProviderSettings): () => void {
+  const targetEntries: Array<[string, string]> = [
+    ["HTTP_PROXY", settings.networkProxy.httpProxy.trim()],
+    ["http_proxy", settings.networkProxy.httpProxy.trim()],
+    ["HTTPS_PROXY", settings.networkProxy.httpsProxy.trim()],
+    ["https_proxy", settings.networkProxy.httpsProxy.trim()],
+    ["NO_PROXY", settings.networkProxy.noProxy.trim()],
+    ["no_proxy", settings.networkProxy.noProxy.trim()]
+  ];
+  const previous = new Map<string, string | undefined>();
+  for (const [key, value] of targetEntries) {
+    previous.set(key, process.env[key]);
+    if (value) {
+      process.env[key] = value;
+    } else {
+      delete process.env[key];
+    }
+  }
+  return () => {
+    for (const [key, prevValue] of previous.entries()) {
+      if (prevValue === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = prevValue;
+      }
+    }
+  };
+}
+
 export class AgentRuntime {
   private readonly createSession: (options: { apiKey: string | null; model?: PiModel; cwd?: string }) => Promise<PiSession>;
   private readonly authService: Pick<ClaudeAuthService, "getState" | "getApiKey">;
@@ -273,84 +404,90 @@ export class AgentRuntime {
   private async runSessionPrompt(
     text: string,
     options: { apiKey: string | null; model?: PiModel; cwd?: string },
+    providerSettings: ProviderSettings,
     hooks?: { requestId: string; onLoopEvent?: (event: AgentLoopEvent) => void }
   ): Promise<AgentResult> {
-    const session = await this.ensureSession(options);
-    let streamOutput = "";
-    let finalOutput = "";
-
-    const unsubscribe = session.subscribe((event) => {
-      if (hooks?.onLoopEvent) {
-        if (event.type === "thinking_start") {
-          hooks.onLoopEvent({ type: "thinking_start", requestId: hooks.requestId });
-        } else if (event.type === "thinking_end") {
-          hooks.onLoopEvent({ type: "thinking_end", requestId: hooks.requestId });
-        } else if (
-          event.type === "tool_execution_start" &&
-          typeof event.toolCallId === "string" &&
-          typeof event.toolName === "string"
-        ) {
-          const startEvent: AgentLoopEvent = {
-            type: "tool_execution_start",
-            requestId: hooks.requestId,
-            toolCallId: event.toolCallId,
-            toolName: event.toolName
-          };
-          if (event.args !== undefined) {
-            startEvent.args = event.args;
-          }
-          hooks.onLoopEvent(startEvent);
-        } else if (
-          event.type === "tool_execution_end" &&
-          typeof event.toolCallId === "string" &&
-          typeof event.toolName === "string"
-        ) {
-          hooks.onLoopEvent({
-            type: "tool_execution_end",
-            requestId: hooks.requestId,
-            toolCallId: event.toolCallId,
-            toolName: event.toolName,
-            isError: event.isError === true
-          });
-        }
-      }
-
-      if (event.type === "message_update") {
-        if (event.assistantMessageEvent?.type === "text_delta" && typeof event.assistantMessageEvent.delta === "string") {
-          streamOutput += event.assistantMessageEvent.delta;
-          return;
-        }
-        if (event.assistantMessageEvent?.type === "done") {
-          finalOutput = extractTextFromAgentEvent(event);
-          return;
-        }
-        if (event.assistantMessageEvent?.type === "text_end" && !streamOutput) {
-          finalOutput = extractTextFromAgentEvent(event);
-          return;
-        }
-      }
-
-      if (event.type === "message_end") {
-        const textFromEnd = extractTextFromAgentEvent(event);
-        if (textFromEnd) {
-          finalOutput = textFromEnd;
-        }
-      }
-    });
-
+    const restoreProxyEnv = withScopedProxyEnvironment(providerSettings);
     try {
-      await session.prompt(text);
+      const session = await this.ensureSession(options);
+      let streamOutput = "";
+      let finalOutput = "";
+
+      const unsubscribe = session.subscribe((event) => {
+        if (hooks?.onLoopEvent) {
+          if (event.type === "thinking_start") {
+            hooks.onLoopEvent({ type: "thinking_start", requestId: hooks.requestId });
+          } else if (event.type === "thinking_end") {
+            hooks.onLoopEvent({ type: "thinking_end", requestId: hooks.requestId });
+          } else if (
+            event.type === "tool_execution_start" &&
+            typeof event.toolCallId === "string" &&
+            typeof event.toolName === "string"
+          ) {
+            const startEvent: AgentLoopEvent = {
+              type: "tool_execution_start",
+              requestId: hooks.requestId,
+              toolCallId: event.toolCallId,
+              toolName: event.toolName
+            };
+            if (event.args !== undefined) {
+              startEvent.args = event.args;
+            }
+            hooks.onLoopEvent(startEvent);
+          } else if (
+            event.type === "tool_execution_end" &&
+            typeof event.toolCallId === "string" &&
+            typeof event.toolName === "string"
+          ) {
+            hooks.onLoopEvent({
+              type: "tool_execution_end",
+              requestId: hooks.requestId,
+              toolCallId: event.toolCallId,
+              toolName: event.toolName,
+              isError: event.isError === true
+            });
+          }
+        }
+
+        if (event.type === "message_update") {
+          if (event.assistantMessageEvent?.type === "text_delta" && typeof event.assistantMessageEvent.delta === "string") {
+            streamOutput += event.assistantMessageEvent.delta;
+            return;
+          }
+          if (event.assistantMessageEvent?.type === "done") {
+            finalOutput = extractTextFromAgentEvent(event);
+            return;
+          }
+          if (event.assistantMessageEvent?.type === "text_end" && !streamOutput) {
+            finalOutput = extractTextFromAgentEvent(event);
+            return;
+          }
+        }
+
+        if (event.type === "message_end") {
+          const textFromEnd = extractTextFromAgentEvent(event);
+          if (textFromEnd) {
+            finalOutput = textFromEnd;
+          }
+        }
+      });
+
+      try {
+        await session.prompt(text);
+      } finally {
+        unsubscribe();
+      }
+
+      let output = finalOutput.trim() ? finalOutput : streamOutput;
+      if (!output.trim()) {
+        output = "エージェント応答は空でした。";
+      }
+
+      this.logger.info("agent_prompt_completed", { outputLength: output.length });
+      return { ok: true, text: output };
     } finally {
-      unsubscribe();
+      restoreProxyEnv();
     }
-
-    let output = finalOutput.trim() ? finalOutput : streamOutput;
-    if (!output.trim()) {
-      output = "エージェント応答は空でした。";
-    }
-
-    this.logger.info("agent_prompt_completed", { outputLength: output.length });
-    return { ok: true, text: output };
   }
 
   private buildPromptWithSkillHint(text: string): string {
@@ -381,6 +518,14 @@ export class AgentRuntime {
 
     try {
       if (process.env.LILTO_E2E_MOCK === "1") {
+        try {
+          await runProxyPrecheckIfEnabled(providerSettings);
+        } catch (error) {
+          return {
+            ok: false,
+            error: standardizeError(error, "PROXY_CONNECTION_FAILED")
+          };
+        }
         const mock = `[E2E_MOCK] ${text}`;
         this.logger.info("agent_prompt_mock_completed", { outputLength: mock.length });
         return { ok: true, text: mock };
@@ -410,7 +555,7 @@ export class AgentRuntime {
             : isLocalOllamaUrl(model.baseUrl)
               ? "ollama"
               : "not-required";
-        return await this.runSessionPrompt(promptText, { apiKey, model, ...runOptionsBase }, hooks);
+        return await this.runSessionPrompt(promptText, { apiKey, model, ...runOptionsBase }, providerSettings, hooks);
       }
 
       const authState = this.authService.getState() as AuthSnapshot;
@@ -439,7 +584,7 @@ export class AgentRuntime {
         };
       }
 
-      return await this.runSessionPrompt(promptText, { apiKey, model: undefined, ...runOptionsBase }, hooks);
+      return await this.runSessionPrompt(promptText, { apiKey, model: undefined, ...runOptionsBase }, providerSettings, hooks);
     } catch (error) {
       const normalized = standardizeError(error);
       this.logger.error("agent_prompt_failed", normalized);
