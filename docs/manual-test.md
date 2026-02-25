@@ -5,6 +5,15 @@
 - 必要な認証情報を環境変数または Pi の設定として用意する
 - GUI 変更がある場合は `npm run e2e:electron` を実行できる状態にする
 
+## Windows OpenSpec 互換確認
+1. PowerShell で `openspec.cmd --version` が成功することを確認する
+2. `openspec.cmd new change "windows-compat-smoke"` を実行する
+3. `openspec.cmd status --change "windows-compat-smoke" --json` を実行する
+4. `openspec.cmd instructions apply --change "windows-compat-smoke" --json` を実行する
+5. 確認後、`openspec/changes/windows-compat-smoke/` を削除する
+
+> `npm` / `npx` も同様に `.cmd` を優先する（`npm.cmd`, `npx.cmd`）。
+
 ## desktop-shell
 1. `npm start` でアプリを起動する
 2. 起動時にウィンドウが表示されることを確認する

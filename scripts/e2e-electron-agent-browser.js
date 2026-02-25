@@ -1,6 +1,7 @@
 const { spawn, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
+const { normalizeCommandArgs, normalizeWorkingDirectory, resolveCliCommand } = require("./command-compat");
 
 const rootDir = path.resolve(__dirname, "..");
 const sessionName = "lilto-electron-e2e";
@@ -8,8 +9,10 @@ const cdpPort = "9222";
 const screenshotPath = path.join(rootDir, "test", "artifacts", "electron-e2e.png");
 
 function run(cmd, args, options = {}) {
-  const result = spawnSync(cmd, args, {
-    cwd: rootDir,
+  const resolvedCmd = resolveCliCommand(cmd);
+  const resolvedArgs = normalizeCommandArgs(args);
+  const result = spawnSync(resolvedCmd, resolvedArgs, {
+    cwd: normalizeWorkingDirectory(rootDir),
     encoding: "utf8",
     ...options
   });
@@ -45,7 +48,7 @@ async function waitForCdpReady(timeoutMs = 30000) {
 }
 
 function agentBrowser(args) {
-  const shell = process.platform === "win32" ? "npx.cmd" : "npx";
+  const shell = resolveCliCommand("npx");
   return run(shell, ["agent-browser", "--session", sessionName, ...args]);
 }
 

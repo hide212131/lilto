@@ -9,6 +9,7 @@ import { registerAgentIpcHandlers } from "./ipc";
 import { createLogger } from "./logger";
 import { ProviderSettingsService } from "./provider-settings";
 import { setupSkillRuntime } from "./skill-runtime";
+import { createCliCompatibilityMap } from "./command-compat";
 
 const config = readConfig();
 const logger = createLogger("main");
@@ -54,6 +55,11 @@ function createWindow(): void {
 }
 
 void app.whenReady().then(() => {
+  logger.info("cli_compatibility_resolved", {
+    platform: process.platform,
+    commands: createCliCompatibilityMap()
+  });
+
   let skillRuntime;
   try {
     skillRuntime = setupSkillRuntime({

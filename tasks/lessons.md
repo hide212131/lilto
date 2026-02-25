@@ -65,3 +65,12 @@
 | `skill-creator` を「ビルド時に最新取得・非Git管理」へ運用変更。 | 同梱スキルをリポジトリ管理すると更新頻度の高い upstream 差分でノイズが増え、最新版追従も手動化しやすい。 | upstream 追従が必要な同梱資産は `prebuild` で同期し、生成先ディレクトリを `.gitignore` で除外してソース管理対象を最小化する。 |
 | `start-new-session-with-plus-button` の artifacts（proposal/design/specs/tasks）を `openspec-ff-change` で一括作成。 | 既存仕様にある Requirement 名を確認せずに `MODIFIED` を書くと、同期時に意図しない差分適用になりやすい。 | `specs` 作成前に `openspec/specs/<capability>/spec.md` の Requirement 見出しを確認し、変更は既存見出しに寄せて全文更新する。 |
 | `start-new-session-with-plus-button` を apply 実装し、＋ボタンで新規セッション開始と GUI E2E を完了。 | E2E で非同期 UI 状態（送信中 disabled）を瞬間値で検証すると、モック応答が速い環境でフレークしやすい。 | 非同期状態の E2E 検証は時間依存の瞬間観測を避け、制御可能な状態（例: `isSending` の明示切替）で deterministic に確認する。 |
+
+## 2026-02-25
+
+| 変更内容 | ミス/課題 | 再発防止ルール |
+|---|---|---|
+| OpenSpec CLI の導入と `fix-windows-compatibility` change 再作成準備。 | Windows PowerShell の実行ポリシーで `npm` / `openspec` の `.ps1` がブロックされ、CLI が未導入・未起動に見えて手順が停止した。 | Windows では CLI 初期確認時に `npm.cmd` / `npx.cmd` / `openspec.cmd` を優先し、`--version` 成功を確認してから OpenSpec フロー（`new change` → `status` → `instructions`）へ進む。 |
+| `fix-windows-compatibility` で `/opsx:ff` を実行し、`proposal → design → specs → tasks` を依存順で一括作成。 | status の `ready` / `blocked` を都度再確認せずに進めると、依存未解決 artifact を先に作って整合が崩れやすい。 | `/opsx:ff` では artifact 作成ごとに `openspec status --change <name> --json` を再実行し、`applyRequires` が `done` になるまで「instructions取得→依存読込→作成」を固定ループで回す。 |
+| `fix-windows-compatibility` の apply 実装で Windows `.cmd` 互換ユーティリティと検証フローを追加。 | Windows 対応をスクリプト個別分岐で増やすと、Main ランタイム・E2E・運用手順で実行コマンド規約が再び乖離しやすい。 | OS 互換は共通ユーティリティ（コマンド解決・引数/cwd正規化・実行ポリシーエラー判定）へ集約し、README/docs/AGENTS とテストを同一タイミングで更新して仕様と運用を同期する。 |
+| OpenSpec 運用時に CLI コマンド未検出ケースを整理。 | `openspec` コマンドが見つからない状態で原因切り分けを続けると、実装タスクに着手できず作業が停滞する。 | `openspec --version`（Windows は `openspec.cmd --version`）で未検出なら無理に回避せず、`npm i -g @openspec/cli` でグローバルインストールしてからフローを再開する。 |

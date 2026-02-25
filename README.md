@@ -21,6 +21,19 @@ PC作業を人間の代わりに実行する、軽量なAIアシスタント。
 ## UIポーティング方針
 - 詳細は `docs/ui-porting-guidelines.md` を参照
 
+## Windows での OpenSpec 実行
+- PowerShell 実行ポリシー環境では `npm` / `npx` / `openspec` の `.ps1` がブロックされる場合がある
+- Windows では `.cmd` シムを優先して実行する
+  - `npm.cmd run build`
+  - `npx.cmd agent-browser --version`
+  - `openspec.cmd status --json`
+- OpenSpec の最小フロー確認例
+  1. `openspec.cmd new change "<name>"`
+  2. `openspec.cmd status --change "<name>" --json`
+  3. `openspec.cmd instructions apply --change "<name>" --json`
+
+詳細な検証手順は `docs/manual-test.md` を参照。
+
 ## 現在の実装スコープ（初期）
 - Electron の Main/Renderer 最小構成
 - Renderer から Main への IPC 経由で Pi SDK を呼び出す Agent Bridge

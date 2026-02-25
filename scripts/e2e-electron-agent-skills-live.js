@@ -2,6 +2,7 @@ const { spawn, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { normalizeCommandArgs, normalizeWorkingDirectory, resolveCliCommand } = require("./command-compat");
 
 const rootDir = path.resolve(__dirname, "..");
 const sessionName = "lilto-electron-e2e-live";
@@ -11,8 +12,10 @@ const e2eMagicWord = "[[LILTO_SKILL_E2E_MAGIC]]";
 const e2eSkillName = "lilto-e2e-example-title";
 
 function run(cmd, args, options = {}) {
-  const result = spawnSync(cmd, args, {
-    cwd: rootDir,
+  const resolvedCmd = resolveCliCommand(cmd);
+  const resolvedArgs = normalizeCommandArgs(args);
+  const result = spawnSync(resolvedCmd, resolvedArgs, {
+    cwd: normalizeWorkingDirectory(rootDir),
     encoding: "utf8",
     ...options
   });
@@ -62,7 +65,7 @@ function preflightChecks() {
     throw new Error(".lilto-auth.json に anthropic 認証情報がありません。先に Claude OAuth でログインしてください。");
   }
 
-  const shell = process.platform === "win32" ? "npx.cmd" : "npx";
+  const shell = resolveCliCommand("npx");
   run(shell, ["agent-browser", "--version"]);
 }
 
@@ -97,7 +100,7 @@ function cleanupPriorE2ESkills() {
 }
 
 function agentBrowser(args) {
-  const shell = process.platform === "win32" ? "npx.cmd" : "npx";
+  const shell = resolveCliCommand("npx");
   return run(shell, ["agent-browser", "--session", sessionName, ...args]);
 }
 

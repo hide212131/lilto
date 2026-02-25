@@ -22,6 +22,7 @@
 * テストを走らせ、ログを確認し、正しさを示す
 * GUI を変更した場合は、`agent-browser` を使った E2E を必ず実施し、結果を確認してから完了にする
 * GUI 変更時の E2E は `npm run e2e:electron` を実行し、成功終了と `test/artifacts/electron-e2e.png` の生成を確認する
+* Windows では PowerShell 実行ポリシーを回避するため、CLI 実行時に `npm.cmd` / `npx.cmd` / `openspec.cmd` を優先する
 
 ### 優雅さを求める（バランス）
 

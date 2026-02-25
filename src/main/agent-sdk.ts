@@ -3,6 +3,7 @@ import type { ClaudeAuthService } from "./auth-service";
 import type { ProviderSettings } from "./provider-settings";
 import { isCustomProviderReady } from "./provider-settings";
 import { shouldPrioritizeAgentBrowser, shouldPrioritizeSkillCreator } from "./skill-runtime";
+import { createCliCompatibilityMap, isWindowsExecutionPolicyError } from "./command-compat";
 import type { AgentLoopEvent } from "../shared/agent-loop";
 
 type AgentError = {
@@ -81,6 +82,19 @@ export function standardizeError(
     details: null,
     retryable
   };
+}
+
+function standardizeAgentRuntimeError(error: unknown): AgentError {
+  if (isWindowsExecutionPolicyError(error)) {
+    const map = createCliCompatibilityMap("win32");
+    return {
+      code: "WINDOWS_CLI_EXECUTION_BLOCKED",
+      message: "Windows 実行ポリシーの制約で CLI 起動に失敗しました。",
+      details: `Windows では .cmd シムを優先してください: ${map.npm}, ${map.npx}, ${map.openspec}`,
+      retryable: true
+    };
+  }
+  return standardizeError(error);
 }
 
 export async function createPiSessionFromSdk(options: {
@@ -441,7 +455,7 @@ export class AgentRuntime {
 
       return await this.runSessionPrompt(promptText, { apiKey, model: undefined, ...runOptionsBase }, hooks);
     } catch (error) {
-      const normalized = standardizeError(error);
+      const normalized = standardizeAgentRuntimeError(error);
       this.logger.error("agent_prompt_failed", normalized);
       return { ok: false, error: normalized };
     }
