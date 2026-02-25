@@ -20,6 +20,11 @@ export class LiltApp extends LitElement {
       apiKey: "",
       modelId: "qwen2.5:0.5b"
     },
+    networkProxy: {
+      httpProxy: "",
+      httpsProxy: "",
+      noProxy: ""
+    },
     updatedAt: Date.now()
   };
   @property({ type: Array }) messages: Message[] = [];

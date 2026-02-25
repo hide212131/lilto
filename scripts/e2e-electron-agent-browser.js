@@ -2,6 +2,7 @@ const { spawn, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 const { normalizeCommandArgs, normalizeWorkingDirectory, resolveCliCommand } = require("./command-compat");
+const { createProxyFixture } = require("./e2e-proxy-fixture");
 
 const rootDir = path.resolve(__dirname, "..");
 const sessionName = "lilto-electron-e2e";
@@ -111,31 +112,35 @@ function switchToClaudeProvider() {
   );
 }
 
+function switchToCustomProvider() {
+  evalJs(
+    "document.querySelector('lilt-app')?.shadowRoot?.querySelector('lilt-settings-modal')?.shadowRoot?.querySelector('input[value=\"custom-openai-completions\"]')?.click()"
+  );
+}
+
 function clickClaudeOauthButton() {
   evalJs(
     "document.querySelector('lilt-app')?.shadowRoot?.querySelector('lilt-settings-modal')?.shadowRoot?.querySelector('.provider-section .auth-row button')?.click()"
   );
 }
 
-function setCustomProviderStateOnApp() {
+function setSettingsInputValue(id, value) {
   evalJs(
     `(() => {
-      const app = document.querySelector('lilt-app');
-      if (!app) return 'no-app';
-      const current = app.providerSettings ?? {};
-      const nextCustom = current.customProvider ?? {};
-      app.providerSettings = {
-        ...current,
-        activeProvider: 'custom-openai-completions',
-        customProvider: {
-          ...nextCustom,
-          name: nextCustom.name || 'Ollama E2E',
-          baseUrl: nextCustom.baseUrl || 'http://127.0.0.1:11434/v1'
-        }
-      };
-      app.requestUpdate?.();
+      const input = document.querySelector('lilt-app')
+        ?.shadowRoot?.querySelector('lilt-settings-modal')
+        ?.shadowRoot?.querySelector('#${id}');
+      if (!input) return 'missing';
+      input.value = ${JSON.stringify(value)};
+      input.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
       return 'ok';
     })()`
+  );
+}
+
+function clickSaveProviderSettingsButton() {
+  evalJs(
+    "document.querySelector('lilt-app')?.shadowRoot?.querySelector('lilt-settings-modal')?.shadowRoot?.querySelector('.provider-actions button')?.click()"
   );
 }
 
@@ -248,6 +253,7 @@ async function waitForResponse(expectedText, timeoutMs = 15000) {
 
 async function main() {
   fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
+  const proxyFixture = await createProxyFixture();
 
   const electronBin =
     process.platform === "win32"
@@ -256,7 +262,11 @@ async function main() {
 
   const electron = spawn(electronBin, [".", `--remote-debugging-port=${cdpPort}`], {
     cwd: rootDir,
-    env: { ...process.env, LILTO_E2E_MOCK: "1" },
+    env: {
+      ...process.env,
+      LILTO_E2E_MOCK: "1",
+      LILTO_PROXY_TEST_URL: proxyFixture.targetUrl
+    },
     stdio: ["ignore", "pipe", "pipe"]
   });
 
@@ -301,10 +311,23 @@ async function main() {
     agentBrowser(["screenshot", ssSettings]);
     console.log(`✓ Settings screenshot: ${ssSettings}`);
 
-    // 6. E2E 用に Custom Provider 状態を適用
-    setCustomProviderStateOnApp();
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    console.log("✓ Custom Provider state applied");
+    // 6. E2E 用に Custom Provider を保存（Proxy は未設定）
+    switchToCustomProvider();
+    setSettingsInputValue("custom-provider-name", "Proxy E2E Provider");
+    setSettingsInputValue("custom-base-url", "http://127.0.0.1:11434/v1");
+    setSettingsInputValue("custom-model-id", "qwen2.5:0.5b");
+    setSettingsInputValue("http-proxy", "");
+    setSettingsInputValue("https-proxy", "");
+    setSettingsInputValue("no-proxy", "");
+    clickSaveProviderSettingsButton();
+    await waitForCustomSaveStatus("Provider 設定を保存しました。");
+    setSettingsInputValue("http-proxy", "invalid-proxy-url");
+    clickSaveProviderSettingsButton();
+    await waitForCustomSaveStatus("INVALID_PROVIDER_SETTINGS");
+    setSettingsInputValue("http-proxy", "");
+    clickSaveProviderSettingsButton();
+    await waitForCustomSaveStatus("Provider 設定を保存しました。");
+    console.log("✓ Custom Provider saved without proxy");
 
     // 7. 設定モーダルを閉じる
     clickSettingsClose();
@@ -325,24 +348,45 @@ async function main() {
     if (isNewSessionDisabled()) throw new Error("New session button should be enabled when app isSending=false");
     console.log("✓ New session button enable/disable state toggles with isSending");
 
-    // 10. メッセージ送信
-    const testMessage = "E2E smoke from agent-browser";
-    console.log(`Sending: "${testMessage}"...`);
-    fillComposerText(testMessage);
+    // 10. Proxy 未設定で送信し、失敗を確認
+    const firstMessage = "E2E proxy check without proxy";
+    console.log(`Sending without proxy: "${firstMessage}"...`);
+    fillComposerText(firstMessage);
+    clickComposerSend();
+    await waitForResponse("PROXY_CONNECTION_FAILED");
+    console.log("✓ Proxy missing failure detected");
+
+    // 11. Settings で Proxy を設定して保存
+    clickSettingsButton();
+    await waitForModalOpen();
+    switchToCustomProvider();
+    setSettingsInputValue("http-proxy", proxyFixture.proxyUrl);
+    setSettingsInputValue("https-proxy", proxyFixture.proxyUrl);
+    setSettingsInputValue("no-proxy", "");
+    clickSaveProviderSettingsButton();
+    await waitForCustomSaveStatus("Provider 設定を保存しました。");
+    clickSettingsClose();
+    await waitForModalClose();
+    await waitForSendEnabled();
+    console.log("✓ Proxy settings saved");
+
+    // 12. Proxy 設定ありで送信し、成功を確認
+    const secondMessage = "E2E proxy check with proxy";
+    console.log(`Sending with proxy: "${secondMessage}"...`);
+    fillComposerText(secondMessage);
     clickComposerSend();
 
-    // 11. モック応答確認
-    const expectedMock = `[E2E_MOCK] ${testMessage}`;
+    const expectedMock = `[E2E_MOCK] ${secondMessage}`;
     await waitForResponse(expectedMock);
     console.log(`✓ Mock response received: "${expectedMock}"`);
 
-    // 12. 最終ステータス確認
+    // 13. 最終ステータス確認
     const finalStatus = await waitForStatus(["待機中"]);
     console.log(`✓ Final status: "${finalStatus}"`);
 
-    // 13. 新規セッション開始で会話履歴を初期化
+    // 14. 新規セッション開始で会話履歴を初期化
     const countBeforeReset = getMessageCount();
-    if (countBeforeReset < 2) throw new Error(`Unexpected message count before reset: ${countBeforeReset}`);
+    if (countBeforeReset < 4) throw new Error(`Unexpected message count before reset: ${countBeforeReset}`);
     clickNewSessionButton();
     await new Promise((resolve) => setTimeout(resolve, 300));
     const countAfterReset = getMessageCount();
@@ -350,7 +394,7 @@ async function main() {
     if (isNewSessionDisabled()) throw new Error("New session button should be enabled after sending");
     console.log("✓ New session reset cleared conversation");
 
-    // 14. 最終スクリーンショット
+    // 15. 最終スクリーンショット
     agentBrowser(["screenshot", screenshotPath]);
     console.log(`✓ Final screenshot: ${screenshotPath}`);
 
@@ -369,6 +413,7 @@ async function main() {
       console.log("Electron logs:");
       console.log(electronLogs);
     }
+    await proxyFixture.close();
   }
 }
 

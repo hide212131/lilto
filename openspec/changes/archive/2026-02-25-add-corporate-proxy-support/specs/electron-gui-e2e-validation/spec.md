@@ -1,8 +1,5 @@
-# electron-gui-e2e-validation Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change add-electron-agent-browser-e2e-gate. Update Purpose after archive.
-## Requirements
 ### Requirement: Electron GUI を agent-browser で E2E 検証できる
 システムは `agent-browser` を利用して Electron アプリの主要 GUI フローを E2E として実行できなければならない（MUST）。また、Proxy 必須の擬似ネットワーク条件でも同フローを実行できなければならない（MUST）。
 
@@ -24,4 +21,3 @@ TBD - created by archiving change add-electron-agent-browser-e2e-gate. Update Pu
 #### Scenario: Proxy 未設定時の失敗を判別できる
 - **WHEN** 擬似 Proxy 必須条件で Proxy 設定を無効化したシナリオを実行する
 - **THEN** 実行結果から Proxy 未設定による失敗を識別できる
-

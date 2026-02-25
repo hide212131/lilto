@@ -1,4 +1,5 @@
 import type { AgentLoopEvent } from "../shared/agent-loop.js";
+import type { ActiveProvider, ProviderSettings } from "../shared/provider-settings.js";
 
 export type AuthPhase =
   | "unauthenticated"
@@ -15,18 +16,7 @@ export type AuthState = {
   updatedAt: number;
 };
 
-export type ActiveProvider = "claude" | "custom-openai-completions";
-
-export type ProviderSettings = {
-  activeProvider: ActiveProvider;
-  customProvider: {
-    name: string;
-    baseUrl: string;
-    apiKey: string;
-    modelId: string;
-  };
-  updatedAt: number;
-};
+export type { ActiveProvider, ProviderSettings };
 
 export type Message = {
   role: "user" | "assistant" | "system" | "error";
