@@ -6,6 +6,7 @@ import { isCustomProviderReady } from "./provider-settings";
 import { shouldPrioritizeAgentBrowser, shouldPrioritizeSkillCreator } from "./skill-runtime";
 import { createCliCompatibilityMap, isWindowsExecutionPolicyError } from "./command-compat";
 import type { AgentLoopEvent } from "../shared/agent-loop";
+import type { OAuthProviderId } from "../shared/provider-settings";
 
 type AgentError = {
   code: string;
@@ -149,6 +150,7 @@ export async function createPiSessionFromSdk(options: {
 
 type AuthSnapshot = {
   phase: "unauthenticated" | "auth_in_progress" | "awaiting_code" | "authenticated" | "auth_failed";
+  provider: OAuthProviderId;
 };
 
 function buildCustomModel(settings: ProviderSettings): PiModel {
@@ -680,19 +682,19 @@ export class AgentRuntime {
       }
 
       const authState = this.authService.getState() as AuthSnapshot;
-      if (authState.phase !== "authenticated") {
+      if (authState.phase !== "authenticated" || authState.provider !== providerSettings.oauthProvider) {
         return {
           ok: false,
           error: {
             code: "AUTH_REQUIRED",
-            message: "Claude を利用するには OAuth 認証が必要です。",
+            message: `${providerSettings.oauthProvider} の OAuth 認証が必要です。`,
             details: null,
             retryable: true
           }
         };
       }
 
-      const apiKey = await this.authService.getApiKey();
+      const apiKey = await this.authService.getApiKey(providerSettings.oauthProvider);
       if (!apiKey) {
         return {
           ok: false,

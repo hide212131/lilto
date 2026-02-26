@@ -1,8 +1,5 @@
-# claude-oauth-chat-bootstrap Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change add-pi-sdk-main-process-agent. Update Purpose after archive.
-## Requirements
 ### Requirement: Pi ai パッケージによる Claude OAuth 開始
 システムは、OAuth 利用開始時に Providers & Models 画面の Claude セクションから Pi の `ai` パッケージを使用して OAuth 認証フローを開始しなければならない（MUST）。また OAuth 開始時は設定済み OAuth provider（`anthropic` / `openai-codex` / `github-copilot` / `google-gemini-cli` / `google-antigravity`）を指定して provider 解決を行わなければならない（MUST）。
 
@@ -38,4 +35,3 @@ TBD - created by archiving change add-pi-sdk-main-process-agent. Update Purpose 
 #### Scenario: 失敗後に再認証できる
 - **WHEN** OAuth 完了前にエラーまたはタイムアウトが発生する
 - **THEN** Renderer は失敗メッセージと再試行ボタンを表示する
-

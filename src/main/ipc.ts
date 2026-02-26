@@ -81,7 +81,8 @@ export function registerAgentIpcHandlers({
   });
 
   ipcMain.handle("auth:startClaudeOauth", async () => {
-    const state = await authService.startOAuth();
+    const oauthProvider = providerSettingsService.getState().oauthProvider;
+    const state = await authService.startOAuth(oauthProvider);
     return { ok: state.phase === "authenticated", state };
   });
 

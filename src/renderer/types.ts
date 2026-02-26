@@ -1,5 +1,5 @@
 import type { AgentLoopEvent } from "../shared/agent-loop.js";
-import type { ActiveProvider, ProviderSettings } from "../shared/provider-settings.js";
+import type { ActiveProvider, OAuthProviderId, ProviderSettings } from "../shared/provider-settings.js";
 
 export type AuthPhase =
   | "unauthenticated"
@@ -10,7 +10,7 @@ export type AuthPhase =
 
 export type AuthState = {
   phase: AuthPhase;
-  provider: "anthropic";
+  provider: OAuthProviderId;
   message: string;
   authUrl: string | null;
   updatedAt: number;

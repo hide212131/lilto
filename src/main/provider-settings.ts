@@ -5,6 +5,8 @@ import {
   type ActiveProvider,
   type CustomProviderSettings,
   type NetworkProxySettings,
+  OAUTH_PROVIDER_IDS,
+  type OAuthProviderId,
   type ProviderSettings
 } from "../shared/provider-settings";
 
@@ -12,6 +14,7 @@ export type {
   ActiveProvider,
   CustomProviderSettings,
   NetworkProxySettings,
+  OAuthProviderId,
   ProviderSettings
 } from "../shared/provider-settings";
 
@@ -29,6 +32,7 @@ function hasProxyEnvironment(): boolean {
 function createDefaultSettings(): ProviderSettings {
   return {
     activeProvider: "claude",
+    oauthProvider: "anthropic",
     customProvider: {
       name: "Ollama",
       baseUrl: "http://127.0.0.1:11434/v1",
@@ -48,6 +52,13 @@ function normalizeActiveProvider(value: unknown): ActiveProvider {
   return value === "custom-openai-completions" ? "custom-openai-completions" : "claude";
 }
 
+function normalizeOAuthProvider(value: unknown): OAuthProviderId {
+  if (typeof value !== "string") {
+    return "anthropic";
+  }
+  return OAUTH_PROVIDER_IDS.includes(value as OAuthProviderId) ? (value as OAuthProviderId) : "anthropic";
+}
+
 function normalizeSettings(value: unknown): ProviderSettings {
   const record = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
   const custom =
@@ -63,6 +74,7 @@ function normalizeSettings(value: unknown): ProviderSettings {
 
   return {
     activeProvider: normalizeActiveProvider(record.activeProvider),
+    oauthProvider: normalizeOAuthProvider(record.oauthProvider),
     customProvider: {
       name: toTrimmedString(custom.name),
       baseUrl: toTrimmedString(custom.baseUrl),
@@ -78,12 +90,16 @@ function normalizeSettings(value: unknown): ProviderSettings {
 
 function isValidSavePayload(payload: unknown): payload is {
   activeProvider: ActiveProvider;
+  oauthProvider?: OAuthProviderId;
   customProvider: CustomProviderSettings;
   networkProxy?: NetworkProxySettings;
 } {
   if (!payload || typeof payload !== "object") return false;
   const record = payload as Record<string, unknown>;
   if (record.activeProvider !== "claude" && record.activeProvider !== "custom-openai-completions") {
+    return false;
+  }
+  if (record.oauthProvider !== undefined && !OAUTH_PROVIDER_IDS.includes(record.oauthProvider as OAuthProviderId)) {
     return false;
   }
   if (!record.customProvider || typeof record.customProvider !== "object") {

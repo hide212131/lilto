@@ -1,72 +1,50 @@
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
+const { execFileSync } = require("node:child_process");
 
-const repoApiBase = "https://api.github.com/repos/anthropics/skills/contents/skills/skill-creator";
+const repoUrl = "https://github.com/anthropics/skills.git";
+const skillCreatorPath = path.join("skills", "skill-creator");
 const outputDir = path.resolve(__dirname, "..", "skills", "bundled", "skill-creator");
 
-async function fetchJson(url) {
-  const res = await fetch(url, {
-    headers: {
-      "User-Agent": "lilt-o-build-sync",
-      "Accept": "application/vnd.github+json"
-    }
+function runGit(args, cwd) {
+  execFileSync("git", args, {
+    cwd,
+    stdio: ["ignore", "pipe", "pipe"],
+    encoding: "utf8"
   });
-
-  if (!res.ok) {
-    throw new Error(`Failed to fetch JSON: ${url} (${res.status})`);
-  }
-
-  return await res.json();
 }
 
-async function fetchText(url) {
-  const res = await fetch(url, {
-    headers: {
-      "User-Agent": "lilt-o-build-sync"
-    }
-  });
+function syncWithSparseClone() {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lilt-o-skill-sync-"));
+  const cloneDir = path.join(tempRoot, "skills-repo");
 
-  if (!res.ok) {
-    throw new Error(`Failed to fetch file: ${url} (${res.status})`);
-  }
+  try {
+    runGit(["clone", "--depth", "1", "--filter=blob:none", "--sparse", repoUrl, cloneDir], tempRoot);
+    runGit(["sparse-checkout", "set", skillCreatorPath], cloneDir);
 
-  return await res.text();
-}
-
-async function downloadEntry(apiUrl, destinationRoot) {
-  const entries = await fetchJson(apiUrl);
-  if (!Array.isArray(entries)) {
-    throw new Error(`Unexpected API response at: ${apiUrl}`);
-  }
-
-  for (const entry of entries) {
-    const destinationPath = path.join(destinationRoot, entry.name);
-
-    if (entry.type === "dir") {
-      fs.mkdirSync(destinationPath, { recursive: true });
-      await downloadEntry(entry.url, destinationPath);
-      continue;
+    const sourceDir = path.join(cloneDir, skillCreatorPath);
+    if (!fs.existsSync(sourceDir)) {
+      throw new Error(`Missing source directory after clone: ${sourceDir}`);
     }
 
-    if (entry.type !== "file" || !entry.download_url) {
-      continue;
-    }
-
-    const content = await fetchText(entry.download_url);
-    fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
-    fs.writeFileSync(destinationPath, content, "utf8");
+    fs.cpSync(sourceDir, outputDir, { recursive: true, force: true });
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 }
 
-async function main() {
+function main() {
   fs.rmSync(outputDir, { recursive: true, force: true });
   fs.mkdirSync(outputDir, { recursive: true });
 
-  await downloadEntry(repoApiBase, outputDir);
+  syncWithSparseClone();
   console.log(`Synced latest skill-creator to ${outputDir}`);
 }
 
-main().catch((error) => {
+Promise.resolve()
+  .then(() => main())
+  .catch((error) => {
   console.error(error instanceof Error ? error.stack : String(error));
   process.exit(1);
-});
+  });

@@ -17,6 +17,7 @@ test("ProviderSettingsService は保存した設定を再読込できる", () =>
 
   const saveResult = service.save({
     activeProvider: "custom-openai-completions",
+    oauthProvider: "openai-codex",
     customProvider: {
       name: "my-custom",
       baseUrl: "https://example.com/v1",
@@ -38,6 +39,7 @@ test("ProviderSettingsService は保存した設定を再読込できる", () =>
 
   const state = reloaded.getState();
   assert.equal(state.activeProvider, "custom-openai-completions");
+  assert.equal(state.oauthProvider, "openai-codex");
   assert.equal(state.customProvider.name, "my-custom");
   assert.equal(state.customProvider.baseUrl, "https://example.com/v1");
   assert.equal(state.networkProxy.useProxy, true);
@@ -57,6 +59,32 @@ test("ProviderSettingsService は不正 payload を拒否する", () => {
   assert.equal(result.error.code, "INVALID_PROVIDER_SETTINGS");
 });
 
+test("ProviderSettingsService は不正な oauthProvider を拒否する", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "lilto-provider-"));
+  const storagePath = path.join(tempDir, "providers.json");
+
+  const service = new ProviderSettingsService({
+    storagePath,
+    logger: { info() {}, error() {} }
+  });
+
+  const result = service.save({
+    activeProvider: "claude",
+    oauthProvider: "invalid-provider",
+    customProvider: {
+      name: "my-custom",
+      baseUrl: "https://example.com/v1",
+      apiKey: "secret",
+      modelId: "gpt-4o-mini"
+    },
+    networkProxy: {
+      useProxy: false
+    }
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "INVALID_PROVIDER_SETTINGS");
+});
+
 test("ProviderSettingsService は不正な networkProxy payload を拒否する", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "lilto-provider-"));
   const storagePath = path.join(tempDir, "providers.json");
@@ -68,6 +96,7 @@ test("ProviderSettingsService は不正な networkProxy payload を拒否する"
 
   const result = service.save({
     activeProvider: "custom-openai-completions",
+    oauthProvider: "anthropic",
     customProvider: {
       name: "my-custom",
       baseUrl: "https://example.com/v1",
@@ -100,4 +129,33 @@ test("ProviderSettingsService は Proxy 環境変数がある場合 useProxy を
       process.env.HTTP_PROXY = prevHttpProxy;
     }
   }
+});
+
+test("ProviderSettingsService は旧データの読み込み時に oauthProvider を anthropic へ補完する", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "lilto-provider-"));
+  const storagePath = path.join(tempDir, "providers.json");
+  fs.writeFileSync(
+    storagePath,
+    JSON.stringify({
+      activeProvider: "claude",
+      customProvider: {
+        name: "legacy",
+        baseUrl: "https://legacy.example/v1",
+        apiKey: "",
+        modelId: "legacy-model"
+      },
+      networkProxy: {
+        useProxy: false
+      },
+      updatedAt: 123
+    }),
+    "utf8"
+  );
+
+  const service = new ProviderSettingsService({
+    storagePath,
+    logger: { info() {}, error() {} }
+  });
+  const state = service.getState();
+  assert.equal(state.oauthProvider, "anthropic");
 });
