@@ -10,7 +10,8 @@
     "start": "npm run build && electron .",
     "test": "npm run build && node --test",
     "e2e:electron": "npm run build && node scripts/e2e-electron-agent-browser.js",
-    "e2e:electron:skills-live": "npm run build && node scripts/e2e-electron-agent-skills-live.js"
+    "e2e:electron:skills-live": "npm run build && node scripts/e2e-electron-agent-skills-live.js",
+    "e2e:electron:liltobook-live": "npm run build && node scripts/e2e-electron-liltobook-live.js"
   },
   "dependencies": {
     "@mariozechner/pi-ai": "^0.54.2",

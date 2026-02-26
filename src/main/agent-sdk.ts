@@ -153,6 +153,91 @@ type AuthSnapshot = {
   provider: OAuthProviderId;
 };
 
+type ConversationTurn = {
+  userText: string;
+  assistantText: string;
+  completedAt: number;
+};
+
+type HeartbeatSkillProposal = {
+  skillName: string;
+  description: string;
+  summary: string;
+  fingerprint: string;
+  createdAt: number;
+};
+
+const HEARTBEAT_PROPOSAL_DELAY_MS = 60 * 1000;
+const MAX_CONVERSATION_HISTORY = 24;
+
+function normalizeSimilarityText(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9\u3040-\u30ff\u3400-\u9fff]+/g, "");
+}
+
+function createStableHash(text: string): string {
+  let hash = 2166136261;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function truncateSummary(text: string, max = 180): string {
+  const compact = text.replace(/\s+/g, " ").trim();
+  if (compact.length <= max) return compact;
+  return `${compact.slice(0, max)}...`;
+}
+
+function getHeartbeatProposalDelayMs(): number {
+  const raw = process.env.LILTO_HEARTBEAT_PROPOSAL_DELAY_MS;
+  if (!raw) return HEARTBEAT_PROPOSAL_DELAY_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) return HEARTBEAT_PROPOSAL_DELAY_MS;
+  return parsed;
+}
+
+function indicatesSessionCompletion(text: string): boolean {
+  const lowered = text.toLowerCase();
+  return (
+    lowered.includes("thanks") ||
+    lowered.includes("thank you") ||
+    lowered.includes("solved") ||
+    lowered.includes("done") ||
+    text.includes("ありがとう") ||
+    text.includes("助かった") ||
+    text.includes("解決") ||
+    text.includes("完了")
+  );
+}
+
+function isApprovalText(text: string): boolean {
+  const lowered = text.trim().toLowerCase();
+  return (
+    lowered === "y" ||
+    lowered === "yes" ||
+    lowered === "ok" ||
+    lowered === "okay" ||
+    lowered === "approve" ||
+    lowered.startsWith("はい") ||
+    lowered.startsWith("承認") ||
+    lowered.startsWith("許可") ||
+    lowered.startsWith("お願いします")
+  );
+}
+
+function isRejectText(text: string): boolean {
+  const lowered = text.trim().toLowerCase();
+  return (
+    lowered === "n" ||
+    lowered === "no" ||
+    lowered.startsWith("いいえ") ||
+    lowered.startsWith("不要") ||
+    lowered.startsWith("キャンセル") ||
+    lowered.startsWith("skip")
+  );
+}
+
 function buildCustomModel(settings: ProviderSettings): PiModel {
   const modelId = settings.customProvider.modelId.trim() || "gpt-4.1-mini";
   const providerName = settings.customProvider.name.trim() || "custom-provider";
@@ -400,6 +485,12 @@ export class AgentRuntime {
   private readonly logger: Logger;
   private readonly workspaceDir?: string;
   private readonly availableSkillNames: Set<string>;
+  private readonly knownSkillNames: Set<string>;
+  private readonly knownSkillNameFingerprints: Set<string>;
+  private readonly suppressedProposalFingerprints = new Set<string>();
+  private readonly conversationHistory: ConversationTurn[] = [];
+  private pendingHeartbeatProposal: HeartbeatSkillProposal | null = null;
+  private isSessionPromptActive = false;
   private session: PiSession | null = null;
   private sessionKey: string | null = null;
 
@@ -421,6 +512,10 @@ export class AgentRuntime {
     this.logger = logger;
     this.workspaceDir = workspaceDir;
     this.availableSkillNames = new Set(availableSkills.map((skill) => skill.name));
+    this.knownSkillNames = new Set(availableSkills.map((skill) => skill.name));
+    this.knownSkillNameFingerprints = new Set(
+      Array.from(this.knownSkillNames).map((name) => normalizeSimilarityText(name.replace(/-/g, "")))
+    );
   }
 
   private async ensureSession(options: { apiKey: string | null; model?: PiModel; cwd?: string }): Promise<PiSession> {
@@ -447,6 +542,18 @@ export class AgentRuntime {
     providerSettings: ProviderSettings,
     hooks?: { requestId: string; onLoopEvent?: (event: AgentLoopEvent) => void }
   ): Promise<AgentResult> {
+    if (this.isSessionPromptActive) {
+      return {
+        ok: false,
+        error: {
+          code: "AGENT_BUSY",
+          message: "エージェントが別リクエストを処理中です。しばらく待って再試行してください。",
+          details: null,
+          retryable: true
+        }
+      };
+    }
+    this.isSessionPromptActive = true;
     const restoreProxyEnv = withScopedProxyEnvironment(providerSettings);
     try {
       const session = await this.ensureSession(options);
@@ -553,6 +660,7 @@ export class AgentRuntime {
       return { ok: true, text: output };
     } finally {
       restoreProxyEnv();
+      this.isSessionPromptActive = false;
     }
   }
 
@@ -572,6 +680,219 @@ export class AgentRuntime {
     return text;
   }
 
+  private recordConversationTurn(userText: string, assistantText: string): void {
+    this.conversationHistory.push({
+      userText,
+      assistantText,
+      completedAt: Date.now()
+    });
+    if (this.conversationHistory.length > MAX_CONVERSATION_HISTORY) {
+      this.conversationHistory.splice(0, this.conversationHistory.length - MAX_CONVERSATION_HISTORY);
+    }
+  }
+
+  private isLikelyDuplicateProposal(proposal: HeartbeatSkillProposal): boolean {
+    if (this.knownSkillNames.has(proposal.skillName)) return true;
+    if (this.suppressedProposalFingerprints.has(proposal.fingerprint)) return true;
+
+    for (const fingerprint of this.knownSkillNameFingerprints) {
+      if (!fingerprint || fingerprint.length < 4) continue;
+      if (proposal.fingerprint.includes(fingerprint) || fingerprint.includes(proposal.fingerprint)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private buildHeartbeatProposalFromHistory(now = Date.now()): HeartbeatSkillProposal | null {
+    const latestTurn = this.conversationHistory.at(-1);
+    if (!latestTurn) return null;
+    if (now - latestTurn.completedAt < getHeartbeatProposalDelayMs()) return null;
+    if (!indicatesSessionCompletion(latestTurn.userText)) return null;
+
+    const summary = truncateSummary(latestTurn.assistantText);
+    if (!summary) return null;
+
+    const fingerprint = normalizeSimilarityText(summary);
+    if (!fingerprint) return null;
+
+    const skillName = `session-playbook-${createStableHash(fingerprint)}`;
+    return {
+      skillName,
+      description: truncateSummary(`セッションから抽出した再利用手順: ${summary}`, 120),
+      summary,
+      fingerprint,
+      createdAt: now
+    };
+  }
+
+  private buildSkillCreatorPrompt(proposal: HeartbeatSkillProposal): string {
+    return [
+      "/skill:skill-creator",
+      "",
+      "以下の再利用手順をスキルとして保存してください。",
+      `- skillName: ${proposal.skillName}`,
+      `- description: ${proposal.description}`,
+      `- sourceSummary: ${proposal.summary}`,
+      "- 既存スキルと同等なら新規作成しないで理由を返してください。",
+      "- 保存先は ~/.pi/skills/<skill-name>/SKILL.md にしてください。"
+    ].join("\n");
+  }
+
+  private buildLiltobookHeartbeatPrompt(heartbeatMarkdown: string, latestTurn: ConversationTurn): string {
+    return [
+      "/skill:liltobook",
+      "",
+      heartbeatMarkdown.trim(),
+      "",
+      "最近の会話履歴を参照し、再利用可能な内容があれば skill-creator の適用候補を抽出してください。",
+      "会話抜粋:",
+      `ユーザー: ${truncateSummary(latestTurn.userText, 160)}`,
+      `アシスタント: ${truncateSummary(latestTurn.assistantText, 220)}`
+    ].join("\n");
+  }
+
+  private async runPromptWithProvider(
+    text: string,
+    providerSettings: ProviderSettings,
+    hooks?: { requestId: string; onLoopEvent?: (event: AgentLoopEvent) => void }
+  ): Promise<AgentResult> {
+    const runOptionsBase = { cwd: this.workspaceDir };
+
+    if (providerSettings.activeProvider === "custom-openai-completions") {
+      if (!isCustomProviderReady(providerSettings)) {
+        return {
+          ok: false,
+          error: {
+            code: "PROVIDER_CONFIG_REQUIRED",
+            message: "Custom Provider を使うには name と baseUrl の設定が必要です。",
+            details: null,
+            retryable: true
+          }
+        };
+      }
+
+      const model = buildCustomModel(providerSettings);
+      const apiKeyFromSettings = providerSettings.customProvider.apiKey;
+      const apiKey =
+        apiKeyFromSettings && apiKeyFromSettings.trim()
+          ? apiKeyFromSettings
+          : isLocalOllamaUrl(model.baseUrl)
+            ? "ollama"
+            : "not-required";
+      return await this.runSessionPrompt(text, { apiKey, model, ...runOptionsBase }, providerSettings, hooks);
+    }
+
+    const authState = this.authService.getState() as AuthSnapshot;
+    if (authState.phase !== "authenticated" || authState.provider !== providerSettings.oauthProvider) {
+      return {
+        ok: false,
+        error: {
+          code: "AUTH_REQUIRED",
+          message: `${providerSettings.oauthProvider} の OAuth 認証が必要です。`,
+          details: null,
+          retryable: true
+        }
+      };
+    }
+
+    const apiKey = await this.authService.getApiKey(providerSettings.oauthProvider);
+    if (!apiKey) {
+      return {
+        ok: false,
+        error: {
+          code: "AUTH_REQUIRED",
+          message: "認証情報を取得できませんでした。再認証してください。",
+          details: null,
+          retryable: true
+        }
+      };
+    }
+
+    return await this.runSessionPrompt(text, { apiKey, model: undefined, ...runOptionsBase }, providerSettings, hooks);
+  }
+
+  private async maybeHandlePendingHeartbeatProposal(
+    text: string,
+    providerSettings: ProviderSettings,
+    hooks?: { requestId: string; onLoopEvent?: (event: AgentLoopEvent) => void }
+  ): Promise<AgentResult | null> {
+    if (!this.pendingHeartbeatProposal) return null;
+    if (text.trimStart().startsWith("/skill:")) return null;
+
+    if (isRejectText(text)) {
+      this.suppressedProposalFingerprints.add(this.pendingHeartbeatProposal.fingerprint);
+      this.pendingHeartbeatProposal = null;
+      return { ok: true, text: "スキル化提案をキャンセルしました。" };
+    }
+
+    if (!isApprovalText(text)) {
+      const proposal = this.pendingHeartbeatProposal;
+      return {
+        ok: true,
+        text:
+          `再利用スキル候補を提案します: ${proposal.skillName}\n` +
+          `概要: ${proposal.description}\n` +
+          "作成してよければ「はい」、見送る場合は「いいえ」と返答してください。"
+      };
+    }
+
+    const proposal = this.pendingHeartbeatProposal;
+    if (this.isLikelyDuplicateProposal(proposal)) {
+      this.suppressedProposalFingerprints.add(proposal.fingerprint);
+      this.pendingHeartbeatProposal = null;
+      return { ok: true, text: "既存スキルと重複するため、新規作成は行いませんでした。" };
+    }
+
+    const result = await this.runPromptWithProvider(this.buildSkillCreatorPrompt(proposal), providerSettings, hooks);
+    if (!result.ok) return result;
+
+    this.knownSkillNames.add(proposal.skillName);
+    this.knownSkillNameFingerprints.add(normalizeSimilarityText(proposal.skillName.replace(/-/g, "")));
+    this.suppressedProposalFingerprints.add(proposal.fingerprint);
+    this.pendingHeartbeatProposal = null;
+
+    return {
+      ok: true,
+      text: `${result.text}\n\n[liltobook] 承認を受けてスキルを作成しました: ${proposal.skillName}`
+    };
+  }
+
+  async runLiltobookHeartbeat(options: {
+    heartbeatMarkdown: string;
+    providerSettings: ProviderSettings;
+    now?: number;
+  }): Promise<{ status: "skipped" | "proposed"; reason?: string; skillName?: string }> {
+    const now = options.now ?? Date.now();
+    if (!this.availableSkillNames.has("liltobook")) return { status: "skipped", reason: "missing_liltobook_skill" };
+    if (!this.availableSkillNames.has("skill-creator")) return { status: "skipped", reason: "missing_skill_creator" };
+    if (this.isSessionPromptActive) return { status: "skipped", reason: "agent_busy" };
+    if (this.pendingHeartbeatProposal) return { status: "skipped", reason: "awaiting_user_approval" };
+
+    const proposal = this.buildHeartbeatProposalFromHistory(now);
+    if (!proposal) return { status: "skipped", reason: "no_reusable_candidate" };
+    if (this.isLikelyDuplicateProposal(proposal)) {
+      this.suppressedProposalFingerprints.add(proposal.fingerprint);
+      return { status: "skipped", reason: "duplicate_candidate" };
+    }
+
+    const latestTurn = this.conversationHistory.at(-1);
+    if (!latestTurn) return { status: "skipped", reason: "no_conversation_history" };
+
+    const prompt = this.buildLiltobookHeartbeatPrompt(options.heartbeatMarkdown, latestTurn);
+    const heartbeatResult = await this.runPromptWithProvider(prompt, options.providerSettings);
+    if (!heartbeatResult.ok) {
+      if (heartbeatResult.error.code === "AGENT_BUSY") {
+        return { status: "skipped", reason: "agent_busy" };
+      }
+      return { status: "skipped", reason: heartbeatResult.error.code };
+    }
+
+    this.pendingHeartbeatProposal = proposal;
+    return { status: "proposed", skillName: proposal.skillName };
+  }
+
   async submitPrompt(
     text: string,
     providerSettings: ProviderSettings,
@@ -583,6 +904,14 @@ export class AgentRuntime {
     });
 
     try {
+      const pendingHandled = await this.maybeHandlePendingHeartbeatProposal(text, providerSettings, hooks);
+      if (pendingHandled) {
+        if (pendingHandled.ok) {
+          this.recordConversationTurn(text, pendingHandled.text);
+        }
+        return pendingHandled;
+      }
+
       if (process.env.LILTO_E2E_MOCK === "1") {
         try {
           await runProxyPrecheckIfEnabled(providerSettings);
@@ -651,63 +980,16 @@ export class AgentRuntime {
 
         const mock = `[E2E_MOCK_FINAL] 要求「${text}」を処理し、複数コマンドを実行して回答しました。`;
         this.logger.info("agent_prompt_mock_completed", { outputLength: mock.length });
+        this.recordConversationTurn(text, mock);
         return { ok: true, text: mock };
       }
 
       const promptText = this.buildPromptWithSkillHint(text);
-      const runOptionsBase = { cwd: this.workspaceDir };
-
-      if (providerSettings.activeProvider === "custom-openai-completions") {
-        if (!isCustomProviderReady(providerSettings)) {
-          return {
-            ok: false,
-            error: {
-              code: "PROVIDER_CONFIG_REQUIRED",
-              message: "Custom Provider を使うには name と baseUrl の設定が必要です。",
-              details: null,
-              retryable: true
-            }
-          };
-        }
-
-        const model = buildCustomModel(providerSettings);
-        const apiKeyFromSettings = providerSettings.customProvider.apiKey;
-        const apiKey =
-          apiKeyFromSettings && apiKeyFromSettings.trim()
-            ? apiKeyFromSettings
-            : isLocalOllamaUrl(model.baseUrl)
-              ? "ollama"
-              : "not-required";
-        return await this.runSessionPrompt(promptText, { apiKey, model, ...runOptionsBase }, providerSettings, hooks);
+      const result = await this.runPromptWithProvider(promptText, providerSettings, hooks);
+      if (result.ok) {
+        this.recordConversationTurn(text, result.text);
       }
-
-      const authState = this.authService.getState() as AuthSnapshot;
-      if (authState.phase !== "authenticated" || authState.provider !== providerSettings.oauthProvider) {
-        return {
-          ok: false,
-          error: {
-            code: "AUTH_REQUIRED",
-            message: `${providerSettings.oauthProvider} の OAuth 認証が必要です。`,
-            details: null,
-            retryable: true
-          }
-        };
-      }
-
-      const apiKey = await this.authService.getApiKey(providerSettings.oauthProvider);
-      if (!apiKey) {
-        return {
-          ok: false,
-          error: {
-            code: "AUTH_REQUIRED",
-            message: "認証情報を取得できませんでした。再認証してください。",
-            details: null,
-            retryable: true
-          }
-        };
-      }
-
-      return await this.runSessionPrompt(promptText, { apiKey, model: undefined, ...runOptionsBase }, providerSettings, hooks);
+      return result;
     } catch (error) {
       const normalized = standardizeAgentRuntimeError(error);
       this.logger.error("agent_prompt_failed", normalized);

@@ -1,4 +1,5 @@
 import path from "node:path";
+import fs from "node:fs";
 import { app, BrowserWindow } from "electron";
 
 import { AgentRuntime } from "./agent-sdk";
@@ -95,6 +96,25 @@ void app.whenReady().then(() => {
     authService,
     workspaceDir: skillRuntime.workspaceDir,
     availableSkills: skillRuntime.availableSkills
+  });
+
+  heartbeat.registerJob({
+    id: "liltobook-heartbeat",
+    enabled: skillRuntime.availableSkills.some((skill) => skill.name === "liltobook"),
+    handler: async () => {
+      const heartbeatPath = path.join(skillRuntime.bundledSkillsDir, "liltobook", "HEARTBEAT.md");
+      if (!fs.existsSync(heartbeatPath)) {
+        logger.info("liltobook_heartbeat_skipped", { reason: "heartbeat_doc_missing", heartbeatPath });
+        return;
+      }
+
+      const heartbeatMarkdown = fs.readFileSync(heartbeatPath, "utf8");
+      const result = await agentRuntime.runLiltobookHeartbeat({
+        heartbeatMarkdown,
+        providerSettings: providerSettingsService.getState()
+      });
+      logger.info("liltobook_heartbeat_result", result);
+    }
   });
 
   registerAgentIpcHandlers({ agentRuntime, authService, providerSettingsService });

@@ -510,6 +510,113 @@ test("スキル化依頼時は skill-creator スキルを優先する", async ()
   assert.equal(receivedPrompt.startsWith("/skill:skill-creator"), true);
 });
 
+test("liltobook heartbeat は候補を提案し、承認後に skill-creator を実行する", async () => {
+  const prompts = [];
+  const runtime = new AgentRuntime({
+    authService: createAuthService("authenticated"),
+    createSession: async () => ({
+      subscribe(listener) {
+        listener({
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: "手順を整理しました。" }
+        });
+        return () => {};
+      },
+      async prompt(text) {
+        prompts.push(text);
+      }
+    }),
+    availableSkills: [{ name: "liltobook" }, { name: "skill-creator" }],
+    logger: { info() {}, error() {} }
+  });
+
+  const initial = await runtime.submitPrompt("ありがとう、解決しました", createProviderSettings());
+  assert.equal(initial.ok, true);
+
+  const heartbeat = await runtime.runLiltobookHeartbeat({
+    heartbeatMarkdown: "# HB\n会話履歴を見て再利用可能なら提案",
+    providerSettings: createProviderSettings(),
+    now: Date.now() + 61000
+  });
+  assert.equal(heartbeat.status, "proposed");
+  assert.equal(prompts.some((p) => p.startsWith("/skill:liltobook")), true);
+
+  const pendingNotice = await runtime.submitPrompt("次を進めて", createProviderSettings());
+  assert.equal(pendingNotice.ok, true);
+  assert.equal(pendingNotice.text.includes("再利用スキル候補"), true);
+
+  const approved = await runtime.submitPrompt("はい", createProviderSettings());
+  assert.equal(approved.ok, true);
+  assert.equal(approved.text.includes("承認を受けてスキルを作成しました"), true);
+  assert.equal(prompts.some((p) => p.startsWith("/skill:skill-creator")), true);
+});
+
+test("heartbeat 候補が既存スキルと重複する場合は作成しない", async () => {
+  const prompts = [];
+  const runtime = new AgentRuntime({
+    authService: createAuthService("authenticated"),
+    createSession: async () => ({
+      subscribe(listener) {
+        listener({
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: "手順を整理しました。" }
+        });
+        return () => {};
+      },
+      async prompt(text) {
+        prompts.push(text);
+      }
+    }),
+    availableSkills: [{ name: "liltobook" }, { name: "skill-creator" }],
+    logger: { info() {}, error() {} }
+  });
+
+  const initial = await runtime.submitPrompt("ありがとう、解決しました", createProviderSettings());
+  assert.equal(initial.ok, true);
+
+  const heartbeat = await runtime.runLiltobookHeartbeat({
+    heartbeatMarkdown: "# HB\n",
+    providerSettings: createProviderSettings(),
+    now: Date.now() + 61000
+  });
+  assert.equal(heartbeat.status, "proposed");
+
+  const proposal = runtime["pendingHeartbeatProposal"];
+  runtime["knownSkillNames"].add(proposal.skillName);
+
+  const approved = await runtime.submitPrompt("はい", createProviderSettings());
+  assert.equal(approved.ok, true);
+  assert.equal(approved.text.includes("重複"), true);
+  assert.equal(prompts.some((p) => p.startsWith("/skill:skill-creator")), false);
+});
+
+test("セッション実行中は heartbeat をスキップする", async () => {
+  const runtime = new AgentRuntime({
+    authService: createAuthService("authenticated"),
+    createSession: async () => ({
+      subscribe() {
+        return () => {};
+      },
+      async prompt() {}
+    }),
+    availableSkills: [{ name: "liltobook" }, { name: "skill-creator" }],
+    logger: { info() {}, error() {} }
+  });
+
+  const initial = await runtime.submitPrompt("ありがとう、解決しました", createProviderSettings());
+  assert.equal(initial.ok, true);
+
+  runtime["isSessionPromptActive"] = true;
+  const heartbeat = await runtime.runLiltobookHeartbeat({
+    heartbeatMarkdown: "# HB",
+    providerSettings: createProviderSettings(),
+    now: Date.now() + 61000
+  });
+
+  assert.equal(heartbeat.status, "skipped");
+  assert.equal(heartbeat.reason, "agent_busy");
+});
+
 test("明示 /skill 指定がある場合は自動補正しない", async () => {
   let receivedPrompt = "";
   const runtime = new AgentRuntime({

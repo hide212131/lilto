@@ -19,7 +19,7 @@ export type SkillRuntimeSetup = {
   removedWorkspaces: string[];
 };
 
-const BUNDLED_SKILL_NAMES = ["agent-browser", "skill-creator"] as const;
+const BUNDLED_SKILL_NAMES = ["agent-browser", "skill-creator", "liltobook"] as const;
 
 function parseInlineValue(raw: string): unknown {
   const value = raw.trim();

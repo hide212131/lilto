@@ -124,7 +124,7 @@ test("同名スキルがある場合は user skills を優先する", () => {
   assert.equal(skills[0].description, "user version");
 });
 
-test("setupSkillRuntime は bundled/user の両方を設定して skill-creator を一覧化する", () => {
+test("setupSkillRuntime は bundled/user の両方を設定して liltobook を含む bundled skills を一覧化する", () => {
   const root = tempDir("setup-runtime");
   const projectRoot = path.join(root, "project");
   const appDataDir = path.join(root, "app-data");
@@ -143,6 +143,12 @@ test("setupSkillRuntime は bundled/user の両方を設定して skill-creator 
     path.join(projectRoot, "skills", "bundled", "skill-creator", "SKILL.md"),
     `---\nname: skill-creator\ndescription: bundled skill creator\n---\n`
   );
+  fs.mkdirSync(path.join(projectRoot, "skills", "bundled", "liltobook"), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectRoot, "skills", "bundled", "liltobook", "SKILL.md"),
+    `---\nname: liltobook\ndescription: heartbeat playbook\n---\n`
+  );
+  fs.writeFileSync(path.join(projectRoot, "skills", "bundled", "liltobook", "HEARTBEAT.md"), `# Heartbeat\n`);
 
   fs.mkdirSync(path.join(homeDir, ".pi", "skills", "custom-one"), { recursive: true });
   fs.writeFileSync(
@@ -163,7 +169,7 @@ test("setupSkillRuntime は bundled/user の両方を設定して skill-creator 
   assert.equal(runtime.userSkillsDir, path.join(homeDir, ".pi", "skills"));
   assert.deepEqual(
     runtime.availableSkills.map((skill) => skill.name).sort(),
-    ["agent-browser", "custom-one", "skill-creator"]
+    ["agent-browser", "custom-one", "liltobook", "skill-creator"]
   );
 
   const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
