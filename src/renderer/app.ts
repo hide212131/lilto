@@ -1,6 +1,7 @@
 import { LitElement, html, css } from "lit";
 import { customElement, property, query } from "lit/decorators.js";
 import type { AuthState, ProviderSettings, Message } from "./types.js";
+import type { OAuthProviderId } from "../shared/provider-settings.js";
 import "./components/top-bar.js";
 import "./components/message-list.js";
 import "./components/composer.js";
@@ -14,6 +15,7 @@ export class LiltApp extends LitElement {
   @property({ type: Object }) authState: AuthState | null = null;
   @property({ type: Object }) providerSettings: ProviderSettings = {
     activeProvider: "claude",
+    oauthProvider: "anthropic",
     customProvider: {
       name: "Ollama",
       baseUrl: "http://127.0.0.1:11434/v1",
@@ -102,7 +104,10 @@ export class LiltApp extends LitElement {
   private _canSend(): boolean {
     if (this.isSending) return false;
     if (this.providerSettings.activeProvider === "claude") {
-      return this.authState?.phase === "authenticated";
+      return (
+        this.authState?.phase === "authenticated" &&
+        this.authState?.provider === this.providerSettings.oauthProvider
+      );
     }
     const cp = this.providerSettings.customProvider;
     return Boolean(cp.name.trim() && cp.baseUrl.trim());
@@ -117,8 +122,24 @@ export class LiltApp extends LitElement {
     }
     if (this.loopState.status === "failed") return "実行失敗";
     if (this._canSend()) return "待機中";
-    if (this.providerSettings.activeProvider === "claude") return "Claude 認証が必要です";
-    return "Custom Provider の設定が必要です";
+    return "プロバイダー設定が必要";
+  }
+
+  private _oauthProviderLabel(provider: OAuthProviderId): string {
+    switch (provider) {
+      case "anthropic":
+        return "Anthropic";
+      case "openai-codex":
+        return "OpenAI Codex";
+      case "github-copilot":
+        return "GitHub Copilot";
+      case "google-gemini-cli":
+        return "Google Gemini CLI";
+      case "google-antigravity":
+        return "Google Antigravity";
+      default:
+        return provider;
+    }
   }
 
   private _syncSendability() {
@@ -180,7 +201,7 @@ export class LiltApp extends LitElement {
       if (!this._canSend()) {
         this._addMessage("system",
           this.providerSettings.activeProvider === "claude"
-            ? "Claude OAuth 認証を完了してから送信してください。"
+            ? "プロバイダー設定が必要です。Settings から OAuth Provider を設定してください。"
             : "Custom Provider の name / baseUrl を設定して保存してから送信してください。"
         );
         this.settingsOpen = true;

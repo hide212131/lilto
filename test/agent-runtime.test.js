@@ -3,12 +3,13 @@ const assert = require("node:assert/strict");
 
 const { AgentRuntime } = require("../dist/main/agent-sdk.js");
 
-function createAuthService(phase, apiKey = "oauth-api-key") {
+function createAuthService(phase, apiKey = "oauth-api-key", provider = "anthropic") {
   return {
     getState() {
-      return { phase };
+      return { phase, provider };
     },
-    async getApiKey() {
+    async getApiKey(requestedProvider) {
+      assert.equal(requestedProvider, provider);
       return apiKey;
     }
   };
@@ -17,6 +18,7 @@ function createAuthService(phase, apiKey = "oauth-api-key") {
 function createProviderSettings(overrides = {}) {
   return {
     activeProvider: "claude",
+    oauthProvider: "anthropic",
     customProvider: {
       name: "",
       baseUrl: "",
@@ -81,6 +83,26 @@ test("未認証なら AUTH_REQUIRED を返す", async () => {
   const result = await runtime.submitPrompt("test", createProviderSettings());
   assert.equal(result.ok, false);
   assert.equal(result.error.code, "AUTH_REQUIRED");
+});
+
+test("認証済みでも provider 不一致なら AUTH_REQUIRED を返す", async () => {
+  const runtime = new AgentRuntime({
+    authService: createAuthService("authenticated", "oauth-api-key", "anthropic"),
+    createSession: async () => {
+      throw new Error("should not be called");
+    },
+    logger: { info() {}, error() {} }
+  });
+
+  const result = await runtime.submitPrompt(
+    "test",
+    createProviderSettings({
+      oauthProvider: "openai-codex"
+    })
+  );
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "AUTH_REQUIRED");
+  assert.match(result.error.message, /openai-codex/);
 });
 
 test("Custom Provider 未設定なら PROVIDER_CONFIG_REQUIRED を返す", async () => {

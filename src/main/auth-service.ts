@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { shell } from "electron";
 import { createLogger, type Logger } from "./logger";
+import { OAUTH_PROVIDER_IDS, type OAuthProviderId } from "../shared/provider-settings";
 
 export type OAuthCredentials = {
   refresh: string;
@@ -39,34 +40,42 @@ export type AuthPhase =
 
 export type AuthState = {
   phase: AuthPhase;
-  provider: "anthropic";
+  provider: OAuthProviderId;
   message: string;
   authUrl: string | null;
   updatedAt: number;
 };
 
 type AuthStoreShape = {
+  credentials?: Partial<Record<OAuthProviderId, OAuthCredentials>>;
+  lastProvider?: OAuthProviderId;
   anthropic?: OAuthCredentials;
 };
 
 const importEsm = new Function("specifier", "return import(specifier)") as (specifier: string) => Promise<unknown>;
 
-async function defaultProviderFactory(): Promise<OAuthProvider> {
+async function defaultProviderFactory(providerId: OAuthProviderId): Promise<OAuthProvider> {
   const { getOAuthProvider } = (await importEsm("@mariozechner/pi-ai")) as {
     getOAuthProvider: (id: string) => OAuthProvider | undefined;
   };
-  const provider = getOAuthProvider("anthropic");
+  const provider = getOAuthProvider(providerId);
   if (!provider) {
-    throw new Error("Anthropic OAuth provider が見つかりません");
+    throw new Error(`${providerId} OAuth provider が見つかりません`);
   }
   return provider as OAuthProvider;
 }
 
-function normalizeState(prev: Partial<AuthState>, phase: AuthPhase, message: string, authUrl: string | null): AuthState {
+function normalizeState(
+  prev: Partial<AuthState>,
+  phase: AuthPhase,
+  message: string,
+  authUrl: string | null,
+  provider: OAuthProviderId
+): AuthState {
   return {
     ...prev,
     phase,
-    provider: "anthropic",
+    provider,
     message,
     authUrl,
     updatedAt: Date.now()
@@ -75,11 +84,11 @@ function normalizeState(prev: Partial<AuthState>, phase: AuthPhase, message: str
 
 export class ClaudeAuthService {
   private readonly logger: Logger;
-  private readonly providerFactory: () => Promise<OAuthProvider>;
+  private readonly providerFactory: (providerId: OAuthProviderId) => Promise<OAuthProvider>;
   private readonly authPath: string;
   private readonly openExternal: (url: string) => Promise<void>;
-  private state: AuthState = normalizeState({}, "unauthenticated", "未認証です。認証を開始してください。", null);
-  private credentials: OAuthCredentials | null = null;
+  private state: AuthState = normalizeState({}, "unauthenticated", "未認証です。認証を開始してください。", null, "anthropic");
+  private credentialsByProvider: Partial<Record<OAuthProviderId, OAuthCredentials>> = {};
   private listeners = new Set<(state: AuthState) => void>();
   private pendingCodeResolver: ((code: string) => void) | null = null;
   private loginAbortController: AbortController | null = null;
@@ -92,7 +101,7 @@ export class ClaudeAuthService {
     openExternal = (url: string) => shell.openExternal(url)
   }: {
     logger?: Logger;
-    providerFactory?: () => Promise<OAuthProvider>;
+    providerFactory?: (providerId: OAuthProviderId) => Promise<OAuthProvider>;
     authPath?: string;
     openExternal?: (url: string) => Promise<void>;
   } = {}) {
@@ -103,10 +112,27 @@ export class ClaudeAuthService {
     this.loadPersistedCredentials();
 
     if (process.env.LILTO_E2E_MOCK === "1") {
-      this.setState("authenticated", "E2E モック認証済み", null);
-    } else if (this.credentials) {
-      this.setState("authenticated", "認証情報を読み込みました。", null);
+      this.setState("authenticated", "E2E モック認証済み", null, "anthropic");
+    } else {
+      const persistedProvider = this.getPersistedProvider();
+      if (persistedProvider) {
+        this.setState("authenticated", "認証情報を読み込みました。", null, persistedProvider);
+      } else {
+        this.setState("unauthenticated", "未認証です。認証を開始してください。", null, "anthropic");
+      }
     }
+  }
+
+  private getPersistedProvider(): OAuthProviderId | null {
+    if (this.credentialsByProvider[this.state.provider]) {
+      return this.state.provider;
+    }
+    for (const providerId of OAUTH_PROVIDER_IDS) {
+      if (this.credentialsByProvider[providerId]) {
+        return providerId;
+      }
+    }
+    return null;
   }
 
   private loadPersistedCredentials(): void {
@@ -114,25 +140,47 @@ export class ClaudeAuthService {
     try {
       const raw = fs.readFileSync(this.authPath, "utf8");
       const parsed = JSON.parse(raw) as AuthStoreShape;
-      this.credentials = parsed.anthropic ?? null;
+      const normalized: Partial<Record<OAuthProviderId, OAuthCredentials>> = {};
+      if (parsed.credentials && typeof parsed.credentials === "object") {
+        for (const providerId of OAUTH_PROVIDER_IDS) {
+          const credential = parsed.credentials[providerId];
+          if (credential && typeof credential === "object") {
+            normalized[providerId] = credential;
+          }
+        }
+      }
+      if (!normalized.anthropic && parsed.anthropic && typeof parsed.anthropic === "object") {
+        normalized.anthropic = parsed.anthropic;
+      }
+      this.credentialsByProvider = normalized;
+      if (parsed.lastProvider && OAUTH_PROVIDER_IDS.includes(parsed.lastProvider)) {
+        const last = parsed.lastProvider as OAuthProviderId;
+        if (this.credentialsByProvider[last]) {
+          this.state = normalizeState(this.state, this.state.phase, this.state.message, this.state.authUrl, last);
+        }
+      }
     } catch (error) {
       this.logger.error("auth_load_failed", { error: String(error) });
-      this.credentials = null;
+      this.credentialsByProvider = {};
     }
   }
 
-  private persistCredentials(credentials: OAuthCredentials): void {
-    const payload: AuthStoreShape = { anthropic: credentials };
+  private persistCredentials(providerId: OAuthProviderId, credentials: OAuthCredentials): void {
+    this.credentialsByProvider = { ...this.credentialsByProvider, [providerId]: credentials };
+    const payload: AuthStoreShape = {
+      credentials: this.credentialsByProvider,
+      lastProvider: providerId,
+      anthropic: this.credentialsByProvider.anthropic
+    };
     fs.writeFileSync(this.authPath, JSON.stringify(payload, null, 2), "utf8");
-    this.credentials = credentials;
   }
 
   private clearPendingCode(): void {
     this.pendingCodeResolver = null;
   }
 
-  private setState(phase: AuthPhase, message: string, authUrl: string | null): void {
-    this.state = normalizeState(this.state, phase, message, authUrl);
+  private setState(phase: AuthPhase, message: string, authUrl: string | null, provider: OAuthProviderId): void {
+    this.state = normalizeState(this.state, phase, message, authUrl, provider);
     for (const listener of this.listeners) {
       listener(this.state);
     }
@@ -149,7 +197,7 @@ export class ClaudeAuthService {
     };
   }
 
-  async startOAuth(): Promise<AuthState> {
+  async startOAuth(providerId: OAuthProviderId = "anthropic"): Promise<AuthState> {
     if (this.loginPromise) {
       return this.state;
     }
@@ -158,21 +206,21 @@ export class ClaudeAuthService {
     this.loginAbortController = controller;
     this.loginPromise = (async () => {
       try {
-        this.setState("auth_in_progress", "認証ブラウザを起動しています...", null);
-        const provider = await this.providerFactory();
+        this.setState("auth_in_progress", "認証ブラウザを起動しています...", null, providerId);
+        const provider = await this.providerFactory(providerId);
 
         const credentials = await provider.login({
           onAuth: (info) => {
-            this.setState("auth_in_progress", "外部ブラウザで認証を完了してください。", info.url);
+            this.setState("auth_in_progress", "外部ブラウザで認証を完了してください。", info.url, providerId);
             void this.openExternal(info.url).catch((error) => {
               this.logger.error("oauth_open_external_failed", { error: String(error) });
             });
           },
           onProgress: (message) => {
-            this.setState("auth_in_progress", message, this.state.authUrl);
+            this.setState("auth_in_progress", message, this.state.authUrl, providerId);
           },
           onPrompt: async (prompt) => {
-            this.setState("awaiting_code", prompt.message || "認証コードを入力してください。", this.state.authUrl);
+            this.setState("awaiting_code", prompt.message || "認証コードを入力してください。", this.state.authUrl, providerId);
             return new Promise<string>((resolve) => {
               this.pendingCodeResolver = resolve;
             });
@@ -180,10 +228,10 @@ export class ClaudeAuthService {
           signal: controller.signal
         });
 
-        this.persistCredentials(credentials);
-        this.setState("authenticated", "認証が完了しました。すぐにチャットできます。", null);
+        this.persistCredentials(providerId, credentials);
+        this.setState("authenticated", "認証が完了しました。すぐにチャットできます。", null, providerId);
       } catch (error) {
-        this.setState("auth_failed", `認証に失敗しました: ${String(error)}`, this.state.authUrl);
+        this.setState("auth_failed", `認証に失敗しました: ${String(error)}`, this.state.authUrl, providerId);
       } finally {
         this.clearPendingCode();
         this.loginAbortController = null;
@@ -205,7 +253,7 @@ export class ClaudeAuthService {
     }
     this.pendingCodeResolver(normalized);
     this.clearPendingCode();
-    this.setState("auth_in_progress", "認証コードを確認中です...", this.state.authUrl);
+    this.setState("auth_in_progress", "認証コードを確認中です...", this.state.authUrl, this.state.provider);
     return this.state;
   }
 
@@ -223,12 +271,13 @@ export class ClaudeAuthService {
     return match ? match[1] : raw;
   }
 
-  async getApiKey(): Promise<string | null> {
+  async getApiKey(providerId: OAuthProviderId): Promise<string | null> {
     if (process.env.LILTO_E2E_MOCK === "1") {
-      return "mock-anthropic-access-token";
+      return `mock-${providerId}-access-token`;
     }
 
-    if (!this.credentials) return null;
+    const credentials = this.credentialsByProvider[providerId];
+    if (!credentials) return null;
 
     const { getOAuthApiKey } = (await importEsm("@mariozechner/pi-ai")) as {
       getOAuthApiKey: (
@@ -236,11 +285,11 @@ export class ClaudeAuthService {
         credentials: Record<string, OAuthCredentials>
       ) => Promise<{ newCredentials: OAuthCredentials; apiKey: string } | null>;
     };
-    const result = await getOAuthApiKey("anthropic", { anthropic: this.credentials });
+    const result = await getOAuthApiKey(providerId, { [providerId]: credentials });
     if (!result) return null;
 
-    if (result.newCredentials.expires !== this.credentials.expires || result.newCredentials.access !== this.credentials.access) {
-      this.persistCredentials(result.newCredentials as OAuthCredentials);
+    if (result.newCredentials.expires !== credentials.expires || result.newCredentials.access !== credentials.access) {
+      this.persistCredentials(providerId, result.newCredentials as OAuthCredentials);
     }
     return result.apiKey;
   }

@@ -1,8 +1,5 @@
-# providers-models-settings Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change add-providers-and-models-custom-provider. Update Purpose after archive.
-## Requirements
 ### Requirement: Providers & Models 設定画面の提供
 システムは、Settings モーダル内の設定メニューを `Providers & Models` として提供し、Claude と Custom Provider の設定導線を同一画面で提示しなければならない（MUST）。また同一画面でネットワーク Proxy 設定導線を提示しなければならない（MUST）。さらに OAuth Provider 選択導線を提示し、`anthropic` / `openai-codex` / `github-copilot` / `google-gemini-cli` / `google-antigravity` のいずれかを選択可能にしなければならない（MUST）。
 
@@ -26,25 +23,6 @@ TBD - created by archiving change add-providers-and-models-custom-provider. Upda
 - **WHEN** ユーザーが OAuth Provider を変更して保存操作を実行する
 - **THEN** システムは選択値を永続化し、次回起動後も同じ OAuth Provider を復元する
 
-### Requirement: OpenAI Completions Compatible な Custom Provider 設定
-システムは、Custom Provider として OpenAI Completions Compatible 接続先を登録・編集・保存できなければならない（MUST）。また Proxy 設定を同じ保存操作で登録・編集・保存できなければならない（MUST）。
-
-#### Scenario: 必須項目を入力して保存できる
-- **WHEN** ユーザーが `name` と `baseUrl` を入力して保存操作を実行する
-- **THEN** システムは provider 設定を永続化し、次回起動後も同設定を復元する
-
-#### Scenario: 必須項目不足時は保存を拒否する
-- **WHEN** `name` または `baseUrl` が空のまま保存操作を実行する
-- **THEN** システムは保存を行わず、不足項目を示すエラーを表示する
-
-#### Scenario: Proxy 設定を保存して次回起動で復元できる
-- **WHEN** ユーザーが `httpProxy` または `httpsProxy` を入力して保存操作を実行する
-- **THEN** システムは Proxy 設定を永続化し、次回起動後に同値を復元する
-
-#### Scenario: 無効な Proxy URL は保存を拒否する
-- **WHEN** ユーザーが URL 形式でない `httpProxy` または `httpsProxy` を入力して保存操作を実行する
-- **THEN** システムは保存を行わず、Proxy 設定の入力不備を示すエラーを表示する
-
 ### Requirement: Provider 別の実行可否表示
 システムは、現在選択されている provider の準備状態に応じて、送信可否と不足条件を UI へ表示しなければならない（MUST）。OAuth provider を使用する経路では、選択中 OAuth provider の認証状態を評価対象にしなければならない（MUST）。
 
@@ -59,4 +37,3 @@ TBD - created by archiving change add-providers-and-models-custom-provider. Upda
 #### Scenario: OAuth Provider 変更後に不足条件表示が切り替わる
 - **WHEN** ユーザーが OAuth Provider を変更して保存し、まだ新しい provider の認証が完了していない
 - **THEN** UI は旧 provider の認証状態に関わらず未認証として扱い、送信不可メッセージを更新する
-

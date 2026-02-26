@@ -1,6 +1,7 @@
 import { LitElement, html, css } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { AuthState, ActiveProvider, ProviderSettings } from "../types.js";
+import { OAUTH_PROVIDER_IDS, type OAuthProviderId } from "../../shared/provider-settings.js";
 
 @customElement("lilt-settings-modal")
 export class LiltSettingsModal extends LitElement {
@@ -8,6 +9,7 @@ export class LiltSettingsModal extends LitElement {
   @property({ type: Object }) authState: AuthState | null = null;
   @property({ type: Object }) providerSettings: ProviderSettings = {
     activeProvider: "claude",
+    oauthProvider: "anthropic",
     customProvider: {
       name: "Ollama",
       baseUrl: "http://127.0.0.1:11434/v1",
@@ -33,6 +35,7 @@ export class LiltSettingsModal extends LitElement {
   @state() private _authCodeValue = "";
   @state() private _saveStatus = "";
   @state() private _providerSelStatus = "";
+  @state() private _oauthProvider: OAuthProviderId = "anthropic";
 
   private _boundKeydown = (e: KeyboardEvent) => {
     if (e.key === "Escape" && this.open) this._close();
@@ -57,6 +60,7 @@ export class LiltSettingsModal extends LitElement {
       this._customBaseUrl = cp.baseUrl;
       this._customApiKey = cp.apiKey;
       this._customModelId = cp.modelId;
+      this._oauthProvider = this.providerSettings.oauthProvider;
       this._httpProxy = np.httpProxy;
       this._httpsProxy = np.httpsProxy;
       this._noProxy = np.noProxy;
@@ -163,6 +167,22 @@ export class LiltSettingsModal extends LitElement {
     }
     .provider-section p {
       margin-bottom: 10px;
+    }
+    .oauth-provider-row {
+      margin-top: 10px;
+      display: grid;
+      gap: 4px;
+      max-width: 360px;
+      color: #374151;
+      font-size: 14px;
+    }
+    .oauth-provider-row select {
+      border: 1px solid var(--line, #dddddf);
+      border-radius: 9px;
+      padding: 9px 10px;
+      background: #fff;
+      font-family: "Hiragino Sans", "Yu Gothic", sans-serif;
+      font-size: 14px;
     }
     .provider-section.active {
       border-color: #111827;
@@ -280,7 +300,7 @@ export class LiltSettingsModal extends LitElement {
             </div>
             <div class="settings-main">
               <h3>Providers &amp; Models</h3>
-              <p>Claude OAuth と Custom Provider（OpenAI Completions Compatible）を設定できます。</p>
+              <p>OAuth Provider と Custom Provider（OpenAI Completions Compatible）を設定できます。</p>
 
               <div class="provider-choice">
                 <label>
@@ -291,7 +311,7 @@ export class LiltSettingsModal extends LitElement {
                     .checked=${isClaudeActive}
                     @change=${() => this._changeProvider("claude")}
                   />
-                  Claude
+                  OAuth Provider
                 </label>
                 <label>
                   <input
@@ -307,11 +327,24 @@ export class LiltSettingsModal extends LitElement {
               </div>
 
               <section class="provider-section ${isClaudeActive ? "active" : ""}">
-                <h4>Claude Authorization</h4>
-                <p>Claude OAuth を開始して、表示された認証コードを入力してください。</p>
+                <h4>OAuth Authorization</h4>
+                <p>OAuth 認証を開始して、表示された認証コードを入力してください。</p>
+                <label class="oauth-provider-row">
+                  OAuth Provider
+                  <select
+                    id="oauth-provider"
+                    .value=${this._oauthProvider}
+                    @change=${(e: Event) => {
+                      const value = (e.target as HTMLSelectElement).value as OAuthProviderId;
+                      this._oauthProvider = OAUTH_PROVIDER_IDS.includes(value) ? value : "anthropic";
+                    }}
+                  >
+                    ${OAUTH_PROVIDER_IDS.map((id) => html`<option value=${id}>${this._oauthProviderLabel(id)}</option>`)}
+                  </select>
+                </label>
                 <div class="auth-row">
                   <button .disabled=${oauthBtnDisabled} @click=${this._startOauth}>
-                    Claude OAuth で認証
+                    OAuth で認証
                   </button>
                   <span class="status">${authMessage}</span>
                 </div>
@@ -336,7 +369,7 @@ export class LiltSettingsModal extends LitElement {
                   </button>
                 </div>
                 <div class="status">
-                  Claude 画面の「Authentication Code / Paste this into Claude Code:」で表示された値を貼り付けて送信してください。
+                  認証画面の「Authentication Code / Paste this into ...」で表示された値を貼り付けて送信してください。
                 </div>
               </section>
 
@@ -446,10 +479,14 @@ export class LiltSettingsModal extends LitElement {
   }
 
   private async _changeProvider(provider: ActiveProvider) {
-    const next: ProviderSettings = { ...this.providerSettings, activeProvider: provider };
+    const next: ProviderSettings = {
+      ...this.providerSettings,
+      activeProvider: provider,
+      oauthProvider: this._oauthProvider
+    };
     const result = await window.lilto.saveProviderSettings(next);
     if (result.ok) {
-      this._providerSelStatus = provider === "claude" ? "現在: Claude" : "現在: Custom Provider";
+      this._providerSelStatus = provider === "claude" ? "現在: OAuth Provider" : "現在: Custom Provider";
       this.dispatchEvent(
         new CustomEvent("provider-settings-changed", {
           detail: result.state,
@@ -467,6 +504,7 @@ export class LiltSettingsModal extends LitElement {
     }
     const next: ProviderSettings = {
       ...this.providerSettings,
+      oauthProvider: this._oauthProvider,
       customProvider: {
         name: this._customName.trim(),
         baseUrl: this._customBaseUrl.trim(),
@@ -495,6 +533,23 @@ export class LiltSettingsModal extends LitElement {
   }
 
   private async _startOauth() {
+    const saveResult = await window.lilto.saveProviderSettings({
+      ...this.providerSettings,
+      oauthProvider: this._oauthProvider
+    });
+    if (saveResult.ok) {
+      this.dispatchEvent(
+        new CustomEvent("provider-settings-changed", {
+          detail: saveResult.state,
+          bubbles: true,
+          composed: true
+        })
+      );
+    } else {
+      this._saveStatus = `${saveResult.error.code}: ${saveResult.error.message}`;
+      return;
+    }
+
     const result = await window.lilto.startClaudeOauth();
     this.dispatchEvent(
       new CustomEvent("auth-state-updated", {
@@ -518,6 +573,23 @@ export class LiltSettingsModal extends LitElement {
           composed: true
         })
       );
+    }
+  }
+
+  private _oauthProviderLabel(provider: OAuthProviderId): string {
+    switch (provider) {
+      case "anthropic":
+        return "Anthropic";
+      case "openai-codex":
+        return "OpenAI Codex";
+      case "github-copilot":
+        return "GitHub Copilot";
+      case "google-gemini-cli":
+        return "Google Gemini CLI";
+      case "google-antigravity":
+        return "Google Antigravity";
+      default:
+        return provider;
     }
   }
 }

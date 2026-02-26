@@ -1,4 +1,12 @@
 export type ActiveProvider = "claude" | "custom-openai-completions";
+export const OAUTH_PROVIDER_IDS = [
+  "anthropic",
+  "openai-codex",
+  "github-copilot",
+  "google-gemini-cli",
+  "google-antigravity"
+] as const;
+export type OAuthProviderId = (typeof OAUTH_PROVIDER_IDS)[number];
 
 export type CustomProviderSettings = {
   name: string;
@@ -15,6 +23,7 @@ export type NetworkProxySettings = {
 
 export type ProviderSettings = {
   activeProvider: ActiveProvider;
+  oauthProvider: OAuthProviderId;
   customProvider: CustomProviderSettings;
   networkProxy: NetworkProxySettings;
   updatedAt: number;

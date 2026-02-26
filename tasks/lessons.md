@@ -78,3 +78,15 @@
 | `openspec-ff-change` で `add-corporate-proxy-support` の proposal/design/specs/tasks を一括作成。 | Modified capability の delta spec で既存 Requirement 見出しを変えると、archive 同期時に意図した更新として扱われない。 | `MODIFIED Requirements` を書くときは `openspec/specs/<capability>/spec.md` の見出し名を厳密一致で再利用し、作成後に `openspec status --change <name>` で `4/4` を確認する。 |
 | `openspec-apply-change` で `add-corporate-proxy-support` を実装し、擬似 Proxy 必須 E2E（未設定失敗→設定成功）まで完了。 | Proxy 必須検証を既存 E2E に後付けすると、テスト環境準備（擬似外部API/擬似Proxy）と UI 操作の責務が混ざり、失敗原因の切り分けが遅れる。 | Proxy 系 E2E は先に `scripts` へ環境フィクスチャ（ターゲット/Proxy）を分離実装し、シナリオ側は「未設定失敗・設定成功」の観測に専念させる。 |
 | `add-corporate-proxy-support` を同期付きで archive し、main specs へ反映。 | archive 前の同期確認を省くと、delta spec の更新内容（追加/変更件数）が把握できず、意図した仕様反映かを説明しづらい。 | `archive` 実行時は同期サマリ（`+/-/~` 件数と capability 別内訳）を必ず確認し、完了報告に「どの spec が何件更新されたか」を明記する。 |
+
+## 2026-02-26
+
+| 変更内容 | ミス/課題 | 再発防止ルール |
+|---|---|---|
+| `expand-oauthprovider-config-options` の OpenSpec change を新規作成し、初回 artifact（proposal）指示まで取得。 | OAuth provider 候補が複数ある要件で change 名を曖昧にすると、proposal 以降で対象範囲（許可値追加かUI改善か）がぶれやすい。 | `/opsx:new` 開始時に「対象設定（OAuthProvider）」「期待する許可値追加」を1行で固定し、目的が伝わる kebab-case 名で作成して `status` と `instructions` 表示で停止する。 |
+| `openspec-ff-change` で `expand-oauthprovider-config-options` の proposal/design/specs/tasks を一括作成。 | Modified capability の delta spec で既存 Requirement 本文を省略すると、archive 時に仕様詳細が欠落して意図しない差分になる。 | `## MODIFIED Requirements` では既存 `### Requirement:` ごとに全文（説明＋全 Scenario）をコピーして更新し、作成後に `openspec status --change <name>` で `4/4` を確認する。 |
+| `openspec-apply-change` で `expand-oauthprovider-config-options` を実装し、OAuth provider 選択肢5種・保存復元・E2E検証まで完了。 | GUI 検証を `npm run e2e:electron` のみに依存すると、`prebuild` の外部取得失敗（GitHub 403）で本体E2Eに到達できない場合がある。 | GUI変更時はまず `npm run e2e:electron` を試行し、外部依存で阻害された場合は `npx tsc -p tsconfig.json && npx vite build && node scripts/e2e-electron-agent-browser.js` で本体E2Eを実行し、`test/artifacts/electron-e2e.png` 生成を確認する。 |
+| sync script を API から git 取得へ変更。 | GitHub API rate limit 403 で `prebuild` が停止した。 | 起動必須の取得は API より `git clone --sparse` を優先し、起動不能リスクを下げる。 |
+| 設定画面の OAuth セクション文言を Claude 固有表現から provider 汎用表現へ修正。 | provider 対応を実装しても UI 文言に Claude 固有ラベルが残ると、機能実態と表示が不一致になり誤解を招く。 | provider 拡張時は UI 文言レビューで「特定provider名が残っていないか」をチェックし、セクション見出し・ボタン文言・補助説明を同時更新する。 |
+| メイン画面の未準備ステータス文言を「プロバイダー設定が必要」へ統一。 | provider 対応後にステータスメッセージが provider 固有名を含むままだと、UX 文言と設定モデルがずれる。 | provider 複数対応時の状態文言は特定サービス名を避け、設定アクションを示す汎用表現（例: プロバイダー設定が必要）へ統一する。 |
+| OAuth Provider を切り替えても認証ボタンで Claude サイトへ遷移する不具合を修正。 | OAuth Provider 選択値を UI ローカル状態に保持しただけで認証開始すると、保存済み設定（既定 anthropic）が使われ続ける。 | 設定依存のアクション（OAuth 開始）では、実行直前に対象設定を永続化してから処理を呼び出し、UI状態と実行時設定の乖離を防ぐ。 |
