@@ -20,6 +20,8 @@ export type AgentResult = AgentSuccess | AgentFailure;
 
 type AgentEvent = {
   type: string;
+  delta?: string;
+  content?: string;
   toolCallId?: string;
   toolName?: string;
   args?: unknown;
@@ -27,6 +29,7 @@ type AgentEvent = {
   assistantMessageEvent?: {
     type?: string;
     delta?: string;
+    thinking?: string;
     content?: string;
     message?: {
       content?: Array<{ type?: string; text?: string; thinking?: string }>;
@@ -245,6 +248,18 @@ function normalizeNoProxyEntries(noProxyValue: string): string[] {
     .filter(Boolean);
 }
 
+function getProxyValue(upper: string, lower: string): string {
+  return process.env[upper]?.trim() || process.env[lower]?.trim() || "";
+}
+
+function getProxyEnvironmentValues(): { httpProxy: string; httpsProxy: string; noProxy: string } {
+  return {
+    httpProxy: getProxyValue("HTTP_PROXY", "http_proxy"),
+    httpsProxy: getProxyValue("HTTPS_PROXY", "https_proxy"),
+    noProxy: getProxyValue("NO_PROXY", "no_proxy")
+  };
+}
+
 function shouldBypassProxyForHost(hostname: string, noProxyValue: string): boolean {
   const normalizedHost = hostname.trim().toLowerCase();
   if (!normalizedHost) return false;
@@ -258,15 +273,18 @@ function shouldBypassProxyForHost(hostname: string, noProxyValue: string): boole
   });
 }
 
-function resolveProxyForTarget(targetUrl: URL, settings: ProviderSettings): string {
-  if (shouldBypassProxyForHost(targetUrl.hostname, settings.networkProxy.noProxy)) {
+function resolveProxyForTarget(
+  targetUrl: URL,
+  proxyEnv: { httpProxy: string; httpsProxy: string; noProxy: string }
+): string {
+  if (shouldBypassProxyForHost(targetUrl.hostname, proxyEnv.noProxy)) {
     return "";
   }
   if (targetUrl.protocol === "https:") {
-    return settings.networkProxy.httpsProxy.trim() || settings.networkProxy.httpProxy.trim();
+    return proxyEnv.httpsProxy || proxyEnv.httpProxy;
   }
   if (targetUrl.protocol === "http:") {
-    return settings.networkProxy.httpProxy.trim();
+    return proxyEnv.httpProxy;
   }
   return "";
 }
@@ -280,7 +298,10 @@ async function runProxyPrecheckIfEnabled(settings: ProviderSettings): Promise<vo
     throw new Error("LILTO_PROXY_TEST_URL は http URL のみサポートします");
   }
 
-  const proxyUrlText = resolveProxyForTarget(targetUrl, settings);
+  const proxyEnv = settings.networkProxy.useProxy
+    ? getProxyEnvironmentValues()
+    : { httpProxy: "", httpsProxy: "", noProxy: "" };
+  const proxyUrlText = resolveProxyForTarget(targetUrl, proxyEnv);
   await new Promise<void>((resolve, reject) => {
     const finishWithResponse = (statusCode: number | undefined, body: string) => {
       if (statusCode && statusCode >= 200 && statusCode < 300) {
@@ -340,13 +361,16 @@ async function runProxyPrecheckIfEnabled(settings: ProviderSettings): Promise<vo
 }
 
 function withScopedProxyEnvironment(settings: ProviderSettings): () => void {
+  const source = settings.networkProxy.useProxy
+    ? getProxyEnvironmentValues()
+    : { httpProxy: "", httpsProxy: "", noProxy: "" };
   const targetEntries: Array<[string, string]> = [
-    ["HTTP_PROXY", settings.networkProxy.httpProxy.trim()],
-    ["http_proxy", settings.networkProxy.httpProxy.trim()],
-    ["HTTPS_PROXY", settings.networkProxy.httpsProxy.trim()],
-    ["https_proxy", settings.networkProxy.httpsProxy.trim()],
-    ["NO_PROXY", settings.networkProxy.noProxy.trim()],
-    ["no_proxy", settings.networkProxy.noProxy.trim()]
+    ["HTTP_PROXY", source.httpProxy],
+    ["http_proxy", source.httpProxy],
+    ["HTTPS_PROXY", source.httpsProxy],
+    ["https_proxy", source.httpsProxy],
+    ["NO_PROXY", source.noProxy],
+    ["no_proxy", source.noProxy]
   ];
   const previous = new Map<string, string | undefined>();
   for (const [key, value] of targetEntries) {
@@ -426,12 +450,38 @@ export class AgentRuntime {
       const session = await this.ensureSession(options);
       let streamOutput = "";
       let finalOutput = "";
+      let thinkingDeltaSeenInBlock = false;
 
       const unsubscribe = session.subscribe((event) => {
+        const assistantEventType = event.type === "message_update" ? event.assistantMessageEvent?.type : undefined;
+
         if (hooks?.onLoopEvent) {
-          if (event.type === "thinking_start") {
+          if (event.type === "thinking_start" || assistantEventType === "thinking_start") {
+            thinkingDeltaSeenInBlock = false;
             hooks.onLoopEvent({ type: "thinking_start", requestId: hooks.requestId });
-          } else if (event.type === "thinking_end") {
+          } else if (
+            (event.type === "thinking_delta" && typeof event.delta === "string") ||
+            (assistantEventType === "thinking_delta" && typeof event.assistantMessageEvent?.delta === "string")
+          ) {
+            const thinkingDelta = event.type === "thinking_delta" ? event.delta : event.assistantMessageEvent?.delta;
+            if (!thinkingDelta) return;
+            thinkingDeltaSeenInBlock = true;
+            hooks.onLoopEvent({
+              type: "thinking_delta",
+              requestId: hooks.requestId,
+              delta: thinkingDelta
+            });
+          } else if (event.type === "thinking_end" || assistantEventType === "thinking_end") {
+            const thinkingContent =
+              event.type === "thinking_end" ? event.content : event.assistantMessageEvent?.content;
+            if (!thinkingDeltaSeenInBlock && typeof thinkingContent === "string" && thinkingContent.trim()) {
+              hooks.onLoopEvent({
+                type: "thinking_delta",
+                requestId: hooks.requestId,
+                delta: thinkingContent
+              });
+            }
+            thinkingDeltaSeenInBlock = false;
             hooks.onLoopEvent({ type: "thinking_end", requestId: hooks.requestId });
           } else if (
             event.type === "tool_execution_start" &&
@@ -540,7 +590,64 @@ export class AgentRuntime {
             error: standardizeError(error, "PROXY_CONNECTION_FAILED")
           };
         }
-        const mock = `[E2E_MOCK] ${text}`;
+        if (hooks?.onLoopEvent) {
+          const pause = async () => {
+            await new Promise((resolve) => setTimeout(resolve, 15));
+          };
+
+          hooks.onLoopEvent({ type: "thinking_start", requestId: hooks.requestId });
+          await pause();
+          hooks.onLoopEvent({
+            type: "thinking_delta",
+            requestId: hooks.requestId,
+            delta: "要求を分解し、必要な手順を確認します。\n"
+          });
+          await pause();
+          hooks.onLoopEvent({
+            type: "thinking_delta",
+            requestId: hooks.requestId,
+            delta: "読み取りとコマンド実行の順で進めます。\n"
+          });
+          await pause();
+          hooks.onLoopEvent({ type: "thinking_end", requestId: hooks.requestId });
+          await pause();
+
+          hooks.onLoopEvent({
+            type: "tool_execution_start",
+            requestId: hooks.requestId,
+            toolCallId: "mock-read-1",
+            toolName: "read_file",
+            args: { command: "read_file README.md" }
+          });
+          await pause();
+          hooks.onLoopEvent({
+            type: "tool_execution_end",
+            requestId: hooks.requestId,
+            toolCallId: "mock-read-1",
+            toolName: "read_file",
+            isError: false
+          });
+          await pause();
+
+          hooks.onLoopEvent({
+            type: "tool_execution_start",
+            requestId: hooks.requestId,
+            toolCallId: "mock-run-1",
+            toolName: "run_in_terminal",
+            args: { command: "npm run check" }
+          });
+          await pause();
+          hooks.onLoopEvent({
+            type: "tool_execution_end",
+            requestId: hooks.requestId,
+            toolCallId: "mock-run-1",
+            toolName: "run_in_terminal",
+            isError: false
+          });
+          await pause();
+        }
+
+        const mock = `[E2E_MOCK_FINAL] 要求「${text}」を処理し、複数コマンドを実行して回答しました。`;
         this.logger.info("agent_prompt_mock_completed", { outputLength: mock.length });
         return { ok: true, text: mock };
       }

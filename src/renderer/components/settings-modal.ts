@@ -15,9 +15,7 @@ export class LiltSettingsModal extends LitElement {
       modelId: "qwen2.5:0.5b"
     },
     networkProxy: {
-      httpProxy: "",
-      httpsProxy: "",
-      noProxy: ""
+      useProxy: false
     },
     updatedAt: Date.now()
   };
@@ -27,9 +25,7 @@ export class LiltSettingsModal extends LitElement {
   @state() private _customBaseUrl = "";
   @state() private _customApiKey = "";
   @state() private _customModelId = "";
-  @state() private _httpProxy = "";
-  @state() private _httpsProxy = "";
-  @state() private _noProxy = "";
+  @state() private _useProxy = false;
   @state() private _authCodeValue = "";
   @state() private _saveStatus = "";
   @state() private _providerSelStatus = "";
@@ -57,9 +53,7 @@ export class LiltSettingsModal extends LitElement {
       this._customBaseUrl = cp.baseUrl;
       this._customApiKey = cp.apiKey;
       this._customModelId = cp.modelId;
-      this._httpProxy = np.httpProxy;
-      this._httpsProxy = np.httpsProxy;
-      this._noProxy = np.noProxy;
+      this._useProxy = np.useProxy;
     }
     if (changedProps.has("authState")) {
       const as = this.authState;
@@ -392,37 +386,15 @@ export class LiltSettingsModal extends LitElement {
                 <h4>Network Proxy</h4>
                 <div class="input-grid">
                   <label>
-                    HTTP Proxy
                     <input
-                      id="http-proxy"
-                      placeholder="http://proxy.example.local:8080"
-                      .value=${this._httpProxy}
-                      @input=${(e: InputEvent) => {
-                        this._httpProxy = (e.target as HTMLInputElement).value;
+                      id="use-proxy"
+                      type="checkbox"
+                      .checked=${this._useProxy}
+                      @change=${(e: InputEvent) => {
+                        this._useProxy = (e.target as HTMLInputElement).checked;
                       }}
                     />
-                  </label>
-                  <label>
-                    HTTPS Proxy
-                    <input
-                      id="https-proxy"
-                      placeholder="http://proxy.example.local:8080"
-                      .value=${this._httpsProxy}
-                      @input=${(e: InputEvent) => {
-                        this._httpsProxy = (e.target as HTMLInputElement).value;
-                      }}
-                    />
-                  </label>
-                  <label>
-                    NO_PROXY
-                    <input
-                      id="no-proxy"
-                      placeholder="localhost,127.0.0.1,.internal.local"
-                      .value=${this._noProxy}
-                      @input=${(e: InputEvent) => {
-                        this._noProxy = (e.target as HTMLInputElement).value;
-                      }}
-                    />
+                    Proxy を使う（HTTP_PROXY / HTTPS_PROXY / NO_PROXY を利用）
                   </label>
                 </div>
                 <div class="provider-actions">
@@ -474,9 +446,7 @@ export class LiltSettingsModal extends LitElement {
         modelId: this._customModelId.trim() || "qwen2.5:0.5b"
       },
       networkProxy: {
-        httpProxy: this._httpProxy.trim(),
-        httpsProxy: this._httpsProxy.trim(),
-        noProxy: this._noProxy.trim()
+        useProxy: this._useProxy
       }
     };
     const result = await window.lilto.saveProviderSettings(next);

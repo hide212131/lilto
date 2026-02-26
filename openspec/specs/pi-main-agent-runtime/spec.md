@@ -74,13 +74,13 @@ TBD - created by archiving change add-pi-sdk-main-process-agent. Update Purpose 
 - **THEN** Renderer は終端通知を受信できる
 
 ### Requirement: 外部通信への Proxy 設定適用
-システムは、外部ネットワークへ接続するエージェント実行時に、保存済み Proxy 設定を解決して通信経路へ適用しなければならない（MUST）。
+システムは、外部ネットワークへ接続するエージェント実行時に、保存済み `networkProxy.useProxy` 設定を解決して通信経路へ適用しなければならない（MUST）。
 
 #### Scenario: Proxy 設定ありで外部通信が Proxy 経由になる
-- **WHEN** `httpProxy` または `httpsProxy` が設定された状態で問い合わせを実行する
-- **THEN** Main は外部通信を Proxy 経由で実行する
+- **WHEN** `networkProxy.useProxy = true` で問い合わせを実行する
+- **THEN** Main は実行環境の `HTTP_PROXY` / `HTTPS_PROXY` 設定を利用した通信経路で外部通信を実行する
 
-#### Scenario: NO_PROXY 対象は Proxy 適用を除外する
-- **WHEN** 接続先ホストが `noProxy` に含まれる状態で問い合わせを実行する
-- **THEN** Main は当該接続先に Proxy を適用しない
+#### Scenario: Proxy 設定オフで直接経路を選択する
+- **WHEN** `networkProxy.useProxy = false` で問い合わせを実行する
+- **THEN** Main は Proxy 強制を行わず、直接経路で外部通信を実行する
 

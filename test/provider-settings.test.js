@@ -24,9 +24,7 @@ test("ProviderSettingsService は保存した設定を再読込できる", () =>
       modelId: "gpt-4o-mini"
     },
     networkProxy: {
-      httpProxy: "http://proxy.local:8080",
-      httpsProxy: "http://proxy.local:8080",
-      noProxy: "localhost,127.0.0.1"
+      useProxy: true
     }
   });
 
@@ -42,8 +40,7 @@ test("ProviderSettingsService は保存した設定を再読込できる", () =>
   assert.equal(state.activeProvider, "custom-openai-completions");
   assert.equal(state.customProvider.name, "my-custom");
   assert.equal(state.customProvider.baseUrl, "https://example.com/v1");
-  assert.equal(state.networkProxy.httpProxy, "http://proxy.local:8080");
-  assert.equal(state.networkProxy.noProxy, "localhost,127.0.0.1");
+  assert.equal(state.networkProxy.useProxy, true);
 });
 
 test("ProviderSettingsService は不正 payload を拒否する", () => {
@@ -60,7 +57,7 @@ test("ProviderSettingsService は不正 payload を拒否する", () => {
   assert.equal(result.error.code, "INVALID_PROVIDER_SETTINGS");
 });
 
-test("ProviderSettingsService は不正な Proxy URL を拒否する", () => {
+test("ProviderSettingsService は不正な networkProxy payload を拒否する", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "lilto-provider-"));
   const storagePath = path.join(tempDir, "providers.json");
 
@@ -78,11 +75,29 @@ test("ProviderSettingsService は不正な Proxy URL を拒否する", () => {
       modelId: "gpt-4o-mini"
     },
     networkProxy: {
-      httpProxy: "not-a-url",
-      httpsProxy: "",
-      noProxy: ""
+      useProxy: "yes"
     }
   });
   assert.equal(result.ok, false);
   assert.equal(result.error.code, "INVALID_PROVIDER_SETTINGS");
+});
+
+test("ProviderSettingsService は Proxy 環境変数がある場合 useProxy を既定で ON にする", () => {
+  const prevHttpProxy = process.env.HTTP_PROXY;
+  process.env.HTTP_PROXY = "http://proxy.local:8080";
+  try {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "lilto-provider-"));
+    const storagePath = path.join(tempDir, "providers.json");
+    const service = new ProviderSettingsService({
+      storagePath,
+      logger: { info() {}, error() {} }
+    });
+    assert.equal(service.getState().networkProxy.useProxy, true);
+  } finally {
+    if (prevHttpProxy === undefined) {
+      delete process.env.HTTP_PROXY;
+    } else {
+      process.env.HTTP_PROXY = prevHttpProxy;
+    }
+  }
 });

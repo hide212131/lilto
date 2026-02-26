@@ -138,6 +138,20 @@ function setSettingsInputValue(id, value) {
   );
 }
 
+function setSettingsCheckboxValue(id, checked) {
+  evalJs(
+    `(() => {
+      const input = document.querySelector('lilt-app')
+        ?.shadowRoot?.querySelector('lilt-settings-modal')
+        ?.shadowRoot?.querySelector('#${id}');
+      if (!input) return 'missing';
+      input.checked = ${checked ? "true" : "false"};
+      input.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+      return 'ok';
+    })()`
+  );
+}
+
 function clickSaveProviderSettingsButton() {
   evalJs(
     "document.querySelector('lilt-app')?.shadowRoot?.querySelector('lilt-settings-modal')?.shadowRoot?.querySelector('.provider-actions button')?.click()"
@@ -251,6 +265,20 @@ async function waitForResponse(expectedText, timeoutMs = 15000) {
   throw new Error(`Timed out waiting for response. Expected: "${expectedText}". Messages: "${getMessagesText()}"`);
 }
 
+async function waitForMessagesContaining(expectedTexts, timeoutMs = 15000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const msgs = getMessagesText();
+    if (expectedTexts.every((text) => msgs.includes(text))) {
+      return msgs;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error(
+    `Timed out waiting for messages: ${expectedTexts.join(", ")}. Messages: "${getMessagesText()}"`
+  );
+}
+
 async function main() {
   fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
   const proxyFixture = await createProxyFixture();
@@ -265,7 +293,10 @@ async function main() {
     env: {
       ...process.env,
       LILTO_E2E_MOCK: "1",
-      LILTO_PROXY_TEST_URL: proxyFixture.targetUrl
+      LILTO_PROXY_TEST_URL: proxyFixture.targetUrl,
+      HTTP_PROXY: proxyFixture.proxyUrl,
+      HTTPS_PROXY: proxyFixture.proxyUrl,
+      NO_PROXY: ""
     },
     stdio: ["ignore", "pipe", "pipe"]
   });
@@ -311,23 +342,15 @@ async function main() {
     agentBrowser(["screenshot", ssSettings]);
     console.log(`✓ Settings screenshot: ${ssSettings}`);
 
-    // 6. E2E 用に Custom Provider を保存（Proxy は未設定）
+    // 6. E2E 用に Custom Provider を保存（Proxy は UI で OFF）
     switchToCustomProvider();
     setSettingsInputValue("custom-provider-name", "Proxy E2E Provider");
     setSettingsInputValue("custom-base-url", "http://127.0.0.1:11434/v1");
     setSettingsInputValue("custom-model-id", "qwen2.5:0.5b");
-    setSettingsInputValue("http-proxy", "");
-    setSettingsInputValue("https-proxy", "");
-    setSettingsInputValue("no-proxy", "");
+    setSettingsCheckboxValue("use-proxy", false);
     clickSaveProviderSettingsButton();
     await waitForCustomSaveStatus("Provider 設定を保存しました。");
-    setSettingsInputValue("http-proxy", "invalid-proxy-url");
-    clickSaveProviderSettingsButton();
-    await waitForCustomSaveStatus("INVALID_PROVIDER_SETTINGS");
-    setSettingsInputValue("http-proxy", "");
-    clickSaveProviderSettingsButton();
-    await waitForCustomSaveStatus("Provider 設定を保存しました。");
-    console.log("✓ Custom Provider saved without proxy");
+    console.log("✓ Custom Provider saved with proxy usage disabled");
 
     // 7. 設定モーダルを閉じる
     clickSettingsClose();
@@ -356,19 +379,17 @@ async function main() {
     await waitForResponse("PROXY_CONNECTION_FAILED");
     console.log("✓ Proxy missing failure detected");
 
-    // 11. Settings で Proxy を設定して保存
+    // 11. Settings で Proxy 利用を有効化して保存（環境変数を利用）
     clickSettingsButton();
     await waitForModalOpen();
     switchToCustomProvider();
-    setSettingsInputValue("http-proxy", proxyFixture.proxyUrl);
-    setSettingsInputValue("https-proxy", proxyFixture.proxyUrl);
-    setSettingsInputValue("no-proxy", "");
+    setSettingsCheckboxValue("use-proxy", true);
     clickSaveProviderSettingsButton();
     await waitForCustomSaveStatus("Provider 設定を保存しました。");
     clickSettingsClose();
     await waitForModalClose();
     await waitForSendEnabled();
-    console.log("✓ Proxy settings saved");
+    console.log("✓ Proxy usage enabled");
 
     // 12. Proxy 設定ありで送信し、成功を確認
     const secondMessage = "E2E proxy check with proxy";
@@ -376,9 +397,14 @@ async function main() {
     fillComposerText(secondMessage);
     clickComposerSend();
 
-    const expectedMock = `[E2E_MOCK] ${secondMessage}`;
-    await waitForResponse(expectedMock);
-    console.log(`✓ Mock response received: "${expectedMock}"`);
+    const expectedFinal = `[E2E_MOCK_FINAL] 要求「${secondMessage}」を処理し、複数コマンドを実行して回答しました。`;
+    await waitForResponse(expectedFinal);
+    await waitForMessagesContaining([
+      "考え中...",
+      "コマンド実行: read_file",
+      "コマンド実行: run_in_terminal"
+    ]);
+    console.log(`✓ Mock loop progress + final response received: "${expectedFinal}"`);
 
     // 13. 最終ステータス確認
     const finalStatus = await waitForStatus(["待機中"]);

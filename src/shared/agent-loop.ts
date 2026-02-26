@@ -3,6 +3,7 @@ export type AgentRunEndStatus = "completed" | "failed" | "aborted";
 export type AgentLoopEvent =
   | { type: "run_start"; requestId: string }
   | { type: "thinking_start"; requestId: string }
+  | { type: "thinking_delta"; requestId: string; delta: string }
   | { type: "thinking_end"; requestId: string }
   | { type: "tool_execution_start"; requestId: string; toolCallId: string; toolName: string; args?: unknown }
   | { type: "tool_execution_end"; requestId: string; toolCallId: string; toolName: string; isError: boolean }
@@ -46,6 +47,7 @@ export function reduceLoopState(state: LoopState, event: AgentLoopEvent): LoopSt
       };
 
     case "thinking_start":
+    case "thinking_delta":
     case "thinking_end":
       if (!isCurrentRequest(state, event.requestId)) return state;
       return {

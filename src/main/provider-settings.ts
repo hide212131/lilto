@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { createLogger, type Logger } from "./logger";
 import {
-  DEFAULT_NETWORK_PROXY_SETTINGS,
   type ActiveProvider,
   type CustomProviderSettings,
   type NetworkProxySettings,
@@ -22,17 +21,24 @@ export type ProviderSettingsSaveResult =
 
 const DEFAULT_MODEL_ID = "qwen2.5:0.5b";
 
-const DEFAULT_SETTINGS: ProviderSettings = {
-  activeProvider: "claude",
-  customProvider: {
-    name: "Ollama",
-    baseUrl: "http://127.0.0.1:11434/v1",
-    apiKey: "",
-    modelId: DEFAULT_MODEL_ID
-  },
-  networkProxy: { ...DEFAULT_NETWORK_PROXY_SETTINGS },
-  updatedAt: Date.now()
-};
+function hasProxyEnvironment(): boolean {
+  const vars = [process.env.HTTP_PROXY, process.env.http_proxy, process.env.HTTPS_PROXY, process.env.https_proxy];
+  return vars.some((value) => typeof value === "string" && value.trim().length > 0);
+}
+
+function createDefaultSettings(): ProviderSettings {
+  return {
+    activeProvider: "claude",
+    customProvider: {
+      name: "Ollama",
+      baseUrl: "http://127.0.0.1:11434/v1",
+      apiKey: "",
+      modelId: DEFAULT_MODEL_ID
+    },
+    networkProxy: { useProxy: hasProxyEnvironment() },
+    updatedAt: Date.now()
+  };
+}
 
 function toTrimmedString(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value.trim() : fallback;
@@ -52,6 +58,8 @@ function normalizeSettings(value: unknown): ProviderSettings {
     record.networkProxy && typeof record.networkProxy === "object"
       ? (record.networkProxy as Record<string, unknown>)
       : {};
+  const defaultUseProxy = hasProxyEnvironment();
+  const useProxy = typeof proxy.useProxy === "boolean" ? proxy.useProxy : defaultUseProxy;
 
   return {
     activeProvider: normalizeActiveProvider(record.activeProvider),
@@ -62,22 +70,10 @@ function normalizeSettings(value: unknown): ProviderSettings {
       modelId: toTrimmedString(custom.modelId, DEFAULT_MODEL_ID) || DEFAULT_MODEL_ID
     },
     networkProxy: {
-      httpProxy: toTrimmedString(proxy.httpProxy),
-      httpsProxy: toTrimmedString(proxy.httpsProxy),
-      noProxy: toTrimmedString(proxy.noProxy)
+      useProxy
     },
     updatedAt: typeof record.updatedAt === "number" ? record.updatedAt : Date.now()
   };
-}
-
-function isValidProxyUrl(value: string): boolean {
-  if (!value.trim()) return true;
-  try {
-    const parsed = new URL(value);
-    return parsed.protocol === "http:" || parsed.protocol === "https:";
-  } catch {
-    return false;
-  }
 }
 
 function isValidSavePayload(payload: unknown): payload is {
@@ -105,17 +101,13 @@ function isValidSavePayload(payload: unknown): payload is {
   if (record.networkProxy === undefined) return true;
   if (!record.networkProxy || typeof record.networkProxy !== "object") return false;
   const proxy = record.networkProxy as Record<string, unknown>;
-  return (
-    typeof proxy.httpProxy === "string" &&
-    typeof proxy.httpsProxy === "string" &&
-    typeof proxy.noProxy === "string"
-  );
+  return typeof proxy.useProxy === "boolean";
 }
 
 export class ProviderSettingsService {
   private readonly logger: Logger;
   private readonly storagePath: string;
-  private state: ProviderSettings = { ...DEFAULT_SETTINGS };
+  private state: ProviderSettings = createDefaultSettings();
 
   constructor({
     logger = createLogger("providers"),
@@ -138,7 +130,7 @@ export class ProviderSettingsService {
       this.state = normalizeSettings(JSON.parse(raw));
     } catch (error) {
       this.logger.error("providers_load_failed", { error: String(error) });
-      this.state = { ...DEFAULT_SETTINGS, updatedAt: Date.now() };
+      this.state = createDefaultSettings();
     }
   }
 
@@ -166,15 +158,6 @@ export class ProviderSettingsService {
     }
 
     const normalized = normalizeSettings(payload);
-    if (!isValidProxyUrl(normalized.networkProxy.httpProxy) || !isValidProxyUrl(normalized.networkProxy.httpsProxy)) {
-      return {
-        ok: false,
-        error: {
-          code: "INVALID_PROVIDER_SETTINGS",
-          message: "Proxy URL は http(s) 形式で入力してください"
-        }
-      };
-    }
 
     this.state = normalized;
     this.state.updatedAt = Date.now();

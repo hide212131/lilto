@@ -24,9 +24,7 @@ function createProviderSettings(overrides = {}) {
       modelId: "gpt-4.1-mini"
     },
     networkProxy: {
-      httpProxy: "",
-      httpsProxy: "",
-      noProxy: ""
+      useProxy: false
     },
     updatedAt: Date.now(),
     ...overrides
@@ -290,6 +288,156 @@ test("Proxy precheck 失敗時に標準化エラーを返す", async () => {
   }
 });
 
+test("useProxy が OFF の場合は環境変数の Proxy を使わない", async () => {
+  const prevHttpProxy = process.env.HTTP_PROXY;
+  process.env.HTTP_PROXY = "http://proxy.local:8080";
+  let observedHttpProxy = null;
+
+  try {
+    const runtime = new AgentRuntime({
+      authService: createAuthService("authenticated"),
+      createSession: async () => {
+        observedHttpProxy = process.env.HTTP_PROXY ?? null;
+        return {
+          subscribe(listener) {
+            listener({
+              type: "message_update",
+              assistantMessageEvent: { type: "text_delta", delta: "ok" }
+            });
+            return () => {};
+          },
+          async prompt() {}
+        };
+      },
+      logger: { info() {}, error() {} }
+    });
+
+    const result = await runtime.submitPrompt("test", createProviderSettings());
+    assert.equal(result.ok, true);
+    assert.equal(observedHttpProxy, null);
+  } finally {
+    if (prevHttpProxy === undefined) {
+      delete process.env.HTTP_PROXY;
+    } else {
+      process.env.HTTP_PROXY = prevHttpProxy;
+    }
+  }
+});
+
+test("useProxy が ON の場合は環境変数の Proxy を使う", async () => {
+  const prevHttpProxy = process.env.HTTP_PROXY;
+  process.env.HTTP_PROXY = "http://proxy.local:8080";
+  let observedHttpProxy = null;
+
+  try {
+    const runtime = new AgentRuntime({
+      authService: createAuthService("authenticated"),
+      createSession: async () => {
+        observedHttpProxy = process.env.HTTP_PROXY ?? null;
+        return {
+          subscribe(listener) {
+            listener({
+              type: "message_update",
+              assistantMessageEvent: { type: "text_delta", delta: "ok" }
+            });
+            return () => {};
+          },
+          async prompt() {}
+        };
+      },
+      logger: { info() {}, error() {} }
+    });
+
+    const result = await runtime.submitPrompt(
+      "test",
+      createProviderSettings({
+        networkProxy: { useProxy: true }
+      })
+    );
+    assert.equal(result.ok, true);
+    assert.equal(observedHttpProxy, "http://proxy.local:8080");
+  } finally {
+    if (prevHttpProxy === undefined) {
+      delete process.env.HTTP_PROXY;
+    } else {
+      process.env.HTTP_PROXY = prevHttpProxy;
+    }
+  }
+});
+
+test("E2E mock は thinking と複数コマンド進行を通知し最終回答を返す", async () => {
+  process.env.LILTO_E2E_MOCK = "1";
+  const loopEvents = [];
+
+  try {
+    const runtime = new AgentRuntime({
+      authService: createAuthService("authenticated"),
+      createSession: async () => {
+        throw new Error("should not create session in mock mode");
+      },
+      logger: { info() {}, error() {} }
+    });
+
+    const result = await runtime.submitPrompt("mock request", createProviderSettings(), {
+      requestId: "req-mock-1",
+      onLoopEvent: (event) => {
+        loopEvents.push(event);
+      }
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(
+      result.text,
+      "[E2E_MOCK_FINAL] 要求「mock request」を処理し、複数コマンドを実行して回答しました。"
+    );
+
+    assert.deepEqual(loopEvents, [
+      { type: "thinking_start", requestId: "req-mock-1" },
+      {
+        type: "thinking_delta",
+        requestId: "req-mock-1",
+        delta: "要求を分解し、必要な手順を確認します。\n"
+      },
+      {
+        type: "thinking_delta",
+        requestId: "req-mock-1",
+        delta: "読み取りとコマンド実行の順で進めます。\n"
+      },
+      { type: "thinking_end", requestId: "req-mock-1" },
+      {
+        type: "tool_execution_start",
+        requestId: "req-mock-1",
+        toolCallId: "mock-read-1",
+        toolName: "read_file",
+        args: { command: "read_file README.md" }
+      },
+      {
+        type: "tool_execution_end",
+        requestId: "req-mock-1",
+        toolCallId: "mock-read-1",
+        toolName: "read_file",
+        isError: false
+      },
+      {
+        type: "tool_execution_start",
+        requestId: "req-mock-1",
+        toolCallId: "mock-run-1",
+        toolName: "run_in_terminal",
+        args: { command: "npm run check" }
+      },
+      {
+        type: "tool_execution_end",
+        requestId: "req-mock-1",
+        toolCallId: "mock-run-1",
+        toolName: "run_in_terminal",
+        isError: false
+      }
+    ]);
+  } finally {
+    delete process.env.LILTO_E2E_MOCK;
+  }
+});
+
 test("ブラウザ依頼時は agent-browser スキルを優先する", async () => {
   let receivedPrompt = "";
   const runtime = new AgentRuntime({
@@ -476,4 +624,45 @@ test("loop event 正規化: tool error を送出する", async () => {
     toolName: "edit",
     isError: true
   });
+});
+
+test("loop event 正規化: thinking_end の content を fallback で送出する", async () => {
+  const loopEvents = [];
+  const runtime = new AgentRuntime({
+    authService: createAuthService("authenticated"),
+    createSession: async () => ({
+      subscribe(listener) {
+        listener({ type: "thinking_start" });
+        listener({
+          type: "message_update",
+          assistantMessageEvent: { type: "thinking_end", content: "思考完了テキスト" }
+        });
+        listener({
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: "ok" }
+        });
+        return () => {};
+      },
+      async prompt() {}
+    }),
+    logger: { info() {}, error() {} }
+  });
+
+  const result = await runtime.submitPrompt("test", createProviderSettings(), {
+    requestId: "req-think-fallback",
+    onLoopEvent: (event) => {
+      loopEvents.push(event);
+    }
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(loopEvents, [
+    { type: "thinking_start", requestId: "req-think-fallback" },
+    {
+      type: "thinking_delta",
+      requestId: "req-think-fallback",
+      delta: "思考完了テキスト"
+    },
+    { type: "thinking_end", requestId: "req-think-fallback" }
+  ]);
 });

@@ -18,10 +18,24 @@ export type AuthState = {
 
 export type { ActiveProvider, ProviderSettings };
 
+export type AssistantToolProgress = {
+  toolName: string;
+  detail?: string;
+};
+
+export type AssistantProgress = {
+  statusLines: string[];
+  thinkingText?: string;
+  tools: AssistantToolProgress[];
+};
+
 export type Message = {
+  id: string;
+  requestId?: string;
   role: "user" | "assistant" | "system" | "error";
   text: string;
   pending?: boolean;
+  progress?: AssistantProgress;
 };
 
 declare global {

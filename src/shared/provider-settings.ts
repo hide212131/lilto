@@ -8,9 +8,7 @@ export type CustomProviderSettings = {
 };
 
 export type NetworkProxySettings = {
-  httpProxy: string;
-  httpsProxy: string;
-  noProxy: string;
+  useProxy: boolean;
 };
 
 export type ProviderSettings = {
@@ -21,7 +19,5 @@ export type ProviderSettings = {
 };
 
 export const DEFAULT_NETWORK_PROXY_SETTINGS: NetworkProxySettings = {
-  httpProxy: "",
-  httpsProxy: "",
-  noProxy: ""
+  useProxy: false
 };

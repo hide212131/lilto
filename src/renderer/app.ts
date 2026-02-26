@@ -1,6 +1,6 @@
 import { LitElement, html, css } from "lit";
 import { customElement, property, query } from "lit/decorators.js";
-import type { AuthState, ProviderSettings, Message } from "./types.js";
+import type { AuthState, ProviderSettings, Message, AssistantProgress, AssistantToolProgress } from "./types.js";
 import "./components/top-bar.js";
 import "./components/message-list.js";
 import "./components/composer.js";
@@ -21,9 +21,7 @@ export class LiltApp extends LitElement {
       modelId: "qwen2.5:0.5b"
     },
     networkProxy: {
-      httpProxy: "",
-      httpsProxy: "",
-      noProxy: ""
+      useProxy: false
     },
     updatedAt: Date.now()
   };
@@ -37,7 +35,11 @@ export class LiltApp extends LitElement {
   private _unsubscribeAuthListener: (() => void) | null = null;
   private _unsubscribeLoopListener: (() => void) | null = null;
   private _pendingAssistantIndex: number | null = null;
-  private _progressLines: string[] = [];
+  private _activeRequestId: string | null = null;
+  private _messageSeq = 0;
+  private _statusLines: string[] = [];
+  private _thinkingText = "";
+  private _toolProgress: AssistantToolProgress[] = [];
 
   static styles = css`
     :host {
@@ -171,7 +173,10 @@ export class LiltApp extends LitElement {
     this.messages = [];
     this.loopState = createInitialLoopState();
     this._pendingAssistantIndex = null;
-    this._progressLines = [];
+    this._activeRequestId = null;
+    this._statusLines = [];
+    this._thinkingText = "";
+    this._toolProgress = [];
   }
 
   private async _onSendMessage(e: CustomEvent<{ text: string }>) {
@@ -191,7 +196,10 @@ export class LiltApp extends LitElement {
     this._addMessage("user", text);
     const pendingIdx = this._addPendingMessage("assistant", "実行開始を待っています...");
     this._pendingAssistantIndex = pendingIdx;
-    this._progressLines = [];
+    this._activeRequestId = null;
+    this._statusLines = [];
+    this._thinkingText = "";
+    this._toolProgress = [];
     this.loopState = {
       ...createInitialLoopState(),
       status: "running"
@@ -201,8 +209,7 @@ export class LiltApp extends LitElement {
     try {
       const result = await window.lilto.submitPrompt(text);
       if (result.ok) {
-        const prefix = this._progressLines.length > 0 ? `${this._progressLines.join("\n")}\n\n` : "";
-        this._resolvePendingMessage(pendingIdx, `${prefix}${result.response.text}`);
+        this._resolvePendingMessage(pendingIdx, result.response.text, this._buildProgress());
         await this.updateComplete;
         this._composer?.focusInput();
         return;
@@ -219,7 +226,10 @@ export class LiltApp extends LitElement {
     } finally {
       this.isSending = false;
       this._pendingAssistantIndex = null;
-      this._progressLines = [];
+      this._activeRequestId = null;
+      this._statusLines = [];
+      this._thinkingText = "";
+      this._toolProgress = [];
     }
   }
 
@@ -231,44 +241,84 @@ export class LiltApp extends LitElement {
   private _appendProgressLineFromLoopEvent(event: AgentLoopEvent) {
     if (this._pendingAssistantIndex === null) return;
 
-    let lines: string[] = [];
+    let changed = false;
     switch (event.type) {
       case "run_start":
-        lines = ["実行を開始しました"];
+        this._activeRequestId = event.requestId;
+        this._attachRequestIdToPendingMessage(event.requestId);
+        this._statusLines = ["実行を開始しました"];
+        changed = true;
         break;
       case "thinking_start":
-        lines = ["考え中..."];
+        if (this._statusLines.length === 0 || this._statusLines[this._statusLines.length - 1] !== "考え中...") {
+          this._statusLines = [...this._statusLines, "考え中..."];
+          changed = true;
+        }
+        break;
+      case "thinking_delta":
+        if (event.delta) {
+          this._thinkingText += event.delta;
+          changed = true;
+        }
         break;
       case "thinking_end":
-        lines = [];
+        changed = false;
         break;
       case "tool_execution_start":
-        lines = [`ツール開始: ${event.toolName}`];
         {
+          const newTool: AssistantToolProgress = { toolName: event.toolName };
           const detail = this._formatToolArgs(event.args);
-          if (detail) lines.push(`  詳細: ${detail}`);
+          if (detail) {
+            newTool.detail = detail;
+          }
+          this._toolProgress = [...this._toolProgress, newTool];
+          this._statusLines = [...this._statusLines, `コマンド実行: ${event.toolName}`];
+          changed = true;
         }
         break;
       case "tool_execution_end":
-        lines = [];
+        changed = false;
         break;
       case "run_end":
-        lines = event.status === "failed" || event.status === "aborted"
-          ? [`実行失敗: ${event.errorMessage ?? "不明なエラー"}`]
-          : [];
+        if (event.status === "failed" || event.status === "aborted") {
+          this._statusLines = [...this._statusLines, `実行失敗: ${event.errorMessage ?? "不明なエラー"}`];
+          changed = true;
+        }
         break;
       default:
-        lines = [];
+        changed = false;
     }
 
-    if (lines.length === 0) return;
-    this._progressLines = [...this._progressLines, ...lines];
-    this._updatePendingMessageText(this._pendingAssistantIndex, this._progressLines.join("\n"));
+    if (!changed) return;
+
+    this._updatePendingMessage(
+      this._pendingAssistantIndex,
+      this._thinkingText ? "Thinking を表示しています..." : "実行中...",
+      this._buildProgress()
+    );
+  }
+
+  private _buildProgress(): AssistantProgress | undefined {
+    const hasStatus = this._statusLines.length > 0;
+    const hasThinking = this._thinkingText.trim().length > 0;
+    const hasTools = this._toolProgress.length > 0;
+
+    if (!hasStatus && !hasThinking && !hasTools) return undefined;
+
+    return {
+      statusLines: [...this._statusLines],
+      thinkingText: hasThinking ? this._thinkingText : undefined,
+      tools: [...this._toolProgress]
+    };
   }
 
   private _formatToolArgs(args: unknown): string {
     if (!args || typeof args !== "object") return "";
     const argRecord = args as Record<string, unknown>;
+    const command = argRecord.command;
+    if (typeof command === "string" && command.trim()) {
+      return command;
+    }
     const summaryCandidates = ["command", "query", "path", "url", "pattern", "tool", "fn"];
     for (const key of summaryCandidates) {
       const value = argRecord[key];
@@ -281,27 +331,52 @@ export class LiltApp extends LitElement {
     return preview.length > 120 ? `${preview.slice(0, 117)}...` : preview;
   }
 
-  private _addMessage(role: Message["role"], text: string): number {
-    const msg: Message = { role, text };
+  private _addMessage(role: Message["role"], text: string, progress?: AssistantProgress): number {
+    const msg: Message = {
+      id: this._nextMessageId(),
+      requestId: this._activeRequestId ?? undefined,
+      role,
+      text,
+      progress
+    };
     this.messages = [...this.messages, msg];
     return this.messages.length - 1;
   }
 
-  private _addPendingMessage(role: Message["role"], text: string): number {
-    const msg: Message = { role, text, pending: true };
+  private _addPendingMessage(role: Message["role"], text: string, progress?: AssistantProgress): number {
+    const msg: Message = {
+      id: this._nextMessageId(),
+      requestId: this._activeRequestId ?? undefined,
+      role,
+      text,
+      pending: true,
+      progress
+    };
     this.messages = [...this.messages, msg];
     return this.messages.length - 1;
   }
 
-  private _resolvePendingMessage(idx: number, text: string) {
+  private _attachRequestIdToPendingMessage(requestId: string) {
+    if (this._pendingAssistantIndex === null) return;
     this.messages = this.messages.map((m, i) =>
-      i === idx ? { ...m, text, pending: false } : m
+      i === this._pendingAssistantIndex ? { ...m, requestId } : m
     );
   }
 
-  private _updatePendingMessageText(idx: number, text: string) {
+  private _nextMessageId(): string {
+    this._messageSeq += 1;
+    return `msg-${this._messageSeq}`;
+  }
+
+  private _resolvePendingMessage(idx: number, text: string, progress?: AssistantProgress) {
     this.messages = this.messages.map((m, i) =>
-      i === idx ? { ...m, text, pending: true } : m
+      i === idx ? { ...m, text, pending: false, progress } : m
+    );
+  }
+
+  private _updatePendingMessage(idx: number, text: string, progress?: AssistantProgress) {
+    this.messages = this.messages.map((m, i) =>
+      i === idx ? { ...m, text, pending: true, progress } : m
     );
   }
 

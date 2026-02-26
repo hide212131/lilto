@@ -15,5 +15,5 @@ test("lilt-app が new-session で会話状態を初期化する", () => {
   assert.match(content, /messages = \[\]/);
   assert.match(content, /loopState = createInitialLoopState\(\)/);
   assert.match(content, /_pendingAssistantIndex = null/);
-  assert.match(content, /_progressLines = \[\]/);
+  assert.match(content, /_statusLines = \[\]/);
 });

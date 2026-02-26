@@ -12,7 +12,7 @@ TBD - created by archiving change add-electron-agent-browser-e2e-gate. Update Pu
 
 #### Scenario: 擬似 Proxy 必須条件でフローを実行できる
 - **WHEN** 開発者が Proxy 経由でない外部アクセスを拒否する擬似環境で E2E シナリオを実行する
-- **THEN** Proxy 設定を適用した実行経路で問い合わせ成功まで自動検証できる
+- **THEN** `useProxy` を有効化した実行経路で問い合わせ成功まで自動検証できる
 
 ### Requirement: E2E 実行結果を確認可能である
 システムは E2E 実行の成功/失敗を判定できるログまたは結果出力を提供しなければならない（MUST）。Proxy 必須条件の検証結果も同一実行で判定できなければならない（MUST）。
@@ -22,6 +22,6 @@ TBD - created by archiving change add-electron-agent-browser-e2e-gate. Update Pu
 - **THEN** 実行結果から失敗箇所を識別でき、成功扱いにならない
 
 #### Scenario: Proxy 未設定時の失敗を判別できる
-- **WHEN** 擬似 Proxy 必須条件で Proxy 設定を無効化したシナリオを実行する
+- **WHEN** 擬似 Proxy 必須条件で `useProxy` を無効化したシナリオを実行する
 - **THEN** 実行結果から Proxy 未設定による失敗を識別できる
 

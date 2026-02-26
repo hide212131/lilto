@@ -78,3 +78,21 @@
 | `openspec-ff-change` で `add-corporate-proxy-support` の proposal/design/specs/tasks を一括作成。 | Modified capability の delta spec で既存 Requirement 見出しを変えると、archive 同期時に意図した更新として扱われない。 | `MODIFIED Requirements` を書くときは `openspec/specs/<capability>/spec.md` の見出し名を厳密一致で再利用し、作成後に `openspec status --change <name>` で `4/4` を確認する。 |
 | `openspec-apply-change` で `add-corporate-proxy-support` を実装し、擬似 Proxy 必須 E2E（未設定失敗→設定成功）まで完了。 | Proxy 必須検証を既存 E2E に後付けすると、テスト環境準備（擬似外部API/擬似Proxy）と UI 操作の責務が混ざり、失敗原因の切り分けが遅れる。 | Proxy 系 E2E は先に `scripts` へ環境フィクスチャ（ターゲット/Proxy）を分離実装し、シナリオ側は「未設定失敗・設定成功」の観測に専念させる。 |
 | `add-corporate-proxy-support` を同期付きで archive し、main specs へ反映。 | archive 前の同期確認を省くと、delta spec の更新内容（追加/変更件数）が把握できず、意図した仕様反映かを説明しづらい。 | `archive` 実行時は同期サマリ（`+/-/~` 件数と capability 別内訳）を必ず確認し、完了報告に「どの spec が何件更新されたか」を明記する。 |
+
+## 2026-02-26
+
+| 変更内容 | ミス/課題 | 再発防止ルール |
+|---|---|---|
+| `show-thinking-content` で `/opsx:ff` を実行し、`proposal → design → specs → tasks` を依存順に作成して apply-ready まで完了。 | `specs` を先に作り始めると、proposal の capability 名と spec パスがずれて後で修正が発生しやすい。 | `/opsx:ff` では proposal 完了後に capability 名を固定し、`specs/<capability>/spec.md` をその名前で作成してから本文を埋める。作成ごとに `openspec status --change <name> --json` を再確認する。 |
+| `web-ui` の thinking / command 表示を参照し、lilt-ai の assistant 実行中表示を構造化（Thinking 折りたたみ + Command ブロック）した。 | 実行中ログを単純なプレーンテキスト連結で持つと、thinking とコマンド実行情報が混在して可読性が急落する。 | 実行中表示は `status / thinking / tools` を構造化データとして保持し、renderer でセクション分けして描画する。最終回答テキストとは表示層で分離する。 |
+| Thinking のデフォルト開閉と長文表示を再調整し、デフォルト折りたたみ＋行数上限＋追加展開に統一。 | 長文を一括表示すると pending 時の視線移動が大きく、重要なコマンド進捗が埋もれやすい。 | 実行中の長文ブロックは「初期は閉じる」「先頭N行だけ表示」「残りは明示的に展開」の3段階で設計し、情報密度と可読性を両立する。 |
+| Thinking ブロックの開閉状態をセッション中に保持し、再描画時も同じ展開状態を維持。 | `details` の状態をDOM任せにすると、ストリーミング更新で再レンダリングされた際に開閉が初期化されやすい。 | 開閉状態はコンポーネント内の状態（メッセージキー→open）で保持し、`.open` バインド＋`@toggle` で双方向同期する。新規セッション時は状態を明示的にクリアする。 |
+| 実装後に OpenSpec artifacts を逆同期し、仕様と実装の乖離を解消。 | 実装追加（折りたたみ初期状態・行数プレビュー・開閉状態保持）を specs/tasks に反映しないと、後続レビューで「未実装/仕様外」に見える。 | 実装変更後は proposal/design/specs/tasks をまとめて見直し、挙動追加分を requirement と task 完了状態へ即時反映する。 |
+| Suggestion 対応として、Thinking 開閉状態のキーを message index 依存から stable message ID 依存へ変更。 | index ベースの UI 状態キーは、メッセージ挿入/削除/並べ替え時に別メッセージへ誤適用されるリスクがある。 | UI 状態キーは配列位置ではなく永続識別子（message ID / request ID）を使い、表示再構成に強い設計にする。 |
+| 安定キーをさらに requestId 優先へ拡張し、同一実行ターン単位で Thinking 状態を管理。 | message ID 単体だと将来のメッセージ再構成時に「同一実行ターン」の状態共有を表現しにくい。 | 実行起点の状態管理は requestId を第一キーにし、requestId 未設定時のみ message ID にフォールバックする。run_start 時に pending メッセージへ requestId を注入する。 |
+| requestId 優先キー化を OpenSpec artifacts（proposal/design/specs/tasks）へ逆同期。 | 実装だけ更新して artifacts を据え置くと、verify/archive 時に「仕様と実装の説明」が一致しなくなる。 | requestId など設計上の重要変更は、実装完了直後に proposal・design・spec・tasksを同時更新し、要求・判断・実装ステップの3点を揃える。 |
+| E2E mock 応答を単発エコーから「thinking + 複数コマンド進行 + 最終回答」へ更新し、unit/E2E テストを同期。 | モックが最終テキストのみだと、進行可視化 UI の回帰を検知できず、実運用との差分が見えにくい。 | モック設計時は最終応答だけでなく loop イベント（thinking/tool start-end）も含め、UI が期待する進行表示をテストで必ず検証する。 |
+| mock loop event を即時連打した際の E2E フレークを解消。 | IPC イベントと `submitPrompt` 完了レスポンスの到達順が近すぎると、renderer 側で進行表示反映前に最終判定して偽陰性になりうる。 | mock で進行イベントを検証する場合は、短い間隔で逐次送出するか、E2E 側でイベント到達待ちを入れて順序依存を排除する。 |
+| Proxy 設定を「URL入力」から「環境変数利用 + useProxy チェック」へ変更し、OFF で環境変数を無効化・ON で利用する挙動を実装。 | デフォルト値をモジュール読込時に固定すると、テストや実行時に変更した環境変数が既定値へ反映されず、仕様（env があれば ON）とずれる。 | 環境変数依存の既定値は定数初期化で固定せず、インスタンス生成時または正規化時に都度評価する。 |
+| thinking が表示されないケースに対し、`thinking_end` の content を fallback として loop event 化。 | provider により `thinking_delta` が来ず `thinking_end` の content だけが届く経路を想定していないと、UI に本文が一切表示されない。 | thinking 表示は `thinking_delta` だけに依存せず、`thinking_end.content` を補完経路として扱い、イベント形式の差異を吸収する。 |
+| proxy 関連 spec を `http/https/no_proxy` 前提から `networkProxy.useProxy` 前提へ更新。 | 実装が boolean トグルへ移行した後に spec が旧入力項目のままだと、レビュー時に仕様/実装不一致として誤検知される。 | proxy モデル変更時は runtime/UI/E2E の spec を同時更新し、条件（ON/OFF）と設定キー名を実装と一致させる。 |

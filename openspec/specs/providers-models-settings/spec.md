@@ -16,7 +16,7 @@ TBD - created by archiving change add-providers-and-models-custom-provider. Upda
 
 #### Scenario: Proxy 設定セクションが表示される
 - **WHEN** ユーザーが `Providers & Models` を選択する
-- **THEN** HTTP/HTTPS/NO_PROXY を入力できる Proxy 設定セクションが同一画面に表示される
+- **THEN** `useProxy` を切り替えできる Proxy 設定セクションが同一画面に表示される
 
 ### Requirement: OpenAI Completions Compatible な Custom Provider 設定
 システムは、Custom Provider として OpenAI Completions Compatible 接続先を登録・編集・保存できなければならない（MUST）。また Proxy 設定を同じ保存操作で登録・編集・保存できなければならない（MUST）。
@@ -30,12 +30,12 @@ TBD - created by archiving change add-providers-and-models-custom-provider. Upda
 - **THEN** システムは保存を行わず、不足項目を示すエラーを表示する
 
 #### Scenario: Proxy 設定を保存して次回起動で復元できる
-- **WHEN** ユーザーが `httpProxy` または `httpsProxy` を入力して保存操作を実行する
+- **WHEN** ユーザーが `useProxy` のオン/オフを変更して保存操作を実行する
 - **THEN** システムは Proxy 設定を永続化し、次回起動後に同値を復元する
 
-#### Scenario: 無効な Proxy URL は保存を拒否する
-- **WHEN** ユーザーが URL 形式でない `httpProxy` または `httpsProxy` を入力して保存操作を実行する
-- **THEN** システムは保存を行わず、Proxy 設定の入力不備を示すエラーを表示する
+#### Scenario: Proxy 設定未指定時は環境既定値を採用する
+- **WHEN** `networkProxy.useProxy` が保存データで指定されていない状態で設定を正規化する
+- **THEN** システムは `HTTP_PROXY` / `HTTPS_PROXY` 系環境変数の有無を既定値として `useProxy` に反映する
 
 ### Requirement: Provider 別の実行可否表示
 システムは、現在選択されている provider の準備状態に応じて、送信可否と不足条件を UI へ表示しなければならない（MUST）。
