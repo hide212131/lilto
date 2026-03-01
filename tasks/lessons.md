@@ -103,3 +103,4 @@
 | 設定画面の OAuth セクション文言を Claude 固有表現から provider 汎用表現へ修正。 | provider 対応を実装しても UI 文言に Claude 固有ラベルが残ると、機能実態と表示が不一致になり誤解を招く。 | provider 拡張時は UI 文言レビューで「特定provider名が残っていないか」をチェックし、セクション見出し・ボタン文言・補助説明を同時更新する。 |
 | メイン画面の未準備ステータス文言を「プロバイダー設定が必要」へ統一。 | provider 対応後にステータスメッセージが provider 固有名を含むままだと、UX 文言と設定モデルがずれる。 | provider 複数対応時の状態文言は特定サービス名を避け、設定アクションを示す汎用表現（例: プロバイダー設定が必要）へ統一する。 |
 | OAuth Provider を切り替えても認証ボタンで Claude サイトへ遷移する不具合を修正。 | OAuth Provider 選択値を UI ローカル状態に保持しただけで認証開始すると、保存済み設定（既定 anthropic）が使われ続ける。 | 設定依存のアクション（OAuth 開始）では、実行直前に対象設定を永続化してから処理を呼び出し、UI状態と実行時設定の乖離を防ぐ。 |
+| OpenAI Codex / Gemini CLI 選択時の空応答を修正し、agent 実行ログを拡充。 | OAuth provider を切り替えても session 作成時の provider/model 解決を既定 anthropic に任せると、認証先と実行モデルがずれて空応答や誤動作を招く。 | OAuth provider ベースで実行する処理は、API key 注入先だけでなく利用モデルも同じ provider に固定し、console へ provider/model/event 単位の進行ログを残して調査可能性を確保する。 |

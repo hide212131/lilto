@@ -61,6 +61,7 @@ test("認証済みなら SDK 応答を返す", async () => {
     provider: "anthropic",
     model: "default",
     baseUrl: "",
+    oauthProvider: "anthropic",
     cwd: process.cwd()
   });
 
@@ -101,6 +102,70 @@ test("認証済みでも provider 不一致なら AUTH_REQUIRED を返す", asyn
   assert.equal(result.ok, false);
   assert.equal(result.error.code, "AUTH_REQUIRED");
   assert.match(result.error.message, /openai-codex/);
+});
+
+test("OpenAI Codex OAuth 選択時は provider 固有モデルで実行される", async () => {
+  let receivedOptions;
+  const runtime = new AgentRuntime({
+    authService: createAuthService("authenticated", "oauth-api-key", "openai-codex"),
+    createSession: async (options) => {
+      receivedOptions = options;
+      return {
+        subscribe(listener) {
+          listener({
+            type: "message_update",
+            assistantMessageEvent: { type: "text_delta", delta: "codex-ok" }
+          });
+          return () => {};
+        },
+        async prompt() {}
+      };
+    },
+    logger: { info() {}, error() {} }
+  });
+
+  const result = await runtime.submitPrompt(
+    "test",
+    createProviderSettings({
+      oauthProvider: "openai-codex"
+    })
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.text, "codex-ok");
+  assert.equal(receivedOptions.oauthProvider, "openai-codex");
+});
+
+test("Gemini CLI OAuth 選択時は provider 情報を保持して実行される", async () => {
+  let receivedOptions;
+  const runtime = new AgentRuntime({
+    authService: createAuthService("authenticated", "oauth-api-key", "google-gemini-cli"),
+    createSession: async (options) => {
+      receivedOptions = options;
+      return {
+        subscribe(listener) {
+          listener({
+            type: "message_update",
+            assistantMessageEvent: { type: "text_delta", delta: "gemini-ok" }
+          });
+          return () => {};
+        },
+        async prompt() {}
+      };
+    },
+    logger: { info() {}, error() {} }
+  });
+
+  const result = await runtime.submitPrompt(
+    "test",
+    createProviderSettings({
+      oauthProvider: "google-gemini-cli"
+    })
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.text, "gemini-ok");
+  assert.equal(receivedOptions.oauthProvider, "google-gemini-cli");
 });
 
 test("Custom Provider 未設定なら PROVIDER_CONFIG_REQUIRED を返す", async () => {

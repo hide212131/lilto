@@ -50,11 +50,11 @@ type PiSession = {
 type PiModel = {
   id: string;
   name: string;
-  api: "openai-completions";
+  api: string;
   provider: string;
   baseUrl: string;
   reasoning: boolean;
-  input: ["text"];
+  input: Array<"text" | "image">;
   cost: {
     input: number;
     output: number;
@@ -66,6 +66,14 @@ type PiModel = {
 };
 
 const importEsm = new Function("specifier", "return import(specifier)") as (specifier: string) => Promise<unknown>;
+const EVENT_LOG_PREVIEW_LIMIT = 160;
+const DEFAULT_OAUTH_MODEL_IDS: Record<OAuthProviderId, string> = {
+  anthropic: "claude-opus-4-6",
+  "openai-codex": "gpt-5.3-codex",
+  "github-copilot": "gpt-4o",
+  "google-gemini-cli": "gemini-2.5-pro",
+  "google-antigravity": "gemini-3-pro-high"
+};
 
 export function standardizeError(
   error: unknown,
@@ -105,6 +113,7 @@ function standardizeAgentRuntimeError(error: unknown): AgentError {
 export async function createPiSessionFromSdk(options: {
   apiKey: string | null;
   model?: PiModel;
+  oauthProvider?: OAuthProviderId;
   cwd?: string;
 }): Promise<PiSession> {
   const sessionCwd = options.cwd ?? process.cwd();
@@ -127,9 +136,10 @@ export async function createPiSessionFromSdk(options: {
   };
 
   const authStorage = AuthStorage.create();
+  const selectedModel = options.model ?? (await resolveOAuthModel(options.oauthProvider));
   const authStorageWithRuntimeKey = authStorage as { setRuntimeApiKey?: (provider: string, key: string) => void };
   if (options.apiKey && typeof authStorageWithRuntimeKey.setRuntimeApiKey === "function") {
-    const keyProvider = options.model?.provider ?? "anthropic";
+    const keyProvider = selectedModel?.provider ?? options.oauthProvider ?? "anthropic";
     authStorageWithRuntimeKey.setRuntimeApiKey(keyProvider, options.apiKey);
   }
   const modelRegistry = new ModelRegistry(authStorage);
@@ -142,10 +152,39 @@ export async function createPiSessionFromSdk(options: {
     authStorage,
     modelRegistry,
     cwd: sessionCwd,
-    model: options.model
+    model: selectedModel
   });
 
   return session as PiSession;
+}
+
+async function resolveOAuthModel(providerId?: OAuthProviderId): Promise<PiModel | undefined> {
+  if (!providerId) {
+    return undefined;
+  }
+
+  const { getModel, getModels } = (await importEsm("@mariozechner/pi-ai")) as {
+    getModel?: (provider: string, modelId: string) => PiModel | undefined;
+    getModels?: (provider: string) => PiModel[];
+  };
+  const defaultModelId = DEFAULT_OAUTH_MODEL_IDS[providerId];
+  if (typeof getModel === "function") {
+    try {
+      const matched = getModel(providerId, defaultModelId);
+      if (matched) {
+        return matched;
+      }
+    } catch {
+      // Fall back to the first provider model if the default alias is unavailable.
+    }
+  }
+  if (typeof getModels === "function") {
+    const candidates = getModels(providerId);
+    if (Array.isArray(candidates) && candidates.length > 0) {
+      return candidates[0];
+    }
+  }
+  return undefined;
 }
 
 type AuthSnapshot = {
@@ -232,6 +271,44 @@ function extractTextFromAgentEvent(event: AgentEvent): string {
   }
 
   return "";
+}
+
+function previewForLog(text: string): string {
+  if (!text.trim()) {
+    return "";
+  }
+  return text.length > EVENT_LOG_PREVIEW_LIMIT ? `${text.slice(0, EVENT_LOG_PREVIEW_LIMIT)}...` : text;
+}
+
+function summarizeAgentEvent(event: AgentEvent): Record<string, unknown> {
+  const assistantType = event.type === "message_update" ? event.assistantMessageEvent?.type : undefined;
+  const previewSource =
+    (event.type === "message_update" ? event.assistantMessageEvent?.delta : undefined) ??
+    (event.type === "thinking_delta" ? event.delta : undefined) ??
+    (event.type === "message_update" ? event.assistantMessageEvent?.content : undefined) ??
+    extractTextFromAgentEvent(event);
+
+  const payload: Record<string, unknown> = { type: event.type };
+  if (assistantType) {
+    payload.assistantType = assistantType;
+  }
+  if (event.toolName) {
+    payload.toolName = event.toolName;
+  }
+  if (event.toolCallId) {
+    payload.toolCallId = event.toolCallId;
+  }
+  if (event.isError === true) {
+    payload.isError = true;
+  }
+  if (event.args !== undefined) {
+    payload.args = event.args;
+  }
+  if (typeof previewSource === "string" && previewSource.trim()) {
+    payload.preview = previewForLog(previewSource);
+    payload.previewLength = previewSource.length;
+  }
+  return payload;
 }
 
 function isLocalOllamaUrl(baseUrl: string): boolean {
@@ -423,19 +500,34 @@ export class AgentRuntime {
     this.availableSkillNames = new Set(availableSkills.map((skill) => skill.name));
   }
 
-  private async ensureSession(options: { apiKey: string | null; model?: PiModel; cwd?: string }): Promise<PiSession> {
+  private async ensureSession(options: {
+    apiKey: string | null;
+    model?: PiModel;
+    oauthProvider?: OAuthProviderId;
+    cwd?: string;
+  }): Promise<PiSession> {
     const signature = JSON.stringify({
       apiKey: options.apiKey,
       provider: options.model?.provider ?? "anthropic",
       model: options.model?.id ?? "default",
       baseUrl: options.model?.baseUrl ?? "",
+      oauthProvider: options.oauthProvider ?? "anthropic",
       cwd: options.cwd ?? process.cwd()
     });
 
     if (this.session && this.sessionKey === signature) {
+      this.logger.info("agent_session_reused", {
+        provider: options.model?.provider ?? options.oauthProvider ?? "anthropic",
+        modelId: options.model?.id ?? null
+      });
       return this.session;
     }
 
+    this.logger.info("agent_session_creating", {
+      provider: options.model?.provider ?? options.oauthProvider ?? "anthropic",
+      modelId: options.model?.id ?? null,
+      cwd: options.cwd ?? process.cwd()
+    });
     this.session = await this.createSession(options);
     this.sessionKey = signature;
     return this.session;
@@ -443,18 +535,24 @@ export class AgentRuntime {
 
   private async runSessionPrompt(
     text: string,
-    options: { apiKey: string | null; model?: PiModel; cwd?: string },
+    options: { apiKey: string | null; model?: PiModel; oauthProvider?: OAuthProviderId; cwd?: string },
     providerSettings: ProviderSettings,
     hooks?: { requestId: string; onLoopEvent?: (event: AgentLoopEvent) => void }
   ): Promise<AgentResult> {
     const restoreProxyEnv = withScopedProxyEnvironment(providerSettings);
     try {
+      this.logger.info("agent_prompt_session_start", {
+        requestId: hooks?.requestId ?? null,
+        provider: options.model?.provider ?? options.oauthProvider ?? providerSettings.activeProvider,
+        modelId: options.model?.id ?? null
+      });
       const session = await this.ensureSession(options);
       let streamOutput = "";
       let finalOutput = "";
       let thinkingDeltaSeenInBlock = false;
 
       const unsubscribe = session.subscribe((event) => {
+        this.logger.info("agent_event", summarizeAgentEvent(event));
         const assistantEventType = event.type === "message_update" ? event.assistantMessageEvent?.type : undefined;
 
         if (hooks?.onLoopEvent) {
@@ -546,10 +644,18 @@ export class AgentRuntime {
 
       let output = finalOutput.trim() ? finalOutput : streamOutput;
       if (!output.trim()) {
+        this.logger.error("agent_prompt_empty_response", {
+          requestId: hooks?.requestId ?? null,
+          provider: options.model?.provider ?? options.oauthProvider ?? providerSettings.activeProvider,
+          modelId: options.model?.id ?? null
+        });
         output = "エージェント応答は空でした。";
       }
 
-      this.logger.info("agent_prompt_completed", { outputLength: output.length });
+      this.logger.info("agent_prompt_completed", {
+        outputLength: output.length,
+        outputSource: finalOutput.trim() ? "final" : streamOutput.trim() ? "stream" : "fallback-empty"
+      });
       return { ok: true, text: output };
     } finally {
       restoreProxyEnv();
@@ -579,7 +685,8 @@ export class AgentRuntime {
   ): Promise<AgentResult> {
     this.logger.info("agent_prompt_received", {
       textLength: text.length,
-      provider: providerSettings.activeProvider
+      provider: providerSettings.activeProvider,
+      oauthProvider: providerSettings.oauthProvider
     });
 
     try {
@@ -678,7 +785,12 @@ export class AgentRuntime {
             : isLocalOllamaUrl(model.baseUrl)
               ? "ollama"
               : "not-required";
-        return await this.runSessionPrompt(promptText, { apiKey, model, ...runOptionsBase }, providerSettings, hooks);
+        return await this.runSessionPrompt(
+          promptText,
+          { apiKey, model, oauthProvider: providerSettings.oauthProvider, ...runOptionsBase },
+          providerSettings,
+          hooks
+        );
       }
 
       const authState = this.authService.getState() as AuthSnapshot;
@@ -707,7 +819,12 @@ export class AgentRuntime {
         };
       }
 
-      return await this.runSessionPrompt(promptText, { apiKey, model: undefined, ...runOptionsBase }, providerSettings, hooks);
+      return await this.runSessionPrompt(
+        promptText,
+        { apiKey, model: undefined, oauthProvider: providerSettings.oauthProvider, ...runOptionsBase },
+        providerSettings,
+        hooks
+      );
     } catch (error) {
       const normalized = standardizeAgentRuntimeError(error);
       this.logger.error("agent_prompt_failed", normalized);
