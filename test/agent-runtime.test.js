@@ -664,7 +664,8 @@ test("loop event 正規化: tool start/end を送出する", async () => {
   assert.equal(result.ok, true);
   assert.deepEqual(loopEvents, [
     { type: "tool_execution_start", requestId: "req-1", toolCallId: "call-1", toolName: "bash" },
-    { type: "tool_execution_end", requestId: "req-1", toolCallId: "call-1", toolName: "bash", isError: false }
+    { type: "tool_execution_end", requestId: "req-1", toolCallId: "call-1", toolName: "bash", isError: false },
+    { type: "text_delta", requestId: "req-1", delta: "ok" }
   ]);
 });
 
@@ -704,7 +705,7 @@ test("loop event 正規化: tool error を送出する", async () => {
   });
 
   assert.equal(result.ok, true);
-  assert.deepEqual(loopEvents.at(-1), {
+  assert.deepEqual(loopEvents.find(e => e.type === "tool_execution_end"), {
     type: "tool_execution_end",
     requestId: "req-2",
     toolCallId: "call-err",
@@ -750,6 +751,7 @@ test("loop event 正規化: thinking_end の content を fallback で送出す�
       requestId: "req-think-fallback",
       delta: "思考完了テキスト"
     },
-    { type: "thinking_end", requestId: "req-think-fallback" }
+    { type: "thinking_end", requestId: "req-think-fallback" },
+    { type: "text_delta", requestId: "req-think-fallback", delta: "ok" }
   ]);
 });

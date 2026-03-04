@@ -77,10 +77,13 @@ export class LiltMessageList extends LitElement {
       font-size: 12px;
       color: #4b5563;
       line-height: 1.4;
-      padding: 6px 8px;
-      border-radius: 8px;
-      background: #f9fafb;
-      border: 1px solid #e5e7eb;
+      white-space: pre-wrap;
+    }
+    .tool-label {
+      font-size: 13px;
+      color: #6b7280;
+      font-style: italic;
+      line-height: 1.4;
       white-space: pre-wrap;
     }
     .thinking-block {
@@ -282,6 +285,7 @@ export class LiltMessageList extends LitElement {
             const isCompact = toolLines.length <= 1;
 
             return html`
+              ${tool.label ? html`<div class="tool-label">${tool.label}</div>` : ""}
               <div class="tool-block">
                 <div class="tool-header">Running command: ${tool.toolName}</div>
                 <pre class="tool-console ${isCompact ? "tool-console-compact" : ""}">${toolPreview}</pre>
@@ -297,6 +301,8 @@ export class LiltMessageList extends LitElement {
             `;
           }
         )}
+
+        ${progress.pendingLabel ? html`<div class="tool-label">${progress.pendingLabel}</div>` : ""}
       </div>
       ${hasAnswer ? html`<div class="assistant-answer">${message.text}</div>` : ""}
     `;

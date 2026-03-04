@@ -20,6 +20,7 @@ export type { ActiveProvider, ProviderSettings };
 
 export type AssistantToolProgress = {
   toolName: string;
+  label?: string;
   detail?: string;
 };
 
@@ -27,6 +28,7 @@ export type AssistantProgress = {
   statusLines: string[];
   thinkingText?: string;
   tools: AssistantToolProgress[];
+  pendingLabel?: string;
 };
 
 export type Message = {

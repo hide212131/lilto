@@ -5,6 +5,7 @@ export type AgentLoopEvent =
   | { type: "thinking_start"; requestId: string }
   | { type: "thinking_delta"; requestId: string; delta: string }
   | { type: "thinking_end"; requestId: string }
+  | { type: "text_delta"; requestId: string; delta: string }
   | { type: "tool_execution_start"; requestId: string; toolCallId: string; toolName: string; args?: unknown }
   | { type: "tool_execution_end"; requestId: string; toolCallId: string; toolName: string; isError: boolean }
   | { type: "run_end"; requestId: string; status: AgentRunEndStatus; errorMessage?: string };

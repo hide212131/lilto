@@ -42,6 +42,7 @@ export class LiltApp extends LitElement {
   private _statusLines: string[] = [];
   private _thinkingText = "";
   private _toolProgress: AssistantToolProgress[] = [];
+  private _pendingLabel = "";
 
   static styles = css`
     :host {
@@ -198,6 +199,7 @@ export class LiltApp extends LitElement {
     this._statusLines = [];
     this._thinkingText = "";
     this._toolProgress = [];
+    this._pendingLabel = "";
   }
 
   private async _onSendMessage(e: CustomEvent<{ text: string }>) {
@@ -221,6 +223,7 @@ export class LiltApp extends LitElement {
     this._statusLines = [];
     this._thinkingText = "";
     this._toolProgress = [];
+    this._pendingLabel = "";
     this.loopState = {
       ...createInitialLoopState(),
       status: "running"
@@ -251,6 +254,7 @@ export class LiltApp extends LitElement {
       this._statusLines = [];
       this._thinkingText = "";
       this._toolProgress = [];
+      this._pendingLabel = "";
     }
   }
 
@@ -267,7 +271,6 @@ export class LiltApp extends LitElement {
       case "run_start":
         this._activeRequestId = event.requestId;
         this._attachRequestIdToPendingMessage(event.requestId);
-        this._statusLines = ["実行を開始しました"];
         changed = true;
         break;
       case "thinking_start":
@@ -285,6 +288,12 @@ export class LiltApp extends LitElement {
       case "thinking_end":
         changed = false;
         break;
+      case "text_delta":
+        if (event.delta) {
+          this._pendingLabel += event.delta;
+          changed = true;
+        }
+        break;
       case "tool_execution_start":
         {
           const newTool: AssistantToolProgress = { toolName: event.toolName };
@@ -292,8 +301,12 @@ export class LiltApp extends LitElement {
           if (detail) {
             newTool.detail = detail;
           }
+          const label = this._pendingLabel.trim();
+          if (label) {
+            newTool.label = label;
+          }
+          this._pendingLabel = "";
           this._toolProgress = [...this._toolProgress, newTool];
-          this._statusLines = [...this._statusLines, `コマンド実行: ${event.toolName}`];
           changed = true;
         }
         break;
@@ -323,13 +336,15 @@ export class LiltApp extends LitElement {
     const hasStatus = this._statusLines.length > 0;
     const hasThinking = this._thinkingText.trim().length > 0;
     const hasTools = this._toolProgress.length > 0;
+    const hasPendingLabel = this._pendingLabel.trim().length > 0;
 
-    if (!hasStatus && !hasThinking && !hasTools) return undefined;
+    if (!hasStatus && !hasThinking && !hasTools && !hasPendingLabel) return undefined;
 
     return {
       statusLines: [...this._statusLines],
       thinkingText: hasThinking ? this._thinkingText : undefined,
-      tools: [...this._toolProgress]
+      tools: [...this._toolProgress],
+      pendingLabel: hasPendingLabel ? this._pendingLabel : undefined
     };
   }
 

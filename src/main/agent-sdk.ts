@@ -616,6 +616,9 @@ export class AgentRuntime {
         if (event.type === "message_update") {
           if (event.assistantMessageEvent?.type === "text_delta" && typeof event.assistantMessageEvent.delta === "string") {
             streamOutput += event.assistantMessageEvent.delta;
+            if (hooks?.onLoopEvent) {
+              hooks.onLoopEvent({ type: "text_delta", requestId: hooks.requestId, delta: event.assistantMessageEvent.delta });
+            }
             return;
           }
           if (event.assistantMessageEvent?.type === "done") {
