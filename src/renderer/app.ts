@@ -281,7 +281,7 @@ export class LiltApp extends LitElement {
         break;
       case "thinking_delta":
         if (event.delta) {
-          this._thinkingText += event.delta;
+          this._pendingLabel += event.delta;
           changed = true;
         }
         break;
@@ -327,7 +327,7 @@ export class LiltApp extends LitElement {
 
     this._updatePendingMessage(
       this._pendingAssistantIndex,
-      this._thinkingText ? "Thinking を表示しています..." : "実行中...",
+      "実行中...",
       this._buildProgress()
     );
   }

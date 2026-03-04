@@ -237,8 +237,7 @@ export class LiltMessageList extends LitElement {
     const hasAnswer =
       Boolean(message.text?.trim()) &&
       message.text !== "実行開始を待っています..." &&
-      message.text !== "実行中..." &&
-      message.text !== "Thinking を表示しています...";
+      message.text !== "実行中...";
 
     const stateKey = this._stateKeyForMessage(message);
 
@@ -252,7 +251,7 @@ export class LiltMessageList extends LitElement {
           ? html`
               <details
                 class="thinking-block"
-                .open=${this._expandedThinkingById.has(stateKey)}
+                .open=${message.pending || this._expandedThinkingById.has(stateKey)}
                 @toggle=${(event: Event) => this._handleThinkingToggle(stateKey, event)}
               >
                 <summary class="thinking-summary ${message.pending ? "pending" : ""}">Thinking...</summary>
