@@ -13,10 +13,32 @@ PC作業を人間の代わりに実行する、軽量なAIアシスタント。
 
 ## 実装方針
 - AIエージェント機能は [Pi](https://github.com/badlogic/pi-mono) を利用する
-- アプリ基盤は Electron を利用する
-- Electron の Main プロセスで動くAIエージェントは [pi-coding-agent](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) の SDK を活用する
-- Electron の Renderer プロセスで動くUIは、[pi-web-ui](https://github.com/badlogic/pi-mono/tree/main/packages/web-ui) およびそれをベースにした [pi-web-ui-example](https://github.com/badlogic/pi-mono/blob/main/packages/web-ui/example) に近い構成を目指す
-- ただし上記UIは [pi-agent-core](https://github.com/badlogic/pi-mono/tree/main/packages/agent) などファイル入出力を伴うライブラリに依存するため、そのままでは Electron の Renderer では利用できない。必要に応じて Main 側で動作するようにポーティングする
+- アプリ基盤は [Electrobun](https://github.com/blackboardsh/electrobun) を利用する
+  - Bun をランタイムとするネイティブデスクトップフレームワーク
+  - メインプロセス（Bun）とウェブビュー（WebView）間の通信は型付き RPC で行う
+- Bun プロセスで動くAIエージェントは [pi-coding-agent](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) の SDK を活用する
+- WebView で動くUIは、[pi-web-ui](https://github.com/badlogic/pi-mono/tree/main/packages/web-ui) およびそれをベースにした [pi-web-ui-example](https://github.com/badlogic/pi-mono/blob/main/packages/web-ui/example) に近い構成を目指す
+- ただし上記UIは [pi-agent-core](https://github.com/badlogic/pi-mono/tree/main/packages/agent) などファイル入出力を伴うライブラリに依存するため、そのままでは WebView では利用できない。必要に応じて Bun 側で動作するようにポーティングする
+
+## アーキテクチャ概要
+
+```
+src/bun/index.ts        … Bun メインプロセス（旧 Electron Main）
+src/mainview/index.ts   … WebView エントリ（旧 Electron preload + Renderer）
+src/shared/rpc-schema.ts … 型付き RPC スキーマ（LiltoRPC）
+src/renderer/           … Lit UIコンポーネント群（変更なし）
+src/main/               … ビジネスロジック（agent-sdk, auth-service など）
+```
+
+### Electron → Electrobun 対応表
+
+| Electron | Electrobun |
+|---|---|
+| `ipcMain.handle` + `ipcRenderer.invoke` | `BrowserView.defineRPC<LiltoRPC>` (Bun) / `Electroview.defineRPC<LiltoRPC>` (WebView) |
+| `contextBridge.exposeInMainWorld` | `window.lilto = { ... }` を WebView エントリで設定 |
+| `webContents.send(channel, payload)` | `rpc.send.agentLoopEvent(event)` / `rpc.send.authStateChanged(state)` |
+| `app.getPath("userData")` | `Utils.paths.userData` |
+| `shell.openExternal(url)` | `Utils.openExternal(url)` |
 
 ## UIポーティング方針
 - 詳細は `docs/ui-porting-guidelines.md` を参照
@@ -35,8 +57,8 @@ PC作業を人間の代わりに実行する、軽量なAIアシスタント。
 詳細な検証手順は `docs/manual-test.md` を参照。
 
 ## 現在の実装スコープ（初期）
-- Electron の Main/Renderer 最小構成
-- Renderer から Main への IPC 経由で Pi SDK を呼び出す Agent Bridge
+- Electrobun の Bun/WebView 最小構成
+- WebView から Bun への型付き RPC 経由で Pi SDK を呼び出す Agent Bridge
 - Pi `ai` パッケージによる Claude OAuth 認証導線（外部ブラウザ起動 + コード入力 + 状態表示）
 - 固定間隔ハートビートと登録ジョブ実行
 - エラーの標準化レスポンスとログ出力
@@ -44,3 +66,4 @@ PC作業を人間の代わりに実行する、軽量なAIアシスタント。
 ## 現在の非対象
 - 音声入力
 - ウェイクワード検出
+
