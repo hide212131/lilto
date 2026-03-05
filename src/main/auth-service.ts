@@ -1,6 +1,6 @@
 import fs from "node:fs";
+import { spawn } from "node:child_process";
 import path from "node:path";
-import { shell } from "electron";
 import { createLogger, type Logger } from "./logger";
 import { OAUTH_PROVIDER_IDS, type OAuthProviderId } from "../shared/provider-settings";
 
@@ -98,7 +98,18 @@ export class ClaudeAuthService {
     logger = createLogger("auth"),
     providerFactory = defaultProviderFactory,
     authPath = path.join(process.cwd(), ".lilto-auth.json"),
-    openExternal = (url: string) => shell.openExternal(url)
+    openExternal = (url: string): Promise<void> =>
+      new Promise((resolve, reject) => {
+        const [cmd, args] =
+          process.platform === "darwin"
+            ? (["open", [url]] as const)
+            : process.platform === "win32"
+              ? (["cmd.exe", ["/c", "start", '""', url]] as const)
+              : (["xdg-open", [url]] as const);
+        const proc = spawn(cmd, args);
+        proc.on("error", reject);
+        proc.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`openExternal exited with code ${code}`))));
+      })
   }: {
     logger?: Logger;
     providerFactory?: (providerId: OAuthProviderId) => Promise<OAuthProvider>;
