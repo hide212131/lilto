@@ -1,6 +1,25 @@
 import type { AgentLoopEvent } from "../shared/agent-loop.js";
 import type { ActiveProvider, OAuthProviderId, ProviderSettings } from "../shared/provider-settings.js";
 
+export type SkillSource = "bundled" | "user";
+
+export type SkillInfo = {
+  name: string;
+  description: string;
+  parameters: unknown;
+  filePath: string;
+  source: SkillSource;
+};
+
+export type SkillUpdateInfo = {
+  skillName: string;
+  skillFilePath: string;
+  sourceUrl: string;
+  installedVersion: string | null;
+  latestVersion: string | null;
+  updateAvailable: boolean;
+};
+
 export type AuthPhase =
   | "unauthenticated"
   | "auth_in_progress"
@@ -71,6 +90,10 @@ declare global {
         | { ok: true; state: ProviderSettings }
         | { ok: false; error: { code: string; message: string } }
       >;
+      listSkills: () => Promise<SkillInfo[]>;
+      installSkill: (url: string) => Promise<{ ok: true; installedSkills: string[] } | { ok: false; error: string }>;
+      uninstallSkill: (filePath: string) => Promise<{ ok: true } | { ok: false; error: string }>;
+      checkSkillUpdates: () => Promise<SkillUpdateInfo[]>;
       onAgentLoopEvent: (listener: (event: AgentLoopEvent) => void) => () => void;
       onAuthStateChanged: (listener: (state: AuthState) => void) => () => void;
     };

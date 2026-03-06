@@ -5,6 +5,7 @@ import type { ClaudeAuthService } from "./auth-service";
 import { AGENT_LOOP_EVENT_CHANNEL, validatePrompt } from "./ipc-contract";
 import { createLogger } from "./logger";
 import type { ProviderSettingsService } from "./provider-settings";
+import { checkSkillUpdates, installSkillFromUrl, listSkillsWithSource, uninstallUserSkill } from "./skill-runtime";
 import type { AgentLoopEvent } from "../shared/agent-loop";
 
 function broadcastAuthState(authService: Pick<ClaudeAuthService, "getState">): void {
@@ -23,11 +24,15 @@ function broadcastLoopEvent(event: AgentLoopEvent): void {
 export function registerAgentIpcHandlers({
   agentRuntime,
   authService,
-  providerSettingsService
+  providerSettingsService,
+  bundledSkillsDir,
+  userSkillsDir
 }: {
   agentRuntime: AgentRuntime;
   authService: ClaudeAuthService;
   providerSettingsService: ProviderSettingsService;
+  bundledSkillsDir: string;
+  userSkillsDir: string;
 }): void {
   const logger = createLogger("ipc");
   authService.subscribe(() => {
@@ -130,5 +135,27 @@ export function registerAgentIpcHandlers({
 
     await shell.openExternal(parsedUrl.toString());
     return { ok: true };
+  });
+
+  ipcMain.handle("skills:list", () => {
+    return listSkillsWithSource({ bundledSkillsDir, userSkillsDir });
+  });
+
+  ipcMain.handle("skills:install", async (_event, payload: unknown) => {
+    if (!payload || typeof payload !== "object" || typeof (payload as { url?: unknown }).url !== "string") {
+      return { ok: false, error: "url は必須です" };
+    }
+    return installSkillFromUrl({ url: (payload as { url: string }).url, userSkillsDir });
+  });
+
+  ipcMain.handle("skills:uninstall", (_event, payload: unknown) => {
+    if (!payload || typeof payload !== "object" || typeof (payload as { filePath?: unknown }).filePath !== "string") {
+      return { ok: false, error: "filePath は必須です" };
+    }
+    return uninstallUserSkill({ skillFilePath: (payload as { filePath: string }).filePath, userSkillsDir });
+  });
+
+  ipcMain.handle("skills:checkUpdates", async () => {
+    return checkSkillUpdates({ userSkillsDir });
   });
 }

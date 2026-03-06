@@ -97,7 +97,13 @@ void app.whenReady().then(() => {
     availableSkills: skillRuntime.availableSkills
   });
 
-  registerAgentIpcHandlers({ agentRuntime, authService, providerSettingsService });
+  registerAgentIpcHandlers({
+    agentRuntime,
+    authService,
+    providerSettingsService,
+    bundledSkillsDir: skillRuntime.bundledSkillsDir,
+    userSkillsDir: skillRuntime.userSkillsDir
+  });
   createWindow();
   heartbeat.start();
 

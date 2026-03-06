@@ -1,6 +1,6 @@
 import { LitElement, html, css } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import type { AuthState, ActiveProvider, ProviderSettings } from "../types.js";
+import type { AuthState, ActiveProvider, ProviderSettings, SkillInfo, SkillUpdateInfo } from "../types.js";
 import { OAUTH_PROVIDER_IDS, type OAuthProviderId } from "../../shared/provider-settings.js";
 
 @customElement("lilt-settings-modal")
@@ -32,6 +32,19 @@ export class LiltSettingsModal extends LitElement {
   @state() private _saveStatus = "";
   @state() private _providerSelStatus = "";
   @state() private _oauthProvider: OAuthProviderId = "anthropic";
+
+  // Tab state
+  @state() private _activeTab: "providers" | "skills" = "providers";
+
+  // Skills state
+  @state() private _skills: SkillInfo[] = [];
+  @state() private _skillsLoading = false;
+  @state() private _skillInstallUrl = "";
+  @state() private _skillInstallStatus = "";
+  @state() private _skillInstalling = false;
+  @state() private _skillUpdates: SkillUpdateInfo[] = [];
+  @state() private _skillUpdatesChecking = false;
+  @state() private _skillUpdatesChecked = false;
 
   private _boundKeydown = (e: KeyboardEvent) => {
     if (e.key === "Escape" && this.open) this._close();
@@ -119,13 +132,6 @@ export class LiltSettingsModal extends LitElement {
     .settings-menu {
       border-right: 1px solid #e5e7eb;
       padding-right: 12px;
-    }
-    .settings-menu-item {
-      background: #f3f4f6;
-      border: 1px solid #e5e7eb;
-      border-radius: 10px;
-      padding: 10px 12px;
-      font-weight: 600;
     }
     .settings-main h3 {
       margin: 0 0 6px;
@@ -254,6 +260,85 @@ export class LiltSettingsModal extends LitElement {
     .icon-btn:hover {
       background: #f3f4f6;
     }
+    .settings-menu-item {
+      background: #f3f4f6;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-bottom: 6px;
+      transition: background 0.15s;
+    }
+    .settings-menu-item.active {
+      background: #111827;
+      color: #fff;
+      border-color: #111827;
+    }
+    .skill-install-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+    .skill-install-row input {
+      flex: 1;
+      min-width: 220px;
+      border: 1px solid var(--line, #dddddf);
+      border-radius: 9px;
+      padding: 9px 10px;
+      background: #fff;
+      font-family: "Hiragino Sans", "Yu Gothic", sans-serif;
+      font-size: 14px;
+    }
+    .skills-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+      margin-top: 12px;
+    }
+    .skills-table th {
+      text-align: left;
+      padding: 6px 8px;
+      border-bottom: 2px solid #e5e7eb;
+      font-weight: 600;
+      color: #374151;
+    }
+    .skills-table td {
+      padding: 8px;
+      border-bottom: 1px solid #f3f4f6;
+      vertical-align: top;
+    }
+    .skill-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .skill-badge.bundled {
+      background: #e5e7eb;
+      color: #374151;
+    }
+    .skill-badge.user {
+      background: #d1fae5;
+      color: #065f46;
+    }
+    .skill-filepath {
+      font-family: monospace;
+      font-size: 11px;
+      color: #6b7280;
+      word-break: break-all;
+    }
+    .btn-danger {
+      background: #fee2e2;
+      color: #991b1b;
+      border-color: #fca5a5;
+    }
+    .btn-danger:hover {
+      background: #fca5a5;
+    }
     @media (max-width: 720px) {
       .settings-body {
         grid-template-columns: 1fr;
@@ -269,15 +354,6 @@ export class LiltSettingsModal extends LitElement {
   `;
 
   render() {
-    const ps = this.providerSettings;
-    const as = this.authState;
-    const isClaudeActive = ps.activeProvider === "claude";
-    const isCustomActive = ps.activeProvider === "custom-openai-completions";
-    const authPhase = as?.phase ?? "unauthenticated";
-    const authMessage = as?.message ?? "未認証です。認証を開始してください。";
-    const codeInputEnabled = authPhase === "awaiting_code";
-    const oauthBtnDisabled = authPhase === "auth_in_progress" || authPhase === "awaiting_code";
-
     return html`
       <div
         class="modal-backdrop ${this.open ? "open" : ""}"
@@ -290,156 +366,372 @@ export class LiltSettingsModal extends LitElement {
           </div>
           <div class="settings-body">
             <div class="settings-menu">
-              <div class="settings-menu-item">Providers &amp; Models</div>
+              <div
+                class="settings-menu-item ${this._activeTab === "providers" ? "active" : ""}"
+                @click=${() => this._switchTab("providers")}
+              >Providers &amp; Models</div>
+              <div
+                class="settings-menu-item ${this._activeTab === "skills" ? "active" : ""}"
+                @click=${() => this._switchTab("skills")}
+              >Agent Skills</div>
             </div>
             <div class="settings-main">
-              <h3>Providers &amp; Models</h3>
-              <p>OAuth Provider と Custom Provider（OpenAI Completions Compatible）を設定できます。</p>
-
-              <div class="provider-choice">
-                <label>
-                  <input
-                    type="radio"
-                    name="active-provider"
-                    value="claude"
-                    .checked=${isClaudeActive}
-                    @change=${() => this._changeProvider("claude")}
-                  />
-                  OAuth Provider
-                </label>
-                <label>
-                  <input
-                    type="radio"
-                    name="active-provider"
-                    value="custom-openai-completions"
-                    .checked=${isCustomActive}
-                    @change=${() => this._changeProvider("custom-openai-completions")}
-                  />
-                  Custom Provider
-                </label>
-                <span class="status">${this._providerSelStatus}</span>
-              </div>
-
-              <section class="provider-section ${isClaudeActive ? "active" : ""}">
-                <h4>OAuth Authorization</h4>
-                <p>OAuth 認証を開始して、表示された認証コードを入力してください。</p>
-                <label class="oauth-provider-row">
-                  OAuth Provider
-                  <select
-                    id="oauth-provider"
-                    .value=${this._oauthProvider}
-                    @change=${(e: Event) => {
-                      const value = (e.target as HTMLSelectElement).value as OAuthProviderId;
-                      this._oauthProvider = OAUTH_PROVIDER_IDS.includes(value) ? value : "anthropic";
-                    }}
-                  >
-                    ${OAUTH_PROVIDER_IDS.map((id) => html`<option value=${id}>${this._oauthProviderLabel(id)}</option>`)}
-                  </select>
-                </label>
-                <div class="auth-row">
-                  <button .disabled=${oauthBtnDisabled} @click=${this._startOauth}>
-                    OAuth で認証
-                  </button>
-                  <span class="status">${authMessage}</span>
-                </div>
-                <div class="auth-row auth-code-row">
-                  <input
-                    id="auth-code"
-                    placeholder="Authentication Code（code#state）を貼り付け"
-                    .value=${this._authCodeValue}
-                    .disabled=${!codeInputEnabled}
-                    @input=${(e: InputEvent) => {
-                      this._authCodeValue = (e.target as HTMLInputElement).value;
-                    }}
-                    @keydown=${(e: KeyboardEvent) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        void this._submitCode();
-                      }
-                    }}
-                  />
-                  <button .disabled=${!codeInputEnabled} @click=${this._submitCode}>
-                    コード送信
-                  </button>
-                </div>
-                <div class="status">
-                  認証画面の「Authentication Code / Paste this into ...」で表示された値を貼り付けて送信してください。
-                </div>
-              </section>
-
-              <section class="provider-section ${isCustomActive ? "active" : ""}">
-                <h4>Custom Provider (OpenAI Completions Compatible)</h4>
-                <div class="input-grid">
-                  <label>
-                    Provider Name (Required)
-                    <input
-                      id="custom-provider-name"
-                      placeholder="e.g., Ollama"
-                      .value=${this._customName}
-                      @input=${(e: InputEvent) => {
-                        this._customName = (e.target as HTMLInputElement).value;
-                      }}
-                    />
-                  </label>
-                  <label>
-                    Base URL (Required)
-                    <input
-                      id="custom-base-url"
-                      placeholder="http://127.0.0.1:11434/v1"
-                      .value=${this._customBaseUrl}
-                      @input=${(e: InputEvent) => {
-                        this._customBaseUrl = (e.target as HTMLInputElement).value;
-                      }}
-                    />
-                  </label>
-                  <label>
-                    API Key (Optional)
-                    <input
-                      id="custom-api-key"
-                      type="password"
-                      placeholder="Leave empty if not required"
-                      .value=${this._customApiKey}
-                      @input=${(e: InputEvent) => {
-                        this._customApiKey = (e.target as HTMLInputElement).value;
-                      }}
-                    />
-                  </label>
-                  <label>
-                    Model ID
-                    <input
-                      id="custom-model-id"
-                      placeholder="qwen2.5:0.5b"
-                      .value=${this._customModelId}
-                      @input=${(e: InputEvent) => {
-                        this._customModelId = (e.target as HTMLInputElement).value;
-                      }}
-                    />
-                  </label>
-                </div>
-                <h4>Network Proxy</h4>
-                <div class="input-grid">
-                  <label>
-                    <input
-                      id="use-proxy"
-                      type="checkbox"
-                      .checked=${this._useProxy}
-                      @change=${(e: InputEvent) => {
-                        this._useProxy = (e.target as HTMLInputElement).checked;
-                      }}
-                    />
-                    Proxy を使う（HTTP_PROXY / HTTPS_PROXY / NO_PROXY を利用）
-                  </label>
-                </div>
-                <div class="provider-actions">
-                  <button @click=${this._saveProviderAndProxy}>Save Provider Settings</button>
-                  <span class="status">${this._saveStatus}</span>
-                </div>
-              </section>
+              ${this._activeTab === "providers" ? this._renderProviders() : this._renderSkills()}
             </div>
           </div>
         </div>
       </div>
     `;
+  }
+
+  private _renderProviders() {
+    const ps = this.providerSettings;
+    const as = this.authState;
+    const isClaudeActive = ps.activeProvider === "claude";
+    const isCustomActive = ps.activeProvider === "custom-openai-completions";
+    const authPhase = as?.phase ?? "unauthenticated";
+    const authMessage = as?.message ?? "未認証です。認証を開始してください。";
+    const codeInputEnabled = authPhase === "awaiting_code";
+    const oauthBtnDisabled = authPhase === "auth_in_progress" || authPhase === "awaiting_code";
+
+    return html`
+      <h3>Providers &amp; Models</h3>
+      <p>OAuth Provider と Custom Provider（OpenAI Completions Compatible）を設定できます。</p>
+
+      <div class="provider-choice">
+        <label>
+          <input
+            type="radio"
+            name="active-provider"
+            value="claude"
+            .checked=${isClaudeActive}
+            @change=${() => this._changeProvider("claude")}
+          />
+          OAuth Provider
+        </label>
+        <label>
+          <input
+            type="radio"
+            name="active-provider"
+            value="custom-openai-completions"
+            .checked=${isCustomActive}
+            @change=${() => this._changeProvider("custom-openai-completions")}
+          />
+          Custom Provider
+        </label>
+        <span class="status">${this._providerSelStatus}</span>
+      </div>
+
+      <section class="provider-section ${isClaudeActive ? "active" : ""}">
+        <h4>OAuth Authorization</h4>
+        <p>OAuth 認証を開始して、表示された認証コードを入力してください。</p>
+        <label class="oauth-provider-row">
+          OAuth Provider
+          <select
+            id="oauth-provider"
+            .value=${this._oauthProvider}
+            @change=${(e: Event) => {
+              const value = (e.target as HTMLSelectElement).value as OAuthProviderId;
+              this._oauthProvider = OAUTH_PROVIDER_IDS.includes(value) ? value : "anthropic";
+            }}
+          >
+            ${OAUTH_PROVIDER_IDS.map((id) => html`<option value=${id}>${this._oauthProviderLabel(id)}</option>`)}
+          </select>
+        </label>
+        <div class="auth-row">
+          <button .disabled=${oauthBtnDisabled} @click=${this._startOauth}>
+            OAuth で認証
+          </button>
+          <span class="status">${authMessage}</span>
+        </div>
+        <div class="auth-row auth-code-row">
+          <input
+            id="auth-code"
+            placeholder="Authentication Code（code#state）を貼り付け"
+            .value=${this._authCodeValue}
+            .disabled=${!codeInputEnabled}
+            @input=${(e: InputEvent) => {
+              this._authCodeValue = (e.target as HTMLInputElement).value;
+            }}
+            @keydown=${(e: KeyboardEvent) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void this._submitCode();
+              }
+            }}
+          />
+          <button .disabled=${!codeInputEnabled} @click=${this._submitCode}>
+            コード送信
+          </button>
+        </div>
+        <div class="status">
+          認証画面の「Authentication Code / Paste this into ...」で表示された値を貼り付けて送信してください。
+        </div>
+      </section>
+
+      <section class="provider-section ${isCustomActive ? "active" : ""}">
+        <h4>Custom Provider (OpenAI Completions Compatible)</h4>
+        <div class="input-grid">
+          <label>
+            Provider Name (Required)
+            <input
+              id="custom-provider-name"
+              placeholder="e.g., Ollama"
+              .value=${this._customName}
+              @input=${(e: InputEvent) => {
+                this._customName = (e.target as HTMLInputElement).value;
+              }}
+            />
+          </label>
+          <label>
+            Base URL (Required)
+            <input
+              id="custom-base-url"
+              placeholder="http://127.0.0.1:11434/v1"
+              .value=${this._customBaseUrl}
+              @input=${(e: InputEvent) => {
+                this._customBaseUrl = (e.target as HTMLInputElement).value;
+              }}
+            />
+          </label>
+          <label>
+            API Key (Optional)
+            <input
+              id="custom-api-key"
+              type="password"
+              placeholder="Leave empty if not required"
+              .value=${this._customApiKey}
+              @input=${(e: InputEvent) => {
+                this._customApiKey = (e.target as HTMLInputElement).value;
+              }}
+            />
+          </label>
+          <label>
+            Model ID
+            <input
+              id="custom-model-id"
+              placeholder="qwen2.5:0.5b"
+              .value=${this._customModelId}
+              @input=${(e: InputEvent) => {
+                this._customModelId = (e.target as HTMLInputElement).value;
+              }}
+            />
+          </label>
+        </div>
+        <h4>Network Proxy</h4>
+        <div class="input-grid">
+          <label>
+            <input
+              id="use-proxy"
+              type="checkbox"
+              .checked=${this._useProxy}
+              @change=${(e: InputEvent) => {
+                this._useProxy = (e.target as HTMLInputElement).checked;
+              }}
+            />
+            Proxy を使う（HTTP_PROXY / HTTPS_PROXY / NO_PROXY を利用）
+          </label>
+        </div>
+        <div class="provider-actions">
+          <button @click=${this._saveProviderAndProxy}>Save Provider Settings</button>
+          <span class="status">${this._saveStatus}</span>
+        </div>
+      </section>
+    `;
+  }
+
+  private _renderSkills() {
+    return html`
+      <h3>Agent Skills</h3>
+      <p>スキルをインストール・管理します。変更はアプリ再起動後に反映されます。</p>
+
+      <section class="provider-section">
+        <h4>スキルのインストール</h4>
+        <p>zip ファイルの URL を指定してインストールします。</p>
+        <div class="skill-install-row">
+          <input
+            placeholder="https://example.com/my-skill.zip"
+            .value=${this._skillInstallUrl}
+            @input=${(e: InputEvent) => {
+              this._skillInstallUrl = (e.target as HTMLInputElement).value;
+            }}
+            @keydown=${(e: KeyboardEvent) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void this._installSkill();
+              }
+            }}
+          />
+          <button .disabled=${this._skillInstalling || !this._skillInstallUrl.trim()} @click=${this._installSkill}>
+            ${this._skillInstalling ? "インストール中..." : "インストール"}
+          </button>
+        </div>
+        <span class="status">${this._skillInstallStatus}</span>
+      </section>
+
+      <section class="provider-section" style="margin-top: 12px;">
+        <h4>
+          インストール済みスキル
+          <button style="margin-left: 10px; font-size: 13px; padding: 4px 10px;" @click=${this._loadSkills} .disabled=${this._skillsLoading}>
+            ${this._skillsLoading ? "読み込み中..." : "更新"}
+          </button>
+        </h4>
+        ${this._skillsLoading
+          ? html`<p class="status">読み込み中...</p>`
+          : this._skills.length === 0
+            ? html`<p class="status">スキルが見つかりません。</p>`
+            : html`
+              <table class="skills-table">
+                <thead>
+                  <tr>
+                    <th>名前</th>
+                    <th>説明</th>
+                    <th>種別</th>
+                    <th>ファイルパス</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${this._skills.map((skill) => html`
+                    <tr>
+                      <td><strong>${skill.name}</strong></td>
+                      <td>${skill.description}</td>
+                      <td>
+                        <span class="skill-badge ${skill.source}">
+                          ${skill.source === "bundled" ? "組み込み" : "ユーザー"}
+                        </span>
+                      </td>
+                      <td><span class="skill-filepath">${skill.filePath}</span></td>
+                      <td>
+                        ${skill.source === "user"
+                          ? html`<button class="btn-danger" @click=${() => this._uninstallSkill(skill.filePath)}>削除</button>`
+                          : html`<span class="status">—</span>`}
+                      </td>
+                    </tr>
+                  `)}
+                </tbody>
+              </table>
+            `}
+      </section>
+
+      <section class="provider-section" style="margin-top: 12px;">
+        <h4>
+          アップデート確認
+          <button style="margin-left: 10px; font-size: 13px; padding: 4px 10px;" @click=${this._checkUpdates} .disabled=${this._skillUpdatesChecking}>
+            ${this._skillUpdatesChecking ? "確認中..." : "アップデートを確認"}
+          </button>
+        </h4>
+        <p>GitHub / GitLab のリリースからインストールしたスキルの最新バージョンを確認します。</p>
+        ${this._skillUpdatesChecked
+          ? this._skillUpdates.length === 0
+            ? html`<p class="status">アップデート対象のスキルがありません（バージョン情報なし）。</p>`
+            : html`
+              <table class="skills-table">
+                <thead>
+                  <tr>
+                    <th>スキル名</th>
+                    <th>インストール済み</th>
+                    <th>最新</th>
+                    <th>状態</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${this._skillUpdates.map((u) => html`
+                    <tr>
+                      <td><strong>${u.skillName}</strong></td>
+                      <td>${u.installedVersion ?? "不明"}</td>
+                      <td>${u.latestVersion ?? "取得失敗"}</td>
+                      <td>
+                        ${u.updateAvailable
+                          ? html`<span class="skill-badge user">更新あり</span>`
+                          : html`<span class="skill-badge bundled">最新</span>`}
+                      </td>
+                      <td>
+                        ${u.updateAvailable
+                          ? html`<button @click=${() => this._updateSkill(u.sourceUrl)}>更新</button>`
+                          : ""}
+                      </td>
+                    </tr>
+                  `)}
+                </tbody>
+              </table>
+            `
+          : ""}
+      </section>
+    `;
+  }
+
+  private _switchTab(tab: "providers" | "skills") {
+    this._activeTab = tab;
+    if (tab === "skills" && this._skills.length === 0 && !this._skillsLoading) {
+      void this._loadSkills();
+    }
+  }
+
+  private async _loadSkills() {
+    this._skillsLoading = true;
+    try {
+      this._skills = await window.lilto.listSkills();
+    } finally {
+      this._skillsLoading = false;
+    }
+  }
+
+  private async _installSkill() {
+    const url = this._skillInstallUrl.trim();
+    if (!url) return;
+    this._skillInstalling = true;
+    this._skillInstallStatus = "";
+    try {
+      const result = await window.lilto.installSkill(url);
+      if (result.ok) {
+        this._skillInstallStatus = `インストール完了: ${result.installedSkills.join(", ")}（再起動後に有効になります）`;
+        this._skillInstallUrl = "";
+        await this._loadSkills();
+      } else {
+        this._skillInstallStatus = `エラー: ${result.error}`;
+      }
+    } finally {
+      this._skillInstalling = false;
+    }
+  }
+
+  private async _uninstallSkill(filePath: string) {
+    const result = await window.lilto.uninstallSkill(filePath);
+    if (result.ok) {
+      await this._loadSkills();
+    } else {
+      this._skillInstallStatus = `削除エラー: ${result.error}`;
+    }
+  }
+
+  private async _checkUpdates() {
+    this._skillUpdatesChecking = true;
+    this._skillUpdatesChecked = false;
+    try {
+      this._skillUpdates = await window.lilto.checkSkillUpdates();
+      this._skillUpdatesChecked = true;
+    } finally {
+      this._skillUpdatesChecking = false;
+    }
+  }
+
+  private async _updateSkill(sourceUrl: string) {
+    this._skillInstalling = true;
+    this._skillInstallStatus = "";
+    try {
+      const result = await window.lilto.installSkill(sourceUrl);
+      if (result.ok) {
+        this._skillInstallStatus = `更新完了: ${result.installedSkills.join(", ")}（再起動後に有効になります）`;
+        await this._loadSkills();
+        await this._checkUpdates();
+      } else {
+        this._skillInstallStatus = `更新エラー: ${result.error}`;
+      }
+    } finally {
+      this._skillInstalling = false;
+    }
   }
 
   private _close() {
