@@ -1,5 +1,14 @@
 import type { ElectrobunConfig } from "electrobun";
 
+const e2eCdpPort = process.env.LILTO_E2E_CDP_PORT;
+const e2eUseCef = process.env.LILTO_E2E_USE_CEF === "1";
+const e2eChromiumFlags = e2eCdpPort
+  ? {
+      "remote-debugging-port": e2eCdpPort
+    }
+  : undefined;
+const useCefForE2E = e2eUseCef || Boolean(e2eCdpPort);
+
 export default {
   app: {
     name: "lilt-o",
@@ -19,13 +28,19 @@ export default {
       "src/mainview/index.html": "views/mainview/index.html"
     },
     mac: {
-      bundleCEF: false
+      bundleCEF: useCefForE2E,
+      defaultRenderer: useCefForE2E ? "cef" : "native",
+      chromiumFlags: e2eChromiumFlags
     },
     linux: {
-      bundleCEF: false
+      bundleCEF: useCefForE2E,
+      defaultRenderer: useCefForE2E ? "cef" : "native",
+      chromiumFlags: e2eChromiumFlags
     },
     win: {
-      bundleCEF: false
+      bundleCEF: useCefForE2E,
+      defaultRenderer: useCefForE2E ? "cef" : "native",
+      chromiumFlags: e2eChromiumFlags
     }
   }
 } satisfies ElectrobunConfig;

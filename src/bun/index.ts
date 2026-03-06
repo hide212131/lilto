@@ -17,6 +17,11 @@ import type { LiltoRPC } from "../shared/rpc-schema";
 
 const config = readConfig();
 const logger = createLogger("main");
+const e2eDriverEnabled = process.env.LILTO_E2E_DRIVER === "1";
+const e2eDriverPort = Number(process.env.LILTO_E2E_DRIVER_PORT || 39393);
+const useCefRenderer = process.env.LILTO_E2E_USE_CEF === "1";
+const useCefMinimalMode = process.env.LILTO_CEF_MINIMAL === "1";
+const cefProbeMode = process.env.LILTO_CEF_PROBE_MODE || (useCefMinimalMode ? "minimal" : "off");
 
 const authService = new ClaudeAuthService({
   logger: createLogger("auth"),
@@ -183,24 +188,140 @@ const rpc = BrowserView.defineRPC<LiltoRPC>({
 });
 
 // Create main window
-let mainWindow: BrowserWindow<typeof rpc> | null = null;
+let mainWindow: BrowserWindow | null = null;
+let e2eServer: Bun.Server | null = null;
 
-mainWindow = new BrowserWindow({
-  title: config.appName,
-  url: "views://mainview/index.html",
-  rpc,
-  frame: {
-    width: 980,
-    height: 720,
-    x: 0,
-    y: 0
+async function evalInMainWebview(script: string): Promise<unknown> {
+  const webviewRpc = (mainWindow?.webview?.rpc as unknown as {
+    request?: {
+      evaluateJavascriptWithResponse?: (params: { script: string }) => Promise<unknown>;
+    };
+  }) ?? null;
+
+  const evaluator = webviewRpc?.request?.evaluateJavascriptWithResponse;
+  if (!evaluator) {
+    throw new Error("E2E driver is not ready: webview RPC evaluator is unavailable");
   }
-});
 
-heartbeat.start();
+  return evaluator({ script });
+}
+
+if (e2eDriverEnabled) {
+  e2eServer = Bun.serve({
+    port: e2eDriverPort,
+    fetch: async (request) => {
+      const url = new URL(request.url);
+
+      if (request.method === "GET" && url.pathname === "/health") {
+        return new Response(JSON.stringify({ ok: true }), {
+          headers: { "content-type": "application/json" }
+        });
+      }
+
+      if (request.method === "POST" && url.pathname === "/eval") {
+        try {
+          const payload = await request.json() as { script?: unknown };
+          const script = typeof payload?.script === "string" ? payload.script : "";
+          if (!script) {
+            return new Response(JSON.stringify({ ok: false, error: "script is required" }), {
+              status: 400,
+              headers: { "content-type": "application/json" }
+            });
+          }
+
+          const value = await evalInMainWebview(script);
+          return new Response(JSON.stringify({ ok: true, value }), {
+            headers: { "content-type": "application/json" }
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return new Response(JSON.stringify({ ok: false, error: message }), {
+            status: 500,
+            headers: { "content-type": "application/json" }
+          });
+        }
+      }
+
+      if (request.method === "POST" && url.pathname === "/shutdown") {
+        setTimeout(() => process.exit(0), 50);
+        return new Response(JSON.stringify({ ok: true }), {
+          headers: { "content-type": "application/json" }
+        });
+      }
+
+      return new Response(JSON.stringify({ ok: false, error: "not found" }), {
+        status: 404,
+        headers: { "content-type": "application/json" }
+      });
+    }
+  });
+
+  logger.info("e2e_driver_started", { port: e2eDriverPort });
+}
+
+if (cefProbeMode === "minimal") {
+  logger.info("cef_probe_mode", { mode: cefProbeMode, useCefRenderer });
+  mainWindow = new BrowserWindow({
+    title: `${config.appName} (CEF minimal)` ,
+    renderer: useCefRenderer ? "cef" : "native",
+    url: null,
+    html: "<!doctype html><html><head><meta charset=\"utf-8\"><title>CEF Minimal</title></head><body><h1>CEF Minimal Window</h1></body></html>",
+    frame: {
+      width: 980,
+      height: 720,
+      x: 0,
+      y: 0
+    }
+  });
+} else if (cefProbeMode === "views-no-rpc") {
+  logger.info("cef_probe_mode", { mode: cefProbeMode, useCefRenderer });
+  mainWindow = new BrowserWindow({
+    title: `${config.appName} (CEF views-no-rpc)`,
+    renderer: useCefRenderer ? "cef" : "native",
+    url: "views://mainview/index.html",
+    frame: {
+      width: 980,
+      height: 720,
+      x: 0,
+      y: 0
+    }
+  });
+} else if (cefProbeMode === "views-rpc") {
+  logger.info("cef_probe_mode", { mode: cefProbeMode, useCefRenderer });
+  mainWindow = new BrowserWindow({
+    title: `${config.appName} (CEF views-rpc)`,
+    renderer: useCefRenderer ? "cef" : "native",
+    url: "views://mainview/index.html",
+    rpc,
+    frame: {
+      width: 980,
+      height: 720,
+      x: 0,
+      y: 0
+    }
+  });
+} else {
+  mainWindow = new BrowserWindow({
+    title: config.appName,
+    renderer: useCefRenderer ? "cef" : "native",
+    url: "views://mainview/index.html",
+    rpc,
+    frame: {
+      width: 980,
+      height: 720,
+      x: 0,
+      y: 0
+    }
+  });
+}
+
+if (cefProbeMode === "off") {
+  heartbeat.start();
+}
 
 // Cleanup on app quit
 process.on("exit", () => {
   heartbeat.stop();
   authService.dispose();
+  e2eServer?.stop();
 });

@@ -7,3 +7,4 @@ dist
 test/artifacts/
 .lilto-provider-settings.json
 skills/bundled/
+build/

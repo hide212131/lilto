@@ -7,9 +7,26 @@ const { normalizeCommandArgs, normalizeWorkingDirectory, resolveCliCommand } = r
 const rootDir = path.resolve(__dirname, "..");
 const sessionName = "lilto-electron-e2e-live";
 const cdpPort = process.env.LILTO_E2E_CDP_PORT || "9223";
-const screenshotPath = path.join(rootDir, "test", "artifacts", "electron-e2e-agent-skills-live.png");
+const screenshotPath = path.join(rootDir, "test", "artifacts", "electrobun-e2e-agent-skills-live.png");
 const e2eMagicWord = "[[LILTO_SKILL_E2E_MAGIC]]";
 const e2eSkillName = "lilto-e2e-example-title";
+
+function resolveDesktopRuntimeBinary() {
+  const binDir = path.join(rootDir, "node_modules", ".bin");
+  const candidates =
+    process.platform === "win32"
+      ? ["electrobun.cmd", "electron.cmd"]
+      : ["electrobun", "electron"];
+
+  for (const candidate of candidates) {
+    const candidatePath = path.join(binDir, candidate);
+    if (fs.existsSync(candidatePath)) {
+      return candidatePath;
+    }
+  }
+
+  throw new Error(`Desktop runtime binary not found. Checked: ${candidates.join(", ")}`);
+}
 
 function run(cmd, args, options = {}) {
   const resolvedCmd = resolveCliCommand(cmd);
@@ -246,14 +263,11 @@ async function main() {
   const removedSkills = cleanupPriorE2ESkills();
   console.log(`Pre-cleanup removed ${removedSkills.length} E2E skill(s) by magic word match`);
 
-  const electronBin =
-    process.platform === "win32"
-      ? path.join(rootDir, "node_modules", ".bin", "electron.cmd")
-      : path.join(rootDir, "node_modules", ".bin", "electron");
+  const electronBin = resolveDesktopRuntimeBinary();
 
-  const electron = spawn(electronBin, [".", `--remote-debugging-port=${cdpPort}`], {
+  const electron = spawn(electronBin, ["."], {
     cwd: rootDir,
-    env: { ...process.env, LILTO_E2E_MOCK: "0" },
+    env: { ...process.env, LILTO_E2E_CDP_PORT: cdpPort, LILTO_E2E_MOCK: "0" },
     stdio: ["ignore", "pipe", "pipe"]
   });
 
