@@ -327,7 +327,8 @@ async function main() {
       "待機中",
       "認証が必要",
       "Claude 認証が必要",
-      "Custom Provider"
+      "Custom Provider",
+      "プロバイダー設定が必要"
     ]);
     console.log(`✓ Initial status: "${initialStatus}"`);
 
@@ -400,9 +401,8 @@ async function main() {
     const expectedFinal = `[E2E_MOCK_FINAL] 要求「${secondMessage}」を処理し、複数コマンドを実行して回答しました。`;
     await waitForResponse(expectedFinal);
     await waitForMessagesContaining([
-      "考え中...",
-      "コマンド実行: read_file",
-      "コマンド実行: run_in_terminal"
+      "Running command: read_file",
+      "Running command: run_in_terminal"
     ]);
     console.log(`✓ Mock loop progress + final response received: "${expectedFinal}"`);
 

@@ -12,6 +12,10 @@ contextBridge.exposeInMainWorld("lilto", {
   getAuthState: async () => ipcRenderer.invoke("auth:getState"),
   getProviderSettings: async () => ipcRenderer.invoke("providers:getSettings"),
   saveProviderSettings: async (settings: unknown) => ipcRenderer.invoke("providers:saveSettings", settings),
+  listSkills: async () => ipcRenderer.invoke("skills:list"),
+  installSkill: async (url: string) => ipcRenderer.invoke("skills:install", { url }),
+  uninstallSkill: async (filePath: string) => ipcRenderer.invoke("skills:uninstall", { filePath }),
+  checkSkillUpdates: async () => ipcRenderer.invoke("skills:checkUpdates"),
   onAgentLoopEvent: (listener: (event: AgentLoopEvent) => void) => {
     const wrapped = (_event: unknown, event: AgentLoopEvent) => listener(event);
     ipcRenderer.on(AGENT_LOOP_EVENT_CHANNEL, wrapped);

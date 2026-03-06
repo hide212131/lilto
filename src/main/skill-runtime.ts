@@ -353,6 +353,254 @@ export function setupSkillRuntime(options: {
   };
 }
 
+export type SkillSource = "bundled" | "user";
+
+export type SkillInfo = SkillMetadata & {
+  source: SkillSource;
+};
+
+export function listSkillsWithSource(options: {
+  bundledSkillsDir: string;
+  userSkillsDir: string;
+}): SkillInfo[] {
+  const result: SkillInfo[] = [];
+  const seen = new Set<string>();
+
+  for (const skill of discoverSkillMetadata([options.userSkillsDir])) {
+    seen.add(skill.name);
+    result.push({ ...skill, source: "user" });
+  }
+
+  for (const skill of discoverSkillMetadata([options.bundledSkillsDir])) {
+    if (!seen.has(skill.name)) {
+      result.push({ ...skill, source: "bundled" });
+    }
+  }
+
+  return result;
+}
+
+export function uninstallUserSkill(options: {
+  skillFilePath: string;
+  userSkillsDir: string;
+}): { ok: true } | { ok: false; error: string } {
+  const skillDir = path.resolve(path.dirname(options.skillFilePath));
+  const userSkillsDir = path.resolve(options.userSkillsDir);
+
+  if (!skillDir.startsWith(userSkillsDir + path.sep)) {
+    return { ok: false, error: "Cannot uninstall bundled or system skills" };
+  }
+
+  try {
+    fs.rmSync(skillDir, { recursive: true, force: true });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+async function extractZip(zipFile: string, destDir: string): Promise<void> {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const execFileAsync = promisify(execFile);
+
+  if (process.platform === "win32") {
+    await execFileAsync("powershell", ["-Command", `Expand-Archive -Path "${zipFile}" -DestinationPath "${destDir}" -Force`]);
+  } else {
+    await execFileAsync("unzip", ["-o", zipFile, "-d", destDir]);
+  }
+}
+
+const SKILL_SOURCE_FILE = ".skill-source.json";
+
+type SkillSourceRecord = {
+  url: string;
+  installedAt: number;
+  installedVersion: string | null;
+};
+
+type GitHubReleaseInfo = {
+  type: "github";
+  owner: string;
+  repo: string;
+  version: string | null;
+};
+
+type GitLabReleaseInfo = {
+  type: "gitlab";
+  host: string;
+  projectPath: string;
+  version: string | null;
+};
+
+function parseReleaseUrl(url: string): GitHubReleaseInfo | GitLabReleaseInfo | null {
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname === "github.com") {
+      // /owner/repo/releases/download/vX.Y.Z/file.zip
+      const m = parsed.pathname.match(/^\/([^/]+)\/([^/]+)\/releases\/download\/([^/]+)\//);
+      if (m) return { type: "github", owner: m[1], repo: m[2], version: m[3] };
+      // /owner/repo/archive/refs/tags/vX.Y.Z.zip
+      const m2 = parsed.pathname.match(/^\/([^/]+)\/([^/]+)\/archive\/refs\/tags\/([^/]+)\.zip$/);
+      if (m2) return { type: "github", owner: m2[1], repo: m2[2], version: m2[3] };
+      // /owner/repo/archive/refs/heads/... (branch, no version)
+      const m3 = parsed.pathname.match(/^\/([^/]+)\/([^/]+)\/archive\//);
+      if (m3) return { type: "github", owner: m3[1], repo: m3[2], version: null };
+    }
+    if (parsed.hostname.includes("gitlab")) {
+      // /namespace/repo/-/releases/vX.Y.Z/downloads/file.zip
+      const m = parsed.pathname.match(/^(\/[^/]+\/[^/]+)\/-\/releases\/([^/]+)\//);
+      if (m) return { type: "gitlab", host: parsed.origin, projectPath: m[1].slice(1), version: m[2] };
+      // /namespace/repo/-/archive/vX.Y.Z/file.zip
+      const m2 = parsed.pathname.match(/^(\/[^/]+\/[^/]+)\/-\/archive\/([^/]+)\//);
+      if (m2) return { type: "gitlab", host: parsed.origin, projectPath: m2[1].slice(1), version: m2[2] };
+    }
+  } catch {
+    // invalid URL
+  }
+  return null;
+}
+
+async function fetchLatestReleaseTag(info: GitHubReleaseInfo | GitLabReleaseInfo): Promise<string | null> {
+  try {
+    if (info.type === "github") {
+      const apiUrl = `https://api.github.com/repos/${info.owner}/${info.repo}/releases/latest`;
+      const res = await fetch(apiUrl, { headers: { Accept: "application/vnd.github+json" } });
+      if (!res.ok) return null;
+      const data = await res.json() as { tag_name?: string };
+      return data.tag_name ?? null;
+    }
+    if (info.type === "gitlab") {
+      const encodedPath = encodeURIComponent(info.projectPath);
+      const apiUrl = `${info.host}/api/v4/projects/${encodedPath}/releases?per_page=1`;
+      const res = await fetch(apiUrl);
+      if (!res.ok) return null;
+      const data = await res.json() as Array<{ tag_name?: string }>;
+      return data[0]?.tag_name ?? null;
+    }
+  } catch {
+    // network error
+  }
+  return null;
+}
+
+export type SkillUpdateInfo = {
+  skillName: string;
+  skillFilePath: string;
+  sourceUrl: string;
+  installedVersion: string | null;
+  latestVersion: string | null;
+  updateAvailable: boolean;
+};
+
+export async function checkSkillUpdates(options: { userSkillsDir: string }): Promise<SkillUpdateInfo[]> {
+  const results: SkillUpdateInfo[] = [];
+  if (!fs.existsSync(options.userSkillsDir)) return results;
+
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(options.userSkillsDir, { withFileTypes: true });
+  } catch {
+    return results;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const skillDir = path.join(options.userSkillsDir, entry.name);
+    const sourceFile = path.join(skillDir, SKILL_SOURCE_FILE);
+    const skillMd = path.join(skillDir, "SKILL.md");
+
+    if (!fs.existsSync(sourceFile) || !fs.existsSync(skillMd)) continue;
+
+    let record: SkillSourceRecord;
+    try {
+      record = JSON.parse(fs.readFileSync(sourceFile, "utf8")) as SkillSourceRecord;
+    } catch {
+      continue;
+    }
+
+    const releaseInfo = parseReleaseUrl(record.url);
+    let latestVersion: string | null = null;
+    if (releaseInfo && releaseInfo.version !== null) {
+      latestVersion = await fetchLatestReleaseTag(releaseInfo);
+    }
+
+    const updateAvailable = latestVersion !== null && latestVersion !== record.installedVersion;
+
+    results.push({
+      skillName: entry.name,
+      skillFilePath: skillMd,
+      sourceUrl: record.url,
+      installedVersion: record.installedVersion,
+      latestVersion,
+      updateAvailable
+    });
+  }
+
+  return results;
+}
+
+export async function installSkillFromUrl(options: {
+  url: string;
+  userSkillsDir: string;
+}): Promise<{ ok: true; installedSkills: string[] } | { ok: false; error: string }> {
+  const url = options.url.trim();
+
+  let data: Buffer;
+  let finalUrl = url;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      return { ok: false, error: `HTTP ${res.status}: ${res.statusText}` };
+    }
+    finalUrl = res.url || url;
+    data = Buffer.from(await res.arrayBuffer());
+  } catch (e) {
+    return { ok: false, error: `Download failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+
+  const releaseInfo = parseReleaseUrl(finalUrl) ?? parseReleaseUrl(url);
+  const installedVersion = releaseInfo?.version ?? null;
+
+  const tmpBase = path.join(os.tmpdir(), `lilto-skill-${Date.now()}`);
+  const tmpFile = `${tmpBase}.zip`;
+  const extractDir = `${tmpBase}-extract`;
+
+  try {
+    fs.writeFileSync(tmpFile, data);
+    fs.mkdirSync(extractDir, { recursive: true });
+    await extractZip(tmpFile, extractDir);
+
+    const skillFiles = collectSkillMarkdownFiles(extractDir);
+    if (skillFiles.length === 0) {
+      return { ok: false, error: "No SKILL.md found in the archive" };
+    }
+
+    const installedSkills: string[] = [];
+    for (const skillFile of skillFiles) {
+      const content = fs.readFileSync(skillFile, "utf8");
+      const metadata = parseSkillMarkdown(content, skillFile);
+      if (!metadata) continue;
+      const targetDir = path.join(options.userSkillsDir, metadata.name);
+      fs.cpSync(path.dirname(skillFile), targetDir, { recursive: true, force: true });
+
+      const sourceRecord: SkillSourceRecord = { url, installedAt: Date.now(), installedVersion };
+      fs.writeFileSync(path.join(targetDir, SKILL_SOURCE_FILE), `${JSON.stringify(sourceRecord, null, 2)}\n`, "utf8");
+
+      installedSkills.push(metadata.name);
+    }
+
+    if (installedSkills.length === 0) {
+      return { ok: false, error: "No valid skills found in the archive" };
+    }
+
+    return { ok: true, installedSkills };
+  } finally {
+    try { fs.rmSync(tmpFile, { force: true }); } catch { /* ignore */ }
+    try { fs.rmSync(extractDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+}
+
 export function shouldPrioritizeAgentBrowser(text: string): boolean {
   const lowered = text.toLowerCase();
   return (
