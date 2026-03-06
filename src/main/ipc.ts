@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain } from "electron";
+import { BrowserWindow, ipcMain, shell } from "electron";
 import { randomUUID } from "node:crypto";
 import type { AgentRuntime } from "./agent-sdk";
 import type { ClaudeAuthService } from "./auth-service";
@@ -106,5 +106,29 @@ export function registerAgentIpcHandlers({
 
   ipcMain.handle("providers:saveSettings", (_event, payload: unknown) => {
     return providerSettingsService.save(payload);
+  });
+
+  ipcMain.handle("app:openExternal", async (_event, payload: unknown) => {
+    const url = typeof payload === "object" && payload && typeof (payload as { url?: unknown }).url === "string"
+      ? (payload as { url: string }).url
+      : null;
+
+    if (!url) {
+      return { ok: false, error: { code: "INVALID_REQUEST", message: "url は必須です" } };
+    }
+
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(url);
+    } catch {
+      return { ok: false, error: { code: "INVALID_URL", message: "url の形式が不正です" } };
+    }
+
+    if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+      return { ok: false, error: { code: "UNSUPPORTED_PROTOCOL", message: "http/https のみサポートします" } };
+    }
+
+    await shell.openExternal(parsedUrl.toString());
+    return { ok: true };
   });
 }

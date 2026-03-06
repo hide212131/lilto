@@ -303,6 +303,37 @@ export class LiltMessageList extends LitElement {
     return unsafeHTML(`<div class="markdown">${html}</div>`);
   }
 
+  private _handleChatClick(event: MouseEvent) {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+
+    const link = target.closest("a");
+    if (!(link instanceof HTMLAnchorElement)) {
+      return;
+    }
+
+    const href = link.getAttribute("href");
+    if (!href) {
+      return;
+    }
+
+    let resolvedUrl: URL;
+    try {
+      resolvedUrl = new URL(href, window.location.href);
+    } catch {
+      return;
+    }
+
+    if (resolvedUrl.protocol !== "http:" && resolvedUrl.protocol !== "https:") {
+      return;
+    }
+
+    event.preventDefault();
+    void window.lilto.openExternalUrl(resolvedUrl.toString());
+  }
+
   private _renderAssistantBody(message: Message) {
     const progress = message.progress;
     if (!progress) {
@@ -389,7 +420,7 @@ export class LiltMessageList extends LitElement {
 
   render() {
     return html`
-      <div class="chat" aria-live="polite">
+      <div class="chat" aria-live="polite" @click=${this._handleChatClick}>
         ${this.messages.map(
           (m) => html`<div class="msg msg-${m.role} ${m.pending ? "msg-pending" : ""}">${m.role === "assistant" ? this._renderAssistantBody(m) : this._renderMarkdown(m.text ?? "")}</div>`
         )}
