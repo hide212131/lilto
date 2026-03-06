@@ -412,7 +412,7 @@ export class LiltMessageList extends LitElement {
           }
         )}
 
-        ${progress.pendingLabel ? html`<div class="tool-label">${progress.pendingLabel}</div>` : ""}
+        ${message.pending && progress.pendingLabel ? html`<div class="tool-label">${progress.pendingLabel}</div>` : ""}
       </div>
       ${hasAnswer ? html`<div class="assistant-answer">${this._renderMarkdown(message.text!)}</div>` : ""}
     `;

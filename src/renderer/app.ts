@@ -406,7 +406,15 @@ export class LiltApp extends LitElement {
         }
         break;
       case "thinking_end":
-        changed = false;
+        {
+          const nextStatusLines = this._statusLines.filter((line) => line !== "考え中...");
+          if (nextStatusLines.length !== this._statusLines.length) {
+            this._statusLines = nextStatusLines;
+            changed = true;
+          } else {
+            changed = false;
+          }
+        }
         break;
       case "text_delta":
         if (event.delta) {
