@@ -547,10 +547,10 @@ export class LiltSettingsModal extends LitElement {
 
       <section class="provider-section">
         <h4>スキルのインストール</h4>
-        <p>zip ファイルの URL を指定してインストールします。</p>
+        <p><code>npx skills add</code> 形式でソースを指定してインストールします（GitHub ショートハンド・URL・ローカルパス可）。</p>
         <div class="skill-install-row">
           <input
-            placeholder="https://example.com/my-skill.zip"
+            placeholder="vercel-labs/agent-skills"
             .value=${this._skillInstallUrl}
             @input=${(e: InputEvent) => {
               this._skillInstallUrl = (e.target as HTMLInputElement).value;
@@ -679,14 +679,14 @@ export class LiltSettingsModal extends LitElement {
   }
 
   private async _installSkill() {
-    const url = this._skillInstallUrl.trim();
-    if (!url) return;
+    const source = this._skillInstallUrl.trim();
+    if (!source) return;
     this._skillInstalling = true;
     this._skillInstallStatus = "";
     try {
-      const result = await window.lilto.installSkill(url);
+      const result = await window.lilto.installSkillFromSource(source);
       if (result.ok) {
-        this._skillInstallStatus = `インストール完了: ${result.installedSkills.join(", ")}（再起動後に有効になります）`;
+        this._skillInstallStatus = `インストール完了（再起動後に有効になります）`;
         this._skillInstallUrl = "";
         await this._loadSkills();
       } else {

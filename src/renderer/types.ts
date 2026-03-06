@@ -92,6 +92,7 @@ declare global {
       >;
       listSkills: () => Promise<SkillInfo[]>;
       installSkill: (url: string) => Promise<{ ok: true; installedSkills: string[] } | { ok: false; error: string }>;
+      installSkillFromSource: (source: string) => Promise<{ ok: true; output: string } | { ok: false; error: string }>;
       uninstallSkill: (filePath: string) => Promise<{ ok: true } | { ok: false; error: string }>;
       checkSkillUpdates: () => Promise<SkillUpdateInfo[]>;
       onAgentLoopEvent: (listener: (event: AgentLoopEvent) => void) => () => void;

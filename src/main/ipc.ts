@@ -5,7 +5,7 @@ import type { ClaudeAuthService } from "./auth-service";
 import { AGENT_LOOP_EVENT_CHANNEL, validatePrompt } from "./ipc-contract";
 import { createLogger } from "./logger";
 import type { ProviderSettingsService } from "./provider-settings";
-import { checkSkillUpdates, installSkillFromUrl, listSkillsWithSource, uninstallUserSkill } from "./skill-runtime";
+import { checkSkillUpdates, installSkillFromSource, installSkillFromUrl, listSkillsWithSource, uninstallUserSkill } from "./skill-runtime";
 import type { AgentLoopEvent } from "../shared/agent-loop";
 
 function broadcastAuthState(authService: Pick<ClaudeAuthService, "getState">): void {
@@ -142,10 +142,18 @@ export function registerAgentIpcHandlers({
   });
 
   ipcMain.handle("skills:install", async (_event, payload: unknown) => {
-    if (!payload || typeof payload !== "object" || typeof (payload as { url?: unknown }).url !== "string") {
-      return { ok: false, error: "url は必須です" };
+    const p = payload as Record<string, unknown> | null;
+    if (!p) return { ok: false, error: "payload が必須です" };
+
+    if (typeof p.source === "string") {
+      return installSkillFromSource({ source: p.source });
     }
-    return installSkillFromUrl({ url: (payload as { url: string }).url, userSkillsDir });
+
+    if (typeof p.url === "string") {
+      return installSkillFromUrl({ url: p.url, userSkillsDir });
+    }
+
+    return { ok: false, error: "source または url は必須です" };
   });
 
   ipcMain.handle("skills:uninstall", (_event, payload: unknown) => {

@@ -540,6 +540,38 @@ export async function checkSkillUpdates(options: { userSkillsDir: string }): Pro
   return results;
 }
 
+const SKILL_INSTALL_TIMEOUT_MS = 60_000;
+
+export async function installSkillFromSource(options: {
+  source: string;
+  projectRoot?: string;
+}): Promise<{ ok: true; output: string } | { ok: false; error: string }> {
+  const source = options.source.trim();
+  if (!source) {
+    return { ok: false, error: "source は必須です" };
+  }
+
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const execFileAsync = promisify(execFile);
+
+  const projectRoot = options.projectRoot ?? process.cwd();
+  const npxCmd = process.platform === "win32" ? "npx.cmd" : "npx";
+
+  try {
+    const { stdout } = await execFileAsync(
+      npxCmd,
+      ["skills", "add", source, "--global", "--agent", "pi", "--yes"],
+      { timeout: SKILL_INSTALL_TIMEOUT_MS, cwd: projectRoot }
+    );
+    return { ok: true, output: stdout.trim() || "インストール完了" };
+  } catch (e) {
+    const err = e as { stdout?: string; stderr?: string; message?: string };
+    const msg = (err.stderr || err.message || String(e)).trim();
+    return { ok: false, error: msg };
+  }
+}
+
 export async function installSkillFromUrl(options: {
   url: string;
   userSkillsDir: string;

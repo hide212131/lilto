@@ -15,7 +15,8 @@
   "dependencies": {
     "@mariozechner/pi-ai": "^0.54.2",
     "@mariozechner/pi-coding-agent": "latest",
-    "marked": "^17.0.4"
+    "marked": "^17.0.4",
+    "skills": "^1.4.4"
   },
   "devDependencies": {
     "agent-browser": "^0.13.0",
