@@ -40,6 +40,13 @@ export type Message = {
   progress?: AssistantProgress;
 };
 
+export type Session = {
+  id: string;
+  title: string;
+  createdAt: number;
+  messages: Message[];
+};
+
 declare global {
   interface Window {
     lilto: {
