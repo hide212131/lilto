@@ -4,6 +4,9 @@
 
 | 変更内容 | ミス/課題 | 再発防止ルール |
 |---|---|---|
+| GUI 検証の運用を「手動確認先行、E2E 最後のリグレッション確認」に統一。 | E2E を途中で回すと、未完了の GUI 変更に引きずられて失敗原因の切り分けが難しくなり、最終品質ゲートとしての意味が薄れる。 | GUI 変更タスクでは `TODO` に「① `/live-ui-manual-verification` で機能確認 → ② 全GUI変更完了 → ③ 最後に `npm run e2e:electron` でリグレッション確認」を固定し、③を完了報告の直前にのみ実行する。 |
+| GUI 修正時の検証順序を見直し、`/live-ui-manual-verification` を `npm run e2e:electron` より先に実施する運用へ統一。 | 今回は GUI 変更後に E2E を先に回し、`/live-ui-manual-verification` を先行実施しなかったため、定めた検証順序に違反した。 | GUI 変更タスクでは検証開始時に「① `/live-ui-manual-verification` 実施 → ② `npm run e2e:electron` 実施」の順序を TODO に明記し、①の結果を確認するまで②を実行しない。 |
+| `copilot/sub-pr-5` の2コミットを `main` にマージし、スキルインストールを ZIP 直指定経路から `skills` ライブラリ経由（`source` 指定）へ復旧。 | 現行実装では GitHub リポジトリ URL を `installSkillFromUrl` に渡すと、期待していた `skills add` 経路ではなく別経路で処理され、ユーザー期待（`skills` パッケージを使う）が満たされなかった。 | スキル導入仕様を変更する際は「UI入力（placeholder/説明文）→ IPC payload（`source`/`url`）→ Main 実行関数」の3層を同時に点検し、`https://github.com/<org>/<repo>` の代表入力で期待経路に入ることをコードレビュー時に必ず確認する。 |
 | `settings-modal` マージ後に `Chat` タブ導線が消え、`Enterで送信` 設定に到達できない不具合を修正。 | 競合解消時に「main 由来の `providers/chat` 導線」と「作業ブランチ由来の `providers/skills` 導線」を片側優先で統合し、機能が部分的に脱落した。 | UI マージ競合では「画面遷移導線（メニュー項目）」「対応する描画分岐」「保存処理への到達性」をセットで突合し、統合後に実画面で全導線を最低1回ずつ操作確認してから完了にする。 |
 | サイドバー表示時にメッセージ領域がはみ出して隠れる不具合を修正（`.stage` 幅を `100vw` 基準から親コンテナ基準へ変更）。 | 中央カラム幅を `100vw` で計算すると、サイドバー開時に `main` より広いまま固定され、メッセージがクリップされる。 | サイドバーなど可変レイアウト配下の幅計算は viewport（`vw`）ではなく親要素基準（`100%`）を使い、開閉前後で「親幅・子幅・表示要素件数」を実測して確認する。 |
 | チャット内 Markdown リンクのクリックを Renderer で捕捉し、Main IPC 経由で外部ブラウザを開くよう修正。 | Electron で `<a href>` をそのまま描画すると、リンククリック時にアプリ内 WebContents が遷移して会話画面が失われる。 | Markdown を HTML として描画する UI ではリンククリックを必ず `preventDefault` し、`shell.openExternal` を通す専用 IPC で外部ブラウザに委譲する。 |
