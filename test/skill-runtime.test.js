@@ -144,9 +144,9 @@ test("setupSkillRuntime は bundled/user の両方を設定して skill-creator 
     `---\nname: skill-creator\ndescription: bundled skill creator\n---\n`
   );
 
-  fs.mkdirSync(path.join(homeDir, ".pi", "skills", "custom-one"), { recursive: true });
+  fs.mkdirSync(path.join(homeDir, ".pi", "agent", "skills", "custom-one"), { recursive: true });
   fs.writeFileSync(
-    path.join(homeDir, ".pi", "skills", "custom-one", "SKILL.md"),
+    path.join(homeDir, ".pi", "agent", "skills", "custom-one", "SKILL.md"),
     `---\nname: custom-one\ndescription: user custom\n---\n`
   );
 
@@ -160,12 +160,12 @@ test("setupSkillRuntime は bundled/user の両方を設定して skill-creator 
   });
 
   assert.equal(runtime.bundledSkillsDir, path.join(appDataDir, "skills", "bundled"));
-  assert.equal(runtime.userSkillsDir, path.join(homeDir, ".pi", "skills"));
+  assert.equal(runtime.userSkillsDir, path.join(homeDir, ".pi", "agent", "skills"));
   assert.deepEqual(
     runtime.availableSkills.map((skill) => skill.name).sort(),
     ["agent-browser", "custom-one", "skill-creator"]
   );
 
   const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
-  assert.deepEqual(settings.skills, [path.join(homeDir, ".pi", "skills"), path.join(appDataDir, "skills", "bundled")]);
+  assert.deepEqual(settings.skills, [path.join(homeDir, ".pi", "agent", "skills"), path.join(appDataDir, "skills", "bundled")]);
 });

@@ -319,7 +319,7 @@ export function setupSkillRuntime(options: {
   const homeDir = options.homeDir ?? os.homedir();
   const appSkillsDir = path.join(options.appDataDir, "skills");
   const bundledSkillsDir = path.join(appSkillsDir, "bundled");
-  const userSkillsDir = path.join(homeDir, ".pi", "skills");
+  const userSkillsDir = path.join(homeDir, ".pi", "agent", "skills");
 
   ensureBundledSkills({ bundledSkillsDir, projectRoot: options.projectRoot });
   fs.mkdirSync(userSkillsDir, { recursive: true });
@@ -556,18 +556,25 @@ export async function installSkillFromSource(options: {
   const execFileAsync = promisify(execFile);
 
   const projectRoot = options.projectRoot ?? process.cwd();
-  const npxCmd = process.platform === "win32" ? "npx.cmd" : "npx";
+  // Resolve the bundled skills CLI binary directly from local node_modules.
+  const skillsCliPath = path.join(projectRoot, "node_modules", "skills", "bin", "cli.mjs");
+  if (!fs.existsSync(skillsCliPath)) {
+    return { ok: false, error: `skills ライブラリが見つかりません: ${skillsCliPath}` };
+  }
+
+  // Use the node binary (not npx) to run the bundled skills CLI directly.
+  const nodeCmd = process.platform === "win32" ? "node.exe" : "node";
 
   try {
     const { stdout } = await execFileAsync(
-      npxCmd,
-      ["skills", "add", source, "--global", "--agent", "pi", "--yes"],
+      nodeCmd,
+      [skillsCliPath, "add", source, "--global", "--agent", "pi", "--yes"],
       { timeout: SKILL_INSTALL_TIMEOUT_MS, cwd: projectRoot }
     );
     return { ok: true, output: stdout.trim() || "インストール完了" };
   } catch (e) {
     const err = e as { stdout?: string; stderr?: string; message?: string };
-    const msg = (err.stderr || err.message || String(e)).trim();
+    const msg = (err.stderr || err.stdout || err.message || String(e)).trim();
     return { ok: false, error: msg };
   }
 }
