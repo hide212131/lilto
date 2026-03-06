@@ -1,5 +1,7 @@
 import { LitElement, html, css } from "lit";
 import { customElement, property } from "lit/decorators.js";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { marked } from "marked";
 import type { Message } from "../types.js";
 
 @customElement("lilt-message-list")
@@ -32,7 +34,6 @@ export class LiltMessageList extends LitElement {
       box-sizing: border-box;
       padding: 10px 14px;
       border-radius: 10px;
-      white-space: pre-wrap;
       line-height: 1.5;
       font-size: 14px;
       font-family: "Hiragino Sans", "Yu Gothic", sans-serif;
@@ -174,7 +175,81 @@ export class LiltMessageList extends LitElement {
       margin-top: 8px;
       padding-top: 8px;
       border-top: 1px dashed #e5e7eb;
-      white-space: pre-wrap;
+    }
+    .markdown {
+      line-height: 1.6;
+    }
+    .markdown p {
+      margin: 0 0 8px;
+    }
+    .markdown p:last-child {
+      margin-bottom: 0;
+    }
+    .markdown h1, .markdown h2, .markdown h3,
+    .markdown h4, .markdown h5, .markdown h6 {
+      margin: 12px 0 6px;
+      font-weight: 600;
+      line-height: 1.3;
+    }
+    .markdown h1 { font-size: 1.4em; }
+    .markdown h2 { font-size: 1.2em; }
+    .markdown h3 { font-size: 1.05em; }
+    .markdown ul, .markdown ol {
+      margin: 0 0 8px;
+      padding-left: 20px;
+    }
+    .markdown li {
+      margin-bottom: 2px;
+    }
+    .markdown code {
+      background: #f3f4f6;
+      border: 1px solid #e5e7eb;
+      border-radius: 3px;
+      padding: 1px 4px;
+      font-size: 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+    .markdown pre {
+      background: #f3f4f6;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      padding: 10px;
+      overflow-x: auto;
+      margin: 0 0 8px;
+    }
+    .markdown pre code {
+      background: none;
+      border: none;
+      padding: 0;
+      font-size: 12px;
+    }
+    .markdown blockquote {
+      margin: 0 0 8px;
+      padding: 4px 12px;
+      border-left: 3px solid #d1d5db;
+      color: #6b7280;
+    }
+    .markdown a {
+      color: #2563eb;
+      text-decoration: underline;
+    }
+    .markdown table {
+      border-collapse: collapse;
+      margin-bottom: 8px;
+      width: 100%;
+    }
+    .markdown th, .markdown td {
+      border: 1px solid #e5e7eb;
+      padding: 4px 8px;
+    }
+    .markdown th {
+      background: #f9fafb;
+      font-weight: 600;
+    }
+    .markdown hr {
+      border: none;
+      border-top: 1px solid #e5e7eb;
+      margin: 8px 0;
     }
     @keyframes thinking-shimmer {
       0% {
@@ -223,10 +298,46 @@ export class LiltMessageList extends LitElement {
     return message.requestId ? `req:${message.requestId}` : `msg:${message.id}`;
   }
 
+  private _renderMarkdown(text: string) {
+    const html = marked.parse(text, { async: false }) as string;
+    return unsafeHTML(`<div class="markdown">${html}</div>`);
+  }
+
+  private _handleChatClick(event: MouseEvent) {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+
+    const link = target.closest("a");
+    if (!(link instanceof HTMLAnchorElement)) {
+      return;
+    }
+
+    const href = link.getAttribute("href");
+    if (!href) {
+      return;
+    }
+
+    let resolvedUrl: URL;
+    try {
+      resolvedUrl = new URL(href, window.location.href);
+    } catch {
+      return;
+    }
+
+    if (resolvedUrl.protocol !== "http:" && resolvedUrl.protocol !== "https:") {
+      return;
+    }
+
+    event.preventDefault();
+    void window.lilto.openExternalUrl(resolvedUrl.toString());
+  }
+
   private _renderAssistantBody(message: Message) {
     const progress = message.progress;
     if (!progress) {
-      return html`${message.text}`;
+      return message.text ? this._renderMarkdown(message.text) : html``;
     }
 
     const thinkingLines = progress.thinkingText ? progress.thinkingText.split("\n") : [];
@@ -303,15 +414,15 @@ export class LiltMessageList extends LitElement {
 
         ${progress.pendingLabel ? html`<div class="tool-label">${progress.pendingLabel}</div>` : ""}
       </div>
-      ${hasAnswer ? html`<div class="assistant-answer">${message.text}</div>` : ""}
+      ${hasAnswer ? html`<div class="assistant-answer">${this._renderMarkdown(message.text!)}</div>` : ""}
     `;
   }
 
   render() {
     return html`
-      <div class="chat" aria-live="polite">
+      <div class="chat" aria-live="polite" @click=${this._handleChatClick}>
         ${this.messages.map(
-          (m) => html`<div class="msg msg-${m.role} ${m.pending ? "msg-pending" : ""}">${m.role === "assistant" ? this._renderAssistantBody(m) : m.text}</div>`
+          (m) => html`<div class="msg msg-${m.role} ${m.pending ? "msg-pending" : ""}">${m.role === "assistant" ? this._renderAssistantBody(m) : this._renderMarkdown(m.text ?? "")}</div>`
         )}
       </div>
     `;
