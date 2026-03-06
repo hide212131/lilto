@@ -83,7 +83,7 @@ export class LiltApp extends LitElement {
       overflow: hidden;
     }
     .stage {
-      width: min(980px, calc(100vw - 24px));
+      width: min(980px, calc(100% - 24px));
       height: 100%;
       display: flex;
       flex-direction: column;
@@ -91,7 +91,7 @@ export class LiltApp extends LitElement {
     }
     @media (max-width: 720px) {
       .stage {
-        width: calc(100vw - 12px);
+        width: calc(100% - 12px);
       }
     }
   `;
