@@ -4,6 +4,7 @@ import type { AgentRuntime } from "./agent-sdk";
 import type { ClaudeAuthService } from "./auth-service";
 import { AGENT_LOOP_EVENT_CHANNEL, validatePrompt } from "./ipc-contract";
 import { createLogger } from "./logger";
+import type { NotificationService } from "./notifications";
 import type { ProviderSettingsService } from "./provider-settings";
 import { checkSkillUpdates, installSkillFromUrl, listSkillsWithSource, uninstallUserSkill } from "./skill-runtime";
 import type { AgentLoopEvent } from "../shared/agent-loop";
@@ -26,13 +27,15 @@ export function registerAgentIpcHandlers({
   authService,
   providerSettingsService,
   bundledSkillsDir,
-  userSkillsDir
+  userSkillsDir,
+  notificationService
 }: {
   agentRuntime: AgentRuntime;
   authService: ClaudeAuthService;
   providerSettingsService: ProviderSettingsService;
   bundledSkillsDir: string;
   userSkillsDir: string;
+  notificationService: NotificationService;
 }): void {
   const logger = createLogger("ipc");
   authService.subscribe(() => {
@@ -69,6 +72,13 @@ export function registerAgentIpcHandlers({
 
       broadcastLoopEvent({ type: "run_end", requestId, status: "completed" });
 
+      // ウインドウが非フォーカス状態ならデスクトップ通知 + バッジを表示する
+      if (BrowserWindow.getFocusedWindow() === null) {
+        const preview = result.text.length > 80 ? `${result.text.slice(0, 77)}…` : result.text;
+        notificationService.notify("lilto - 返答が届きました", preview);
+        notificationService.incrementBadge();
+      }
+
       return {
         ok: true,
         request: { text },
@@ -79,6 +89,11 @@ export function registerAgentIpcHandlers({
       broadcastLoopEvent({ type: "run_end", requestId, status: "failed", errorMessage: message });
       throw error;
     }
+  });
+
+  ipcMain.handle("agent:abort", () => {
+    agentRuntime.abort();
+    return { ok: true };
   });
 
   ipcMain.handle("auth:getState", () => {

@@ -5,6 +5,7 @@ import { customElement, property } from "lit/decorators.js";
 export class LiltTopBar extends LitElement {
   @property() statusText = "待機中";
   @property({ type: Boolean }) newSessionDisabled = false;
+  @property({ type: Boolean }) sidebarOpen = false;
 
   static styles = css`
     :host {
@@ -43,6 +44,10 @@ export class LiltTopBar extends LitElement {
     .icon-btn:hover {
       background: #f3f4f6;
     }
+    .icon-btn.active {
+      background: #e0e7ff;
+      color: #4f46e5;
+    }
     .status {
       font-size: 14px;
       color: var(--muted, #6b7280);
@@ -58,7 +63,12 @@ export class LiltTopBar extends LitElement {
     return html`
       <div class="topbar">
         <div class="topbar-left">
-          <button class="icon-btn" type="button" title="History">↺</button>
+          <button
+            class="icon-btn ${this.sidebarOpen ? "active" : ""}"
+            @click=${this._toggleSidebar}
+            type="button"
+            title="会話履歴"
+          >☰</button>
           <button
             class="icon-btn"
             @click=${this._startNewSession}
@@ -76,6 +86,10 @@ export class LiltTopBar extends LitElement {
         </div>
       </div>
     `;
+  }
+
+  private _toggleSidebar() {
+    this.dispatchEvent(new CustomEvent("toggle-sidebar", { bubbles: true, composed: true }));
   }
 
   private _openSettings() {

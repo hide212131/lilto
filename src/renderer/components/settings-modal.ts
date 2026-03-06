@@ -19,6 +19,9 @@ export class LiltSettingsModal extends LitElement {
     networkProxy: {
       useProxy: false
     },
+    chatSettings: {
+      enterToSend: false
+    },
     updatedAt: Date.now()
   };
 
@@ -32,6 +35,9 @@ export class LiltSettingsModal extends LitElement {
   @state() private _saveStatus = "";
   @state() private _providerSelStatus = "";
   @state() private _oauthProvider: OAuthProviderId = "anthropic";
+  @state() private _activeSection: "providers" | "chat" = "providers";
+  @state() private _enterToSend = false;
+  @state() private _chatSaveStatus = "";
 
   // Tab state
   @state() private _activeTab: "providers" | "skills" = "providers";
@@ -65,12 +71,14 @@ export class LiltSettingsModal extends LitElement {
     if (changedProps.has("providerSettings")) {
       const cp = this.providerSettings.customProvider;
       const np = this.providerSettings.networkProxy;
+      const cs = this.providerSettings.chatSettings;
       this._customName = cp.name;
       this._customBaseUrl = cp.baseUrl;
       this._customApiKey = cp.apiKey;
       this._customModelId = cp.modelId;
       this._useProxy = np.useProxy;
       this._oauthProvider = this.providerSettings.oauthProvider;
+      this._enterToSend = cs?.enterToSend ?? false;
     }
     if (changedProps.has("authState")) {
       const as = this.authState;
@@ -741,6 +749,213 @@ export class LiltSettingsModal extends LitElement {
   private _onBackdropClick(e: MouseEvent) {
     if (e.target === e.currentTarget) this._close();
   }
+
+  private _renderProvidersSection(
+    isClaudeActive: boolean,
+    isCustomActive: boolean,
+    authPhase: string,
+    authMessage: string,
+    codeInputEnabled: boolean,
+    oauthBtnDisabled: boolean
+  ) {
+    return html`
+      <h3>Providers &amp; Models</h3>
+      <p>OAuth Provider と Custom Provider（OpenAI Completions Compatible）を設定できます。</p>
+
+      <div class="provider-choice">
+        <label>
+          <input
+            type="radio"
+            name="active-provider"
+            value="claude"
+            .checked=${isClaudeActive}
+            @change=${() => this._changeProvider("claude")}
+          />
+          OAuth Provider
+        </label>
+        <label>
+          <input
+            type="radio"
+            name="active-provider"
+            value="custom-openai-completions"
+            .checked=${isCustomActive}
+            @change=${() => this._changeProvider("custom-openai-completions")}
+          />
+          Custom Provider
+        </label>
+        <span class="status">${this._providerSelStatus}</span>
+      </div>
+
+      <section class="provider-section ${isClaudeActive ? "active" : ""}">
+        <h4>OAuth Authorization</h4>
+        <p>OAuth 認証を開始して、表示された認証コードを入力してください。</p>
+        <label class="oauth-provider-row">
+          OAuth Provider
+          <select
+            id="oauth-provider"
+            .value=${this._oauthProvider}
+            @change=${(e: Event) => {
+              const value = (e.target as HTMLSelectElement).value as OAuthProviderId;
+              this._oauthProvider = OAUTH_PROVIDER_IDS.includes(value) ? value : "anthropic";
+            }}
+          >
+            ${OAUTH_PROVIDER_IDS.map((id) => html`<option value=${id}>${this._oauthProviderLabel(id)}</option>`)}
+          </select>
+        </label>
+        <div class="auth-row">
+          <button .disabled=${oauthBtnDisabled} @click=${this._startOauth}>
+            OAuth で認証
+          </button>
+          <span class="status">${authMessage}</span>
+        </div>
+        <div class="auth-row auth-code-row">
+          <input
+            id="auth-code"
+            placeholder="Authentication Code（code#state）を貼り付け"
+            .value=${this._authCodeValue}
+            .disabled=${!codeInputEnabled}
+            @input=${(e: InputEvent) => {
+              this._authCodeValue = (e.target as HTMLInputElement).value;
+            }}
+            @keydown=${(e: KeyboardEvent) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void this._submitCode();
+              }
+            }}
+          />
+          <button .disabled=${!codeInputEnabled} @click=${this._submitCode}>
+            コード送信
+          </button>
+        </div>
+        <div class="status">
+          認証画面の「Authentication Code / Paste this into ...」で表示された値を貼り付けて送信してください。
+        </div>
+      </section>
+
+      <section class="provider-section ${isCustomActive ? "active" : ""}">
+        <h4>Custom Provider (OpenAI Completions Compatible)</h4>
+        <div class="input-grid">
+          <label>
+            Provider Name (Required)
+            <input
+              id="custom-provider-name"
+              placeholder="e.g., Ollama"
+              .value=${this._customName}
+              @input=${(e: InputEvent) => {
+                this._customName = (e.target as HTMLInputElement).value;
+              }}
+            />
+          </label>
+          <label>
+            Base URL (Required)
+            <input
+              id="custom-base-url"
+              placeholder="http://127.0.0.1:11434/v1"
+              .value=${this._customBaseUrl}
+              @input=${(e: InputEvent) => {
+                this._customBaseUrl = (e.target as HTMLInputElement).value;
+              }}
+            />
+          </label>
+          <label>
+            API Key (Optional)
+            <input
+              id="custom-api-key"
+              type="password"
+              placeholder="Leave empty if not required"
+              .value=${this._customApiKey}
+              @input=${(e: InputEvent) => {
+                this._customApiKey = (e.target as HTMLInputElement).value;
+              }}
+            />
+          </label>
+          <label>
+            Model ID
+            <input
+              id="custom-model-id"
+              placeholder="qwen2.5:0.5b"
+              .value=${this._customModelId}
+              @input=${(e: InputEvent) => {
+                this._customModelId = (e.target as HTMLInputElement).value;
+              }}
+            />
+          </label>
+        </div>
+        <h4>Network Proxy</h4>
+        <div class="input-grid">
+          <label>
+            <input
+              id="use-proxy"
+              type="checkbox"
+              .checked=${this._useProxy}
+              @change=${(e: InputEvent) => {
+                this._useProxy = (e.target as HTMLInputElement).checked;
+              }}
+            />
+            Proxy を使う（HTTP_PROXY / HTTPS_PROXY / NO_PROXY を利用）
+          </label>
+        </div>
+        <div class="provider-actions">
+          <button @click=${this._saveProviderAndProxy}>Save Provider Settings</button>
+          <span class="status">${this._saveStatus}</span>
+        </div>
+      </section>
+    `;
+  }
+
+  private _renderChatSection() {
+    return html`
+      <h3>Chat</h3>
+      <p>チャット画面の操作設定です。</p>
+      <section class="provider-section active">
+        <h4>送信操作</h4>
+        <div class="input-grid">
+          <label>
+            <input
+              id="enter-to-send"
+              type="checkbox"
+              .checked=${this._enterToSend}
+              @change=${(e: InputEvent) => {
+                this._enterToSend = (e.target as HTMLInputElement).checked;
+              }}
+            />
+            Enter キーだけで送信する（Shift+Enter で改行）
+          </label>
+          <p style="margin:0;font-size:13px;color:var(--muted,#6b7280);">
+            OFF の場合は従来通り Cmd/Ctrl + Enter で送信します。
+          </p>
+        </div>
+        <div class="provider-actions">
+          <button @click=${this._saveChatSettings}>Chat 設定を保存</button>
+          <span class="status">${this._chatSaveStatus}</span>
+        </div>
+      </section>
+    `;
+  }
+
+  private async _saveChatSettings() {
+    const next: ProviderSettings = {
+      ...this.providerSettings,
+      chatSettings: {
+        enterToSend: this._enterToSend
+      }
+    };
+    const result = await window.lilto.saveProviderSettings(next);
+    if (result.ok) {
+      this._chatSaveStatus = "Chat 設定を保存しました。";
+      this.dispatchEvent(
+        new CustomEvent("provider-settings-changed", {
+          detail: result.state,
+          bubbles: true,
+          composed: true
+        })
+      );
+    } else {
+      this._chatSaveStatus = `${result.error.code}: ${result.error.message}`;
+    }
+  }
+
 
   private async _changeProvider(provider: ActiveProvider) {
     const next: ProviderSettings = {

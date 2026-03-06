@@ -7,6 +7,7 @@ import { readConfig } from "./config";
 import { HeartbeatScheduler } from "./heartbeat";
 import { registerAgentIpcHandlers } from "./ipc";
 import { createLogger } from "./logger";
+import { NotificationService } from "./notifications";
 import { ProviderSettingsService } from "./provider-settings";
 import { setupSkillRuntime } from "./skill-runtime";
 import { createCliCompatibilityMap } from "./command-compat";
@@ -16,6 +17,8 @@ const logger = createLogger("main");
 
 let mainWindow: BrowserWindow | null = null;
 let isQuitting = false;
+
+const notificationService = new NotificationService();
 
 const authService = new ClaudeAuthService({ logger: createLogger("auth") });
 const providerSettingsService = new ProviderSettingsService({ logger: createLogger("providers") });
@@ -51,6 +54,11 @@ function createWindow(): void {
     if (isQuitting) return;
     event.preventDefault();
     mainWindow?.hide();
+  });
+
+  // ウインドウがフォーカスされたら未読バッジをクリアする
+  mainWindow.on("focus", () => {
+    notificationService.clearBadge();
   });
 }
 
@@ -101,10 +109,12 @@ void app.whenReady().then(() => {
     agentRuntime,
     authService,
     providerSettingsService,
+    notificationService,
     bundledSkillsDir: skillRuntime.bundledSkillsDir,
     userSkillsDir: skillRuntime.userSkillsDir
   });
   createWindow();
+  notificationService.setupTray(() => mainWindow);
   heartbeat.start();
 
   app.on("activate", () => {

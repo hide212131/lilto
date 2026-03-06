@@ -19,11 +19,20 @@ export type NetworkProxySettings = {
   useProxy: boolean;
 };
 
+export type ChatSettings = {
+  enterToSend: boolean;
+};
+
+export const DEFAULT_CHAT_SETTINGS: ChatSettings = {
+  enterToSend: false
+};
+
 export type ProviderSettings = {
   activeProvider: ActiveProvider;
   oauthProvider: OAuthProviderId;
   customProvider: CustomProviderSettings;
   networkProxy: NetworkProxySettings;
+  chatSettings: ChatSettings;
   updatedAt: number;
 };
 

@@ -59,6 +59,13 @@ export type Message = {
   progress?: AssistantProgress;
 };
 
+export type Session = {
+  id: string;
+  title: string;
+  createdAt: number;
+  messages: Message[];
+};
+
 declare global {
   interface Window {
     lilto: {
@@ -69,6 +76,7 @@ declare global {
         | { ok: true; response: { text: string } }
         | { ok: false; error?: { code?: string; message?: string; retryable?: boolean } }
       >;
+      abortPrompt: () => Promise<{ ok: boolean }>;
       openExternalUrl: (
         url: string
       ) => Promise<
