@@ -1,14 +1,17 @@
 import { LitElement, html, css } from "lit";
 import { customElement, property, query } from "lit/decorators.js";
-import type { AuthState, ProviderSettings, Message, AssistantProgress, AssistantToolProgress } from "./types.js";
+import type { AuthState, ProviderSettings, Message, AssistantProgress, AssistantToolProgress, Session } from "./types.js";
 import type { OAuthProviderId } from "../shared/provider-settings.js";
 import "./components/top-bar.js";
 import "./components/message-list.js";
 import "./components/composer.js";
 import "./components/settings-modal.js";
+import "./components/chat-history.js";
 import type { LiltComposer } from "./components/composer.js";
 import type { AgentLoopEvent, LoopState } from "../shared/agent-loop.js";
 import { createInitialLoopState, reduceLoopState } from "../shared/agent-loop.js";
+
+const SESSIONS_STORAGE_KEY = "lilto-sessions";
 
 @customElement("lilt-app")
 export class LiltApp extends LitElement {
@@ -31,6 +34,9 @@ export class LiltApp extends LitElement {
   @property({ type: Boolean }) isSending = false;
   @property({ type: Boolean }) settingsOpen = false;
   @property({ type: Object }) loopState: LoopState = createInitialLoopState();
+  @property({ type: Boolean }) sidebarOpen = false;
+  @property({ type: Array }) sessions: Session[] = [];
+  @property() activeSessionId: string | null = null;
 
   @query("lilt-composer") private _composer!: LiltComposer;
 
@@ -43,6 +49,7 @@ export class LiltApp extends LitElement {
   private _thinkingText = "";
   private _toolProgress: AssistantToolProgress[] = [];
   private _pendingLabel = "";
+  private _currentSessionId: string | null = null;
 
   static styles = css`
     :host {
@@ -53,12 +60,27 @@ export class LiltApp extends LitElement {
       background: var(--bg, #f3f3f4);
       color: var(--text, #1f2328);
     }
+    .body {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: row;
+      overflow: hidden;
+    }
+    lilt-chat-history {
+      flex-shrink: 0;
+      transition: width 0.2s ease, min-width 0.2s ease;
+    }
+    lilt-chat-history[hidden] {
+      display: none;
+    }
     .main {
       flex: 1;
       min-height: 0;
       display: flex;
       flex-direction: column;
       align-items: center;
+      overflow: hidden;
     }
     .stage {
       width: min(980px, calc(100vw - 24px));
@@ -76,6 +98,7 @@ export class LiltApp extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this._loadSessions();
     void this._hydrate();
     this._unsubscribeAuthListener = window.lilto.onAuthStateChanged((state) => {
       this.authState = state;
@@ -92,6 +115,57 @@ export class LiltApp extends LitElement {
     this._unsubscribeLoopListener?.();
     this._unsubscribeAuthListener = null;
     this._unsubscribeLoopListener = null;
+  }
+
+  private _loadSessions() {
+    try {
+      const raw = localStorage.getItem(SESSIONS_STORAGE_KEY);
+      if (raw) {
+        this.sessions = JSON.parse(raw) as Session[];
+      }
+    } catch {
+      this.sessions = [];
+    }
+  }
+
+  private _saveSessions() {
+    try {
+      localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(this.sessions));
+    } catch {
+      // ストレージ容量超過などは無視
+    }
+  }
+
+  private _saveCurrentSession() {
+    const userMessages = this.messages.filter((m) => m.role === "user" || m.role === "assistant");
+    if (userMessages.length === 0) return;
+
+    const firstUser = this.messages.find((m) => m.role === "user");
+    const title = firstUser
+      ? firstUser.text.slice(0, 40) + (firstUser.text.length > 40 ? "…" : "")
+      : "会話";
+
+    if (this._currentSessionId) {
+      // 既存セッションを更新
+      this.sessions = this.sessions.map((s) =>
+        s.id === this._currentSessionId
+          ? { ...s, messages: [...this.messages] }
+          : s
+      );
+    } else {
+      // 新しいセッションを追加
+      const newSession: Session = {
+        id: `session-${Date.now()}`,
+        title,
+        createdAt: Date.now(),
+        messages: [...this.messages]
+      };
+      this._currentSessionId = newSession.id;
+      this.activeSessionId = newSession.id;
+      // 最新が上に来るよう先頭に追加
+      this.sessions = [newSession, ...this.sessions];
+    }
+    this._saveSessions();
   }
 
   private async _hydrate() {
@@ -155,17 +229,28 @@ export class LiltApp extends LitElement {
       <lilt-top-bar
         statusText=${this._statusText()}
         .newSessionDisabled=${this.isSending}
+        .sidebarOpen=${this.sidebarOpen}
         @new-session=${this._onStartNewSession}
         @open-settings=${() => { this.settingsOpen = true; }}
+        @toggle-sidebar=${this._onToggleSidebar}
       ></lilt-top-bar>
 
-      <div class="main">
-        <div class="stage">
-          <lilt-message-list .messages=${this.messages}></lilt-message-list>
-          <lilt-composer
-            .disabled=${!this._canSend()}
-            @send-message=${this._onSendMessage}
-          ></lilt-composer>
+      <div class="body">
+        <lilt-chat-history
+          ?hidden=${!this.sidebarOpen}
+          .sessions=${this.sessions}
+          .activeSessionId=${this.activeSessionId}
+          @select-session=${this._onSelectSession}
+        ></lilt-chat-history>
+
+        <div class="main">
+          <div class="stage">
+            <lilt-message-list .messages=${this.messages}></lilt-message-list>
+            <lilt-composer
+              .disabled=${!this._canSend()}
+              @send-message=${this._onSendMessage}
+            ></lilt-composer>
+          </div>
         </div>
       </div>
 
@@ -180,6 +265,27 @@ export class LiltApp extends LitElement {
     `;
   }
 
+  private _onToggleSidebar() {
+    this.sidebarOpen = !this.sidebarOpen;
+  }
+
+  private _onSelectSession(e: CustomEvent<Session>) {
+    const session = e.detail;
+    if (session.id === this._currentSessionId) return;
+    // 現在のセッションを保存してから切り替え
+    this._saveCurrentSession();
+    this.messages = [...session.messages];
+    this._currentSessionId = session.id;
+    this.activeSessionId = session.id;
+    this.loopState = createInitialLoopState();
+    this._pendingAssistantIndex = null;
+    this._activeRequestId = null;
+    this._statusLines = [];
+    this._thinkingText = "";
+    this._toolProgress = [];
+    this._pendingLabel = "";
+  }
+
   private _onAuthStateUpdated(e: CustomEvent<AuthState>) {
     this.authState = e.detail;
     this._syncSendability();
@@ -192,6 +298,7 @@ export class LiltApp extends LitElement {
 
   private _onStartNewSession() {
     if (this.isSending) return;
+    this._saveCurrentSession();
     this.messages = [];
     this.loopState = createInitialLoopState();
     this._pendingAssistantIndex = null;
@@ -200,6 +307,8 @@ export class LiltApp extends LitElement {
     this._thinkingText = "";
     this._toolProgress = [];
     this._pendingLabel = "";
+    this._currentSessionId = null;
+    this.activeSessionId = null;
   }
 
   private async _onSendMessage(e: CustomEvent<{ text: string }>) {
@@ -234,6 +343,7 @@ export class LiltApp extends LitElement {
       const result = await window.lilto.submitPrompt(text);
       if (result.ok) {
         this._resolvePendingMessage(pendingIdx, result.response.text, this._buildProgress());
+        this._saveCurrentSession();
         await this.updateComplete;
         this._composer?.focusInput();
         return;
