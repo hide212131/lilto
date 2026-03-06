@@ -40,6 +40,13 @@ export type Message = {
   progress?: AssistantProgress;
 };
 
+export type Session = {
+  id: string;
+  title: string;
+  createdAt: number;
+  messages: Message[];
+};
+
 declare global {
   interface Window {
     lilto: {
@@ -49,6 +56,12 @@ declare global {
         // 既存契約との互換性維持: submitPrompt の戻り値は変更しない。
         | { ok: true; response: { text: string } }
         | { ok: false; error?: { code?: string; message?: string; retryable?: boolean } }
+      >;
+      openExternalUrl: (
+        url: string
+      ) => Promise<
+        | { ok: true }
+        | { ok: false; error: { code: "INVALID_REQUEST" | "INVALID_URL" | "UNSUPPORTED_PROTOCOL"; message: string } }
       >;
       startClaudeOauth: () => Promise<{ ok: boolean; state: AuthState }>;
       submitAuthCode: (
