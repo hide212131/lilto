@@ -40,7 +40,7 @@ export class LiltSettingsModal extends LitElement {
   @state() private _chatSaveStatus = "";
 
   // Tab state
-  @state() private _activeTab: "providers" | "skills" = "providers";
+  @state() private _activeTab: "providers" | "chat" | "skills" = "providers";
 
   // Skills state
   @state() private _skills: SkillInfo[] = [];
@@ -379,12 +379,20 @@ export class LiltSettingsModal extends LitElement {
                 @click=${() => this._switchTab("providers")}
               >Providers &amp; Models</div>
               <div
+                class="settings-menu-item ${this._activeTab === "chat" ? "active" : ""}"
+                @click=${() => this._switchTab("chat")}
+              >Chat</div>
+              <div
                 class="settings-menu-item ${this._activeTab === "skills" ? "active" : ""}"
                 @click=${() => this._switchTab("skills")}
               >Agent Skills</div>
             </div>
             <div class="settings-main">
-              ${this._activeTab === "providers" ? this._renderProviders() : this._renderSkills()}
+              ${this._activeTab === "providers"
+                ? this._renderProviders()
+                : this._activeTab === "chat"
+                  ? this._renderChatSection()
+                  : this._renderSkills()}
             </div>
           </div>
         </div>
@@ -670,7 +678,7 @@ export class LiltSettingsModal extends LitElement {
     `;
   }
 
-  private _switchTab(tab: "providers" | "skills") {
+  private _switchTab(tab: "providers" | "chat" | "skills") {
     this._activeTab = tab;
     if (tab === "skills" && this._skills.length === 0 && !this._skillsLoading) {
       void this._loadSkills();
