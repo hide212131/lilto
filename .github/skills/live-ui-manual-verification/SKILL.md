@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires npm start and npx agent-browser.
 metadata:
   author: lilto
-  version: "1.0"
+  version: "1.1"
 ---
 
 Electron アプリを実際に起動し、`agent-browser` でライブ操作しながら「要求→回答→任意UI操作→検証」を完了させる。
@@ -114,6 +114,43 @@ for i in {1..40}; do
 
 - 回答内容に依存した検証の場合、ここで必要要素（リンク・特定文言など）を確認する。
 
+### 5.5) レイアウト系不具合の観測（推奨）
+
+「消える/隠れる/はみ出す」のような表示不具合は、件数だけでなく **幅と位置** を同時に観測する。
+
+```bash
+set +H
+npx agent-browser eval '(() => {
+  const app = document.querySelector("lilt-app");
+  const body = app?.shadowRoot?.querySelector(".body");
+  const history = body?.querySelector("lilt-chat-history");
+  const main = body?.querySelector(".main");
+  const stage = main?.querySelector(".stage");
+  const ml = main?.querySelector("lilt-message-list");
+  const root = ml?.shadowRoot;
+  return JSON.stringify({
+    historyDisplay: history ? getComputedStyle(history).display : "missing",
+    mainWidth: main ? getComputedStyle(main).width : "missing",
+    stageWidth: stage ? getComputedStyle(stage).width : "missing",
+    listWidth: ml ? getComputedStyle(ml).width : "missing",
+    user: root ? root.querySelectorAll(".msg-user").length : -1,
+    assistant: root ? root.querySelectorAll(".msg-assistant").length : -1
+  });
+})()'
+```
+
+- 目安: サイドバー開時に `listWidth` が `mainWidth` より大きい場合、表示は維持されても実際にはみ出している可能性が高い。
+
+### 5.6) 比較用スナップショットの保存（推奨）
+
+```bash
+npx agent-browser screenshot test/artifacts/sidebar-before-fix.png
+npx agent-browser screenshot test/artifacts/sidebar-open-before-fix.png
+```
+
+- 修正前後・開閉前後で同じ観測点の画像を残す。
+- 画像ファイル名は状態が分かる命名（`before/after`、`open/closed`）にする。
+
 ### 6) 任意 UI 操作を実行して検証
 
 ここは固定手順ではなく、対象操作に応じて差し替える。
@@ -190,6 +227,21 @@ npx agent-browser eval '(() => {
 - 既存プロセスを確認し、必要なら再起動する。
 - `--remote-debugging-port=9222` 付きで起動できているかログを確認。
 
+### 期待したセレクタが取れない
+
+- まず `shadowRoot` の子要素タグ/クラスを列挙して、実装上の正しいセレクタへ切り替える。
+- 例: メッセージ件数は `.message` ではなく `.msg-user` / `.msg-assistant` の方が安定する場合がある。
+
+```bash
+set +H
+npx agent-browser eval '(() => {
+  const root = document.querySelector("lilt-app")?.shadowRoot?.querySelector("lilt-message-list")?.shadowRoot;
+  if (!root) return "no-root";
+  const classes = Array.from(root.querySelectorAll("*")).map(el => el.className).filter(Boolean).slice(0, 30);
+  return JSON.stringify({ classes });
+})()'
+```
+
 ### 送信できない / composer が見つからない
 
 - 画面読み込み待ちを追加して再実行。
@@ -210,6 +262,11 @@ npx agent-browser eval '(() => {
 
 - コマンド先頭で `set +H` を入れる。
 - `!` を含む JS をシングルクォートで囲む。
+
+### E2E 実行時に `Address already in use (9222)`
+
+- 先に手動起動中の Electron を停止してから E2E を実行する。
+- GUI変更後に `npm run e2e:electron` を回す場合、CDPポート競合がない状態で再実行する。
 
 ---
 
