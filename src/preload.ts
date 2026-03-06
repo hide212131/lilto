@@ -5,6 +5,7 @@ const AGENT_LOOP_EVENT_CHANNEL = "agent:loopEvent";
 
 contextBridge.exposeInMainWorld("lilto", {
   submitPrompt: async (text: string) => ipcRenderer.invoke("agent:submitPrompt", { text }),
+  abortPrompt: async () => ipcRenderer.invoke("agent:abort"),
   openExternalUrl: async (url: string) => ipcRenderer.invoke("app:openExternal", { url }),
   startClaudeOauth: async () => ipcRenderer.invoke("auth:startClaudeOauth"),
   submitAuthCode: async (code: string) => ipcRenderer.invoke("auth:submitCode", { code }),

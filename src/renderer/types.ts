@@ -50,6 +50,7 @@ declare global {
         | { ok: true; response: { text: string } }
         | { ok: false; error?: { code?: string; message?: string; retryable?: boolean } }
       >;
+      abortPrompt: () => Promise<{ ok: boolean }>;
       openExternalUrl: (
         url: string
       ) => Promise<

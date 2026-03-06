@@ -3,7 +3,9 @@ import path from "node:path";
 import { createLogger, type Logger } from "./logger";
 import {
   type ActiveProvider,
+  type ChatSettings,
   type CustomProviderSettings,
+  DEFAULT_CHAT_SETTINGS,
   type NetworkProxySettings,
   OAUTH_PROVIDER_IDS,
   type OAuthProviderId,
@@ -12,6 +14,7 @@ import {
 
 export type {
   ActiveProvider,
+  ChatSettings,
   CustomProviderSettings,
   NetworkProxySettings,
   OAuthProviderId,
@@ -40,6 +43,7 @@ function createDefaultSettings(): ProviderSettings {
       modelId: DEFAULT_MODEL_ID
     },
     networkProxy: { useProxy: hasProxyEnvironment() },
+    chatSettings: { ...DEFAULT_CHAT_SETTINGS },
     updatedAt: Date.now()
   };
 }
@@ -57,6 +61,13 @@ function normalizeOAuthProvider(value: unknown): OAuthProviderId {
     return "anthropic";
   }
   return OAUTH_PROVIDER_IDS.includes(value as OAuthProviderId) ? (value as OAuthProviderId) : "anthropic";
+}
+
+function normalizeChatSettings(value: unknown): ChatSettings {
+  const record = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  return {
+    enterToSend: typeof record.enterToSend === "boolean" ? record.enterToSend : DEFAULT_CHAT_SETTINGS.enterToSend
+  };
 }
 
 function normalizeSettings(value: unknown): ProviderSettings {
@@ -84,6 +95,7 @@ function normalizeSettings(value: unknown): ProviderSettings {
     networkProxy: {
       useProxy
     },
+    chatSettings: normalizeChatSettings(record.chatSettings),
     updatedAt: typeof record.updatedAt === "number" ? record.updatedAt : Date.now()
   };
 }
@@ -93,6 +105,7 @@ function isValidSavePayload(payload: unknown): payload is {
   oauthProvider?: OAuthProviderId;
   customProvider: CustomProviderSettings;
   networkProxy?: NetworkProxySettings;
+  chatSettings?: ChatSettings;
 } {
   if (!payload || typeof payload !== "object") return false;
   const record = payload as Record<string, unknown>;
@@ -114,10 +127,19 @@ function isValidSavePayload(payload: unknown): payload is {
     typeof custom.modelId === "string";
   if (!customValid) return false;
 
-  if (record.networkProxy === undefined) return true;
-  if (!record.networkProxy || typeof record.networkProxy !== "object") return false;
-  const proxy = record.networkProxy as Record<string, unknown>;
-  return typeof proxy.useProxy === "boolean";
+  if (record.networkProxy !== undefined) {
+    if (!record.networkProxy || typeof record.networkProxy !== "object") return false;
+    const proxy = record.networkProxy as Record<string, unknown>;
+    if (typeof proxy.useProxy !== "boolean") return false;
+  }
+
+  if (record.chatSettings !== undefined) {
+    if (!record.chatSettings || typeof record.chatSettings !== "object") return false;
+    const chat = record.chatSettings as Record<string, unknown>;
+    if (typeof chat.enterToSend !== "boolean") return false;
+  }
+
+  return true;
 }
 
 export class ProviderSettingsService {
@@ -158,7 +180,8 @@ export class ProviderSettingsService {
     return {
       ...this.state,
       customProvider: { ...this.state.customProvider },
-      networkProxy: { ...this.state.networkProxy }
+      networkProxy: { ...this.state.networkProxy },
+      chatSettings: { ...this.state.chatSettings }
     };
   }
 

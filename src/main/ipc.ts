@@ -76,6 +76,11 @@ export function registerAgentIpcHandlers({
     }
   });
 
+  ipcMain.handle("agent:abort", () => {
+    agentRuntime.abort();
+    return { ok: true };
+  });
+
   ipcMain.handle("auth:getState", () => {
     return authService.getState();
   });

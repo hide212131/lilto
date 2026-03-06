@@ -25,6 +25,9 @@ export class LiltApp extends LitElement {
     networkProxy: {
       useProxy: false
     },
+    chatSettings: {
+      enterToSend: false
+    },
     updatedAt: Date.now()
   };
   @property({ type: Array }) messages: Message[] = [];
@@ -164,7 +167,10 @@ export class LiltApp extends LitElement {
           <lilt-message-list .messages=${this.messages}></lilt-message-list>
           <lilt-composer
             .disabled=${!this._canSend()}
+            .isSending=${this.isSending}
+            .enterToSend=${this.providerSettings.chatSettings?.enterToSend ?? false}
             @send-message=${this._onSendMessage}
+            @abort-request=${this._onAbortRequest}
           ></lilt-composer>
         </div>
       </div>
@@ -200,6 +206,10 @@ export class LiltApp extends LitElement {
     this._thinkingText = "";
     this._toolProgress = [];
     this._pendingLabel = "";
+  }
+
+  private _onAbortRequest() {
+    void window.lilto.abortPrompt();
   }
 
   private async _onSendMessage(e: CustomEvent<{ text: string }>) {

@@ -479,6 +479,7 @@ export class AgentRuntime {
   private readonly availableSkillNames: Set<string>;
   private session: PiSession | null = null;
   private sessionKey: string | null = null;
+  private _abortReject: ((reason: Error) => void) | null = null;
 
   constructor({
     createSession = createPiSessionFromSdk,
@@ -498,6 +499,16 @@ export class AgentRuntime {
     this.logger = logger;
     this.workspaceDir = workspaceDir;
     this.availableSkillNames = new Set(availableSkills.map((skill) => skill.name));
+  }
+
+  abort(): void {
+    if (this._abortReject) {
+      this._abortReject(new Error("aborted"));
+      this._abortReject = null;
+    }
+    // Discard the current session so the next request starts fresh.
+    this.session = null;
+    this.sessionKey = null;
   }
 
   private async ensureSession(options: {
@@ -550,6 +561,11 @@ export class AgentRuntime {
       let streamOutput = "";
       let finalOutput = "";
       let thinkingDeltaSeenInBlock = false;
+      let aborted = false;
+
+      const abortPromise = new Promise<never>((_, reject) => {
+        this._abortReject = reject;
+      });
 
       const unsubscribe = session.subscribe((event) => {
         this.logger.info("agent_event", summarizeAgentEvent(event));
@@ -640,9 +656,24 @@ export class AgentRuntime {
       });
 
       try {
-        await session.prompt(text);
+        await Promise.race([session.prompt(text), abortPromise]);
+      } catch (error) {
+        if (error instanceof Error && error.message === "aborted") {
+          aborted = true;
+          this.logger.info("agent_prompt_aborted", { requestId: hooks?.requestId ?? null });
+        } else {
+          throw error;
+        }
       } finally {
+        this._abortReject = null;
         unsubscribe();
+      }
+
+      if (aborted) {
+        return {
+          ok: false,
+          error: { code: "ABORTED", message: "中断しました", details: null, retryable: false }
+        };
       }
 
       let output = finalOutput.trim() ? finalOutput : streamOutput;
