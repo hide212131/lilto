@@ -1,5 +1,17 @@
 # Lessons
 
+## 2026-03-05
+
+| 変更内容 | ミス/課題 | 再発防止ルール |
+|---|---|---|
+| Electron 実装を Electrobun へ移行した環境で `e2e:electron` が起動できるよう、E2E スクリプトのランタイム解決を `electrobun` 優先（`electron` 後方互換）に修正。 | E2E 起動バイナリを `node_modules/.bin/electron` に固定していたため、Electrobun 環境で `ENOENT` になり検証が開始できなかった。 | ランタイム移行時は起動スクリプトの実行バイナリ固定参照を禁止し、候補（新ランタイム→旧ランタイム）を順に解決する関数を導入して E2E の実行経路を先に確認する。 |
+| E2E スクリプト/成果物のファイル名を `electron` から `electrobun` へ統一し、npm スクリプト名と運用ドキュメントの参照先も追従。 | 実ファイル名だけ先に変えると、`package.json` や運用手順が旧名を参照して実行不能になる。 | ファイル名リネーム時は「実体→呼び出し元→運用ドキュメント」の順で同一PR内に更新し、最後に実コマンドで起動確認まで行う。 |
+| Electrobun 版 E2E の CDP 接続を CLI 引数依存から `electrobun.config.ts` の CEF + `chromiumFlags` 設定へ移行。 | `--remote-debugging-port` を起動引数に渡しても Electrobun 側へ反映されず、`/json/version` が待受されないままタイムアウトした。 | Electrobun で CDP が必要な検証は「E2E環境変数→config で CEF/chromiumFlags を有効化」の経路を使い、CLI 引数互換を前提にしない。 |
+| Playwright 適用可否を検証し、`views://` カスタムスキームへ直接接続できないことを確認。 | Playwright はブラウザURLには接続できるが、Electrobun のアプリ内 WebView（`views://`）には名前解決できず E2E 対象へ到達できない。 | Playwright 検証は最初に「対象URLへ到達できるか」を最小プローブで確認し、到達不能な場合は WebView 内部向けの別ドライバ方式へ早期に切り替える。 |
+| Electrobun E2E を CDP/agent-browser 依存から、Main 側HTTPドライバ + `evaluateJavascriptWithResponse` を使う WebView 直接操作方式へ移行。 | `evaluateJavascriptWithResponse` は `new Function(script)` 実行のため、`return` を付けない式評価は常に `undefined` になり検証が壊れる。 | Electrobun の script 評価APIを使う時は呼び出し側ラッパーで必ず `return (...)` を付与し、評価仕様差分（CDP evalとの違い）を吸収する。 |
+| CEF バンドルを実地試行し、`LILTO_E2E_USE_CEF=1` で CEF ダウンロード・起動・DevTools待受までは確認。 | macOS で CEF 有効時に `cef_scoped_refptr.h:329 ptr_` の fatal で初期化クラッシュし、E2E 継続不能になるケースがある。 | CEF 試行は常時ONにせず環境変数で opt-in にし、クラッシュ時は既定（system webview）へ即時フォールバックできる運用を維持する。 |
+| CEF クラッシュ切り分けのため、`LILTO_CEF_MINIMAL=1` で `views://`/RPC を使わない最小ウィンドウ起動モードを追加。 | 本体アプリをそのまま CEF で起動すると依存要素が多く、クラッシュ原因が CEF 初期化かアプリロジックか判別しにくい。 | ネイティブ層クラッシュの調査では、まず最小起動モードを用意して再現可否を分離し、再現した層から順に機能を戻して原因を特定する。 |
+
 ## 2026-03-04
 
 | 変更内容 | ミス/課題 | 再発防止ルール |

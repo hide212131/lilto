@@ -1,7 +1,7 @@
 # 手動テスト手順
 
 ## 事前準備
-- `npm install`
+- `bun install`
 - 必要な認証情報を環境変数または Pi の設定として用意する
 - GUI 変更がある場合は `npm run e2e:electron` を実行できる状態にする
 
@@ -15,9 +15,8 @@
 > `npm` / `npx` も同様に `.cmd` を優先する（`npm.cmd`, `npx.cmd`）。
 
 ## desktop-shell
-1. `npm start` でアプリを起動する
+1. `bun run start` でアプリを起動する（開発時は `bun run dev` でウォッチモード）
 2. 起動時にウィンドウが表示されることを確認する
-3. ウィンドウを閉じてから再度アプリをアクティブ化し、既存セッションで再表示できることを確認する
 
 ## agent-bridge
 1. Settings の `Providers & Models` を開き、OAuth Provider の候補が `anthropic` / `openai-codex` / `github-copilot` / `google-gemini-cli` / `google-antigravity` の5種類表示されることを確認する
@@ -33,7 +32,7 @@
 3. 認証失敗後に再試行できることを確認する
 
 ## heartbeat-jobs
-1. Main プロセスログで `heartbeat_tick` が定期出力されることを確認する
+1. Bun プロセスログで `heartbeat_tick` が定期出力されることを確認する
 2. 失敗するジョブを追加しても後続ジョブが実行されることをログで確認する
 
 ## GUI 変更時の必須チェック

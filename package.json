@@ -3,24 +3,24 @@
   "version": "0.1.0",
   "private": true,
   "description": "Lilt-o desktop shell with Pi SDK bridge",
-  "main": "dist/main/index.js",
   "scripts": {
     "prebuild": "node scripts/sync-skill-creator.js",
-    "build": "tsc -p tsconfig.json && vite build",
-    "start": "npm run build && electron .",
-    "test": "npm run build && node --test",
-    "e2e:electron": "npm run build && node scripts/e2e-electron-agent-browser.js",
-    "e2e:electron:skills-live": "npm run build && node scripts/e2e-electron-agent-skills-live.js"
+    "build": "electrobun build",
+    "start": "electrobun dev",
+    "dev": "electrobun dev --watch",
+    "test": "bun --test",
+    "e2e:electrobun": "node scripts/e2e-electrobun-agent-browser.js",
+    "e2e:electrobun:skills-live": "node scripts/e2e-electrobun-agent-skills-live.js"
   },
   "dependencies": {
     "@mariozechner/pi-ai": "^0.54.2",
-    "@mariozechner/pi-coding-agent": "latest"
+    "@mariozechner/pi-coding-agent": "latest",
+    "electrobun": "latest"
   },
   "devDependencies": {
+    "@types/bun": "latest",
     "agent-browser": "^0.13.0",
-    "electron": "^31.7.7",
     "lit": "^3.3.2",
-    "typescript": "^5.7.3",
-    "vite": "^7.3.1"
+    "typescript": "^5.7.3"
   }
 }
