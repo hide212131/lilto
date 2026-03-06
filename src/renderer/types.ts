@@ -57,6 +57,12 @@ declare global {
         | { ok: true; response: { text: string } }
         | { ok: false; error?: { code?: string; message?: string; retryable?: boolean } }
       >;
+      openExternalUrl: (
+        url: string
+      ) => Promise<
+        | { ok: true }
+        | { ok: false; error: { code: "INVALID_REQUEST" | "INVALID_URL" | "UNSUPPORTED_PROTOCOL"; message: string } }
+      >;
       startClaudeOauth: () => Promise<{ ok: boolean; state: AuthState }>;
       submitAuthCode: (
         code: string
