@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 220" width="200" height="220">
+  <!-- Background (transparent) -->
+
+  <!-- Sparkle lines top-right -->
+  <g stroke="#7aad6e" stroke-width="4" stroke-linecap="round">
+    <line x1="153" y1="28" x2="160" y2="20"/>
+    <line x1="162" y1="38" x2="172" y2="34"/>
+    <line x1="158" y1="50" x2="170" y2="50"/>
+  </g>
+
+  <!-- Left leaf wing -->
+  <g transform="translate(28, 88)">
+    <ellipse cx="0" cy="0" rx="28" ry="16" fill="#9dd68a" stroke="#5a8f4a" stroke-width="3" transform="rotate(-40)"/>
+    <ellipse cx="-8" cy="0" rx="14" ry="8" fill="#b8e6a8" stroke="#5a8f4a" stroke-width="2" transform="rotate(-40)"/>
+  </g>
+
+  <!-- Right leaf wing -->
+  <g transform="translate(172, 88)">
+    <ellipse cx="0" cy="0" rx="28" ry="16" fill="#9dd68a" stroke="#5a8f4a" stroke-width="3" transform="rotate(40)"/>
+    <ellipse cx="8" cy="0" rx="14" ry="8" fill="#b8e6a8" stroke="#5a8f4a" stroke-width="2" transform="rotate(40)"/>
+  </g>
+
+  <!-- Bulb body (main circle) -->
+  <circle cx="100" cy="88" r="68" fill="#b8e6a8" stroke="#4a7a3a" stroke-width="4"/>
+
+  <!-- Bulb highlight -->
+  <ellipse cx="78" cy="62" rx="22" ry="16" fill="rgba(255,255,255,0.45)" transform="rotate(-20, 78, 62)"/>
+
+  <!-- Base neck -->
+  <path d="M68 148 Q66 162 72 168 Q84 178 100 178 Q116 178 128 168 Q134 162 132 148 Z"
+        fill="#8bc57a" stroke="#4a7a3a" stroke-width="3"/>
+
+  <!-- Screw base rings -->
+  <g fill="none" stroke="#4a7a3a" stroke-width="3">
+    <path d="M72 168 Q100 175 128 168"/>
+    <path d="M74 178 Q100 185 126 178"/>
+    <path d="M78 188 Q100 194 122 188"/>
+  </g>
+  <rect x="78" y="187" width="44" height="8" rx="4" fill="#8bc57a" stroke="#4a7a3a" stroke-width="2.5"/>
+
+  <!-- Eyes (left) -->
+  <circle cx="82" cy="86" r="12" fill="#1a1a1a"/>
+  <circle cx="77" cy="81" r="4" fill="white"/>
+
+  <!-- Eyes (right) -->
+  <circle cx="118" cy="86" r="12" fill="#1a1a1a"/>
+  <circle cx="113" cy="81" r="4" fill="white"/>
+
+  <!-- Nose highlight dot -->
+  <circle cx="100" cy="100" r="3" fill="rgba(255,255,255,0.8)"/>
+
+  <!-- Mouth (open/happy) -->
+  <path d="M84 112 Q100 128 116 112" fill="#f0a0b0" stroke="#4a7a3a" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M84 112 Q100 128 116 112 Q100 118 84 112 Z" fill="#d06070"/>
+</svg>
