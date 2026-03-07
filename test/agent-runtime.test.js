@@ -626,6 +626,44 @@ test("agent-browser が無い場合はスキル接頭辞を付けない", async 
   assert.equal(receivedPrompt, "ブラウザで動作確認して");
 });
 
+test("refreshSkills 後は次回送信からスキル優先が有効になる", async () => {
+  let receivedPrompt = "";
+  const runtime = new AgentRuntime({
+    authService: createAuthService("authenticated"),
+    createSession: async () => ({
+      subscribe(listener) {
+        listener({
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: "ok" }
+        });
+        return () => {};
+      },
+      async prompt(text) {
+        receivedPrompt = text;
+      }
+    }),
+    availableSkills: [],
+    logger: { info() {}, error() {} }
+  });
+
+  runtime["session"] = {
+    subscribe() {
+      return () => {};
+    },
+    async prompt() {}
+  };
+  runtime["sessionKey"] = "cached-session";
+
+  runtime.refreshSkills([{ name: "agent-browser" }]);
+
+  assert.equal(runtime["session"], null);
+  assert.equal(runtime["sessionKey"], null);
+
+  const result = await runtime.submitPrompt("ブラウザで動作確認して", createProviderSettings());
+  assert.equal(result.ok, true);
+  assert.equal(receivedPrompt.startsWith("/skill:agent-browser"), true);
+});
+
 test("loop event 正規化: tool start/end を送出する", async () => {
   const loopEvents = [];
   const runtime = new AgentRuntime({

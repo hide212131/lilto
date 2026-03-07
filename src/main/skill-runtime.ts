@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
 
 export type SkillMetadata = {
   name: string;
@@ -20,6 +22,82 @@ export type SkillRuntimeSetup = {
 };
 
 const BUNDLED_SKILL_NAMES = ["agent-browser", "skill-creator"] as const;
+const DEFAULT_PI_USER_SKILLS_DIR = path.join(os.homedir(), ".pi", "agent", "skills");
+const ANSI_ESCAPE_REGEX = /\x1B\[[0-9;]*m/g;
+const SKILL_INSTALL_TIMEOUT_MS = 60_000;
+
+function isDefaultUserSkillsDir(userSkillsDir: string): boolean {
+  return path.resolve(userSkillsDir) === path.resolve(DEFAULT_PI_USER_SKILLS_DIR);
+}
+
+function resolveSkillsCliPath(projectRoot: string): string {
+  try {
+    const require = createRequire(__filename);
+    return require.resolve("skills/bin/cli.mjs");
+  } catch {
+    const fallbackPath = path.join(projectRoot, "node_modules", "skills", "bin", "cli.mjs");
+    if (!fs.existsSync(fallbackPath)) {
+      throw new Error(`skills ライブラリが見つかりません: ${fallbackPath}`);
+    }
+    return fallbackPath;
+  }
+}
+
+function resolveRuntimeEnv(): NodeJS.ProcessEnv {
+  return process.versions.electron
+    ? { ...process.env, ELECTRON_RUN_AS_NODE: "1" }
+    : process.env;
+}
+
+function runSkillsCliSync(options: {
+  args: string[];
+  projectRoot?: string;
+}): { ok: true; stdout: string } | { ok: false; error: string } {
+  const projectRoot = options.projectRoot ?? process.cwd();
+  let skillsCliPath = "";
+  try {
+    skillsCliPath = resolveSkillsCliPath(projectRoot);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+
+  try {
+    const stdout = execFileSync(
+      process.execPath,
+      [skillsCliPath, ...options.args],
+      {
+        cwd: projectRoot,
+        env: resolveRuntimeEnv(),
+        timeout: SKILL_INSTALL_TIMEOUT_MS,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"]
+      }
+    );
+    return { ok: true, stdout: stdout.trim() };
+  } catch (error) {
+    const err = error as { stdout?: string; stderr?: string; message?: string };
+    const message = (err.stderr || err.stdout || err.message || String(error)).trim();
+    return { ok: false, error: message };
+  }
+}
+
+function parseSkillNamesFromListOutput(output: string): Set<string> {
+  const names = new Set<string>();
+  const plain = output.replace(ANSI_ESCAPE_REGEX, "");
+  const lines = plain.split(/\r?\n/);
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    const match = trimmed.match(/^([A-Za-z0-9._-]+)\s+((~|\.{1,2}|\/).+)$/);
+    if (match) {
+      names.add(match[1]);
+    }
+  }
+
+  return names;
+}
 
 function parseInlineValue(raw: string): unknown {
   const value = raw.trim();
@@ -111,10 +189,21 @@ function collectSkillMarkdownFiles(rootDir: string): string[] {
 
   const files: string[] = [];
   const stack = [rootDir];
+  const visitedDirs = new Set<string>();
 
   while (stack.length > 0) {
     const current = stack.pop();
     if (!current) continue;
+
+    try {
+      const realCurrent = fs.realpathSync(current);
+      if (visitedDirs.has(realCurrent)) {
+        continue;
+      }
+      visitedDirs.add(realCurrent);
+    } catch {
+      // ignore realpath failures and continue best-effort traversal
+    }
 
     let entries: fs.Dirent[];
     try {
@@ -128,6 +217,18 @@ function collectSkillMarkdownFiles(rootDir: string): string[] {
       if (entry.isDirectory()) {
         stack.push(fullPath);
         continue;
+      }
+
+      if (entry.isSymbolicLink()) {
+        try {
+          const stat = fs.statSync(fullPath);
+          if (stat.isDirectory()) {
+            stack.push(fullPath);
+            continue;
+          }
+        } catch {
+          // broken symlink or inaccessible target: skip
+        }
       }
 
       if (entry.isFile() && entry.name === "SKILL.md") {
@@ -366,7 +467,25 @@ export function listSkillsWithSource(options: {
   const result: SkillInfo[] = [];
   const seen = new Set<string>();
 
-  for (const skill of discoverSkillMetadata([options.userSkillsDir])) {
+  const discoveredUserSkills = discoverSkillMetadata([options.userSkillsDir]);
+  let userNamesFromCli: Set<string> | null = null;
+
+  if (isDefaultUserSkillsDir(options.userSkillsDir)) {
+    const cliListResult = runSkillsCliSync({
+      args: ["list", "--global", "--agent", "pi"]
+    });
+
+    if (!cliListResult.ok) {
+      throw new Error(`skills list failed: ${cliListResult.error}`);
+    }
+
+    userNamesFromCli = parseSkillNamesFromListOutput(cliListResult.stdout);
+  }
+
+  for (const skill of discoveredUserSkills) {
+    if (userNamesFromCli && !userNamesFromCli.has(skill.name)) {
+      continue;
+    }
     seen.add(skill.name);
     result.push({ ...skill, source: "user" });
   }
@@ -391,12 +510,29 @@ export function uninstallUserSkill(options: {
     return { ok: false, error: "Cannot uninstall bundled or system skills" };
   }
 
-  try {
-    fs.rmSync(skillDir, { recursive: true, force: true });
-    return { ok: true };
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  if (!isDefaultUserSkillsDir(options.userSkillsDir)) {
+    try {
+      fs.rmSync(skillDir, { recursive: true, force: true });
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
   }
+
+  const skillName = path.basename(skillDir);
+  if (!skillName) {
+    return { ok: false, error: "Invalid skill path" };
+  }
+
+  const cliRemoveResult = runSkillsCliSync({
+    args: ["remove", skillName, "--global", "--agent", "pi", "--yes"]
+  });
+
+  if (!cliRemoveResult.ok) {
+    return { ok: false, error: cliRemoveResult.error };
+  }
+
+  return { ok: true };
 }
 
 async function extractZip(zipFile: string, destDir: string): Promise<void> {
@@ -540,8 +676,6 @@ export async function checkSkillUpdates(options: { userSkillsDir: string }): Pro
   return results;
 }
 
-const SKILL_INSTALL_TIMEOUT_MS = 60_000;
-
 export async function installSkillFromSource(options: {
   source: string;
   projectRoot?: string;
@@ -556,20 +690,18 @@ export async function installSkillFromSource(options: {
   const execFileAsync = promisify(execFile);
 
   const projectRoot = options.projectRoot ?? process.cwd();
-  // Resolve the bundled skills CLI binary directly from local node_modules.
-  const skillsCliPath = path.join(projectRoot, "node_modules", "skills", "bin", "cli.mjs");
-  if (!fs.existsSync(skillsCliPath)) {
-    return { ok: false, error: `skills ライブラリが見つかりません: ${skillsCliPath}` };
+  let skillsCliPath = "";
+  try {
+    skillsCliPath = resolveSkillsCliPath(projectRoot);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
-
-  // Use the node binary (not npx) to run the bundled skills CLI directly.
-  const nodeCmd = process.platform === "win32" ? "node.exe" : "node";
 
   try {
     const { stdout } = await execFileAsync(
-      nodeCmd,
+      process.execPath,
       [skillsCliPath, "add", source, "--global", "--agent", "pi", "--yes"],
-      { timeout: SKILL_INSTALL_TIMEOUT_MS, cwd: projectRoot }
+      { timeout: SKILL_INSTALL_TIMEOUT_MS, cwd: projectRoot, env: resolveRuntimeEnv() }
     );
     return { ok: true, output: stdout.trim() || "インストール完了" };
   } catch (e) {

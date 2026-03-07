@@ -8,7 +8,7 @@ export class LiltSettingsModal extends LitElement {
   @property({ type: Boolean }) open = false;
   @property({ type: Object }) authState: AuthState | null = null;
   @property({ type: Object }) providerSettings: ProviderSettings = {
-    activeProvider: "claude",
+    activeProvider: "oauth",
     oauthProvider: "anthropic",
     customProvider: {
       name: "Ollama",
@@ -47,6 +47,7 @@ export class LiltSettingsModal extends LitElement {
   @state() private _skillsLoading = false;
   @state() private _skillInstallUrl = "";
   @state() private _skillInstallStatus = "";
+  @state() private _skillListStatus = "";
   @state() private _skillInstalling = false;
   @state() private _skillUpdates: SkillUpdateInfo[] = [];
   @state() private _skillUpdatesChecking = false;
@@ -82,8 +83,8 @@ export class LiltSettingsModal extends LitElement {
     }
     if (changedProps.has("authState")) {
       const as = this.authState;
-      // Auto-close on successful Claude auth
-      if (as?.phase === "authenticated" && this.providerSettings.activeProvider === "claude") {
+      // Auto-close on successful OAuth auth
+      if (as?.phase === "authenticated" && this.providerSettings.activeProvider === "oauth") {
         this._close();
       }
       // Focus code input when awaiting code
@@ -403,7 +404,7 @@ export class LiltSettingsModal extends LitElement {
   private _renderProviders() {
     const ps = this.providerSettings;
     const as = this.authState;
-    const isClaudeActive = ps.activeProvider === "claude";
+    const isOAuthActive = ps.activeProvider === "oauth";
     const isCustomActive = ps.activeProvider === "custom-openai-completions";
     const authPhase = as?.phase ?? "unauthenticated";
     const authMessage = as?.message ?? "未認証です。認証を開始してください。";
@@ -419,9 +420,9 @@ export class LiltSettingsModal extends LitElement {
           <input
             type="radio"
             name="active-provider"
-            value="claude"
-            .checked=${isClaudeActive}
-            @change=${() => this._changeProvider("claude")}
+            value="oauth"
+            .checked=${isOAuthActive}
+            @change=${() => this._changeProvider("oauth")}
           />
           OAuth Provider
         </label>
@@ -438,7 +439,7 @@ export class LiltSettingsModal extends LitElement {
         <span class="status">${this._providerSelStatus}</span>
       </div>
 
-      <section class="provider-section ${isClaudeActive ? "active" : ""}">
+      <section class="provider-section ${isOAuthActive ? "active" : ""}">
         <h4>OAuth Authorization</h4>
         <p>OAuth 認証を開始して、表示された認証コードを入力してください。</p>
         <label class="oauth-provider-row">
@@ -559,7 +560,8 @@ export class LiltSettingsModal extends LitElement {
   private _renderSkills() {
     return html`
       <h3>Agent Skills</h3>
-      <p>スキルをインストール・管理します。変更はアプリ再起動後に反映されます。</p>
+      <p>スキルをインストール・管理します。変更は次回の送信から反映されます。</p>
+      <p><a href="https://skills.sh" @click=${this._openSkillsDirectory}>https://skills.sh</a> から公開スキルを探せます。</p>
 
       <section class="provider-section">
         <h4>スキルのインストール</h4>
@@ -620,7 +622,7 @@ export class LiltSettingsModal extends LitElement {
                       <td><span class="skill-filepath">${skill.filePath}</span></td>
                       <td>
                         ${skill.source === "user"
-                          ? html`<button class="btn-danger" @click=${() => this._uninstallSkill(skill.filePath)}>削除</button>`
+                          ? html`<button class="btn-danger" @click=${() => this._uninstallSkill(skill.filePath, skill.name)}>削除</button>`
                           : html`<span class="status">—</span>`}
                       </td>
                     </tr>
@@ -628,6 +630,7 @@ export class LiltSettingsModal extends LitElement {
                 </tbody>
               </table>
             `}
+              ${this._skillListStatus ? html`<p class="status">${this._skillListStatus}</p>` : ""}
       </section>
 
       <section class="provider-section" style="margin-top: 12px;">
@@ -688,7 +691,13 @@ export class LiltSettingsModal extends LitElement {
   private async _loadSkills() {
     this._skillsLoading = true;
     try {
-      this._skills = await window.lilto.listSkills();
+      const result = await window.lilto.listSkills();
+      if (result.ok) {
+        this._skills = result.skills;
+        this._skillListStatus = "";
+      } else {
+        this._skillListStatus = `一覧取得エラー: ${result.error}`;
+      }
     } finally {
       this._skillsLoading = false;
     }
@@ -702,7 +711,7 @@ export class LiltSettingsModal extends LitElement {
     try {
       const result = await window.lilto.installSkillFromSource(source);
       if (result.ok) {
-        this._skillInstallStatus = `インストール完了（再起動後に有効になります）`;
+        this._skillInstallStatus = `インストール完了（次回の送信から有効になります）`;
         this._skillInstallUrl = "";
         await this._loadSkills();
       } else {
@@ -713,12 +722,18 @@ export class LiltSettingsModal extends LitElement {
     }
   }
 
-  private async _uninstallSkill(filePath: string) {
+  private async _uninstallSkill(filePath: string, skillName: string) {
+    const confirmed = globalThis.confirm(`「${skillName}」を削除しますか？`);
+    if (!confirmed) {
+      return;
+    }
+
     const result = await window.lilto.uninstallSkill(filePath);
     if (result.ok) {
+      this._skillListStatus = "";
       await this._loadSkills();
     } else {
-      this._skillInstallStatus = `削除エラー: ${result.error}`;
+      this._skillListStatus = `削除エラー: ${result.error}`;
     }
   }
 
@@ -739,7 +754,7 @@ export class LiltSettingsModal extends LitElement {
     try {
       const result = await window.lilto.installSkill(sourceUrl);
       if (result.ok) {
-        this._skillInstallStatus = `更新完了: ${result.installedSkills.join(", ")}（再起動後に有効になります）`;
+        this._skillInstallStatus = `更新完了: ${result.installedSkills.join(", ")}（次回の送信から有効になります）`;
         await this._loadSkills();
         await this._checkUpdates();
       } else {
@@ -750,6 +765,11 @@ export class LiltSettingsModal extends LitElement {
     }
   }
 
+  private _openSkillsDirectory = async (e: Event) => {
+    e.preventDefault();
+    await window.lilto.openExternalUrl("https://skills.sh");
+  };
+
   private _close() {
     this.dispatchEvent(new CustomEvent("close-settings", { bubbles: true, composed: true }));
   }
@@ -759,7 +779,7 @@ export class LiltSettingsModal extends LitElement {
   }
 
   private _renderProvidersSection(
-    isClaudeActive: boolean,
+    isOAuthActive: boolean,
     isCustomActive: boolean,
     authPhase: string,
     authMessage: string,
@@ -775,9 +795,9 @@ export class LiltSettingsModal extends LitElement {
           <input
             type="radio"
             name="active-provider"
-            value="claude"
-            .checked=${isClaudeActive}
-            @change=${() => this._changeProvider("claude")}
+            value="oauth"
+            .checked=${isOAuthActive}
+            @change=${() => this._changeProvider("oauth")}
           />
           OAuth Provider
         </label>
@@ -794,7 +814,7 @@ export class LiltSettingsModal extends LitElement {
         <span class="status">${this._providerSelStatus}</span>
       </div>
 
-      <section class="provider-section ${isClaudeActive ? "active" : ""}">
+      <section class="provider-section ${isOAuthActive ? "active" : ""}">
         <h4>OAuth Authorization</h4>
         <p>OAuth 認証を開始して、表示された認証コードを入力してください。</p>
         <label class="oauth-provider-row">
@@ -973,7 +993,7 @@ export class LiltSettingsModal extends LitElement {
     };
     const result = await window.lilto.saveProviderSettings(next);
     if (result.ok) {
-      this._providerSelStatus = provider === "claude" ? "現在: OAuth Provider" : "現在: Custom Provider";
+      this._providerSelStatus = provider === "oauth" ? "現在: OAuth Provider" : "現在: Custom Provider";
       this.dispatchEvent(
         new CustomEvent("provider-settings-changed", {
           detail: result.state,

@@ -1,4 +1,4 @@
-export type ActiveProvider = "claude" | "custom-openai-completions";
+export type ActiveProvider = "oauth" | "custom-openai-completions";
 export const OAUTH_PROVIDER_IDS = [
   "anthropic",
   "openai-codex",

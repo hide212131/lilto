@@ -98,7 +98,7 @@ declare global {
         | { ok: true; state: ProviderSettings }
         | { ok: false; error: { code: string; message: string } }
       >;
-      listSkills: () => Promise<SkillInfo[]>;
+      listSkills: () => Promise<{ ok: true; skills: SkillInfo[] } | { ok: false; error: string }>;
       installSkill: (url: string) => Promise<{ ok: true; installedSkills: string[] } | { ok: false; error: string }>;
       installSkillFromSource: (source: string) => Promise<{ ok: true; output: string } | { ok: false; error: string }>;
       uninstallSkill: (filePath: string) => Promise<{ ok: true } | { ok: false; error: string }>;

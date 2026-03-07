@@ -1,9 +1,26 @@
 # Lessons
 
+## 2026-03-07
+
+| 変更内容 | ミス/課題 | 再発防止ルール |
+|---|---|---|
+| Agent Skills の user skill 削除に軽量な確認ダイアログ（`confirm`）を追加。 | 破壊的操作（削除）がワンクリック即実行だと、誤操作時に復旧不能な削除を起こしやすい。 | UI で破壊的操作を追加・変更するときは、最低限の確認導線（`confirm` も可）を必須チェック項目にし、確認なしで即実行しない。 |
+| Skill 管理の現状調査を行い、`install` は `skills` 経由だが `list/remove` はファイル探索/直接削除である差分を設計書へ明文化。 | 追加経路と管理経路の責務が揃っていない状態を仕様で明示しないと、実装レビュー時に「意図した暫定か不具合か」を判定しづらい。 | 外部ライブラリを管理ソースに採用する機能では、`create/read/delete` の各操作が同じ管理境界に乗っているかを設計レビューの必須チェック項目にする。 |
+| `skills:list` の IPC 戻り値を `{ ok, skills/error }` 契約に統一し、一覧失敗・削除失敗を Settings のステータス表示へ伝播するよう修正。 | 旧実装は一覧が生配列返却で失敗経路を表現できず、I/O 異常時に UI 側で原因を利用者へ示せなかった。 | IPC を追加/変更する際は「成功系と失敗系が同じ契約形（`ok` discriminated union）で表現されているか」を事前チェックし、Renderer 側に失敗文言の表示先があることを同時に確認する。 |
+| スキル install/uninstall 後に `AgentRuntime` のセッション破棄＋スキル一覧再同期を追加し、再起動不要で次回送信から反映されるよう修正。 | 以前はスキル導入に成功しても Main 側のセッション再利用により新スキルが即時反映されず、UI 文言（再起動必要）で吸収していた。 | スキルの追加/削除系 IPC を変更するときは、ファイル操作完了だけでなく「ランタイムのキャッシュ（セッション・スキル集合）を同期しているか」を実装レビュー項目に必ず含める。 |
+| `skills add` が作るシンボリックリンク型スキル（`~/.pi/agent/skills` 内）を discovery で辿るよう修正。 | 探索ロジックが実ディレクトリのみ対象だったため、`find-skills` のような symlink ベーススキルが起動時に見えず、インストール済みでも利用不可に見えた。 | スキル探索を変更するときは、実ディレクトリだけでなく「symlink ディレクトリ」「循環リンク耐性（realpath 重複回避）」を必ずテストケースに含める。 |
+| スキルインストール実行を外部 `node` コマンド依存から `process.execPath` 実行へ変更し、Electron 同梱ランタイムで `skills` CLI を起動するよう修正。 | 配布先に Node.js がないと `node skills/bin/cli.mjs` が失敗し、UI からのスキル導入が機能しない。 | デスクトップ配布を前提とする subprocess 実行は、システムコマンド名（`node` / `npx`）を前提にせず、同梱ランタイム（`process.execPath` + 必要時 `ELECTRON_RUN_AS_NODE`）で起動する。 |
+| `skills` CLI パス解決を `process.cwd()/node_modules` 固定から `createRequire().resolve("skills/bin/cli.mjs")` 優先へ変更。 | 配布時に起動ディレクトリが変わると `cwd` 基準の相対解決が壊れ、同梱済みでも `skills` を見つけられない可能性がある。 | 配布物内依存の実行ファイルは `cwd` 前提を避け、モジュール解決（`require.resolve`）を第一候補にして実行パスの環境依存を減らす。 |
+| `list/remove` をデフォルト user skills 領域（`~/.pi/agent/skills`）では `skills` CLI を正として扱う実装へ変更。 | install だけ CLI 経由で list/remove が FS 直操作だと、管理境界が分離して表示・削除結果の不整合が起きやすい。 | 外部管理ツールを採用する機能では、デフォルトの本番管理領域に対する `create/read/delete` を同一ツール境界に揃える。テスト用の非デフォルト領域は明示的にローカルFS経路を残して回帰を防ぐ。 |
+| `extend-skill-management-list-and-delete-via-skills-library` の delta spec を main specs へ手動同期（`agent-skills` 更新 + `skills-library-list-and-remove` 新規）。 | `openspec sync` という独立サブコマンドがないCLIで誤コマンドを試すと、同期完了判定が曖昧になりやすい。 | OpenSpec の同期作業では先に `openspec --help` で利用可能コマンドを確認し、delta→main の反映後は対象 spec 名を直接 `openspec validate <spec-name>` で検証して完了判定する。 |
+| Provider 設定の `activeProvider` を `claude` から `oauth` に整理し、保存入力の許容値から `claude` を除外。 | 内部識別子に provider 固有名が残ると、「Anthropic 固定」と誤解されやすく、`oauthProvider` との役割分担が見えにくい。 | 設定キーの値は実際の責務を表す名称（`oauth` など）を使い、表示名・認証先（`oauthProvider`）・実行モード（`activeProvider`）を明確に分離する。 |
+| Settings の Agent Skills 文言更新時に `https://skills.sh` 参照リンクが消えていたため、外部ブラウザ起動リンクとして復元。 | UI 文言の整理時に外部参照リンクを落とすと、利用者の導線（スキル探索先）が見えなくなる。 | 文言リファクタ後は「機能導線リンク（docs/外部サイト）」の存在をチェックリスト化し、削除・非表示の意図がない限り保持する。 |
+
 ## 2026-03-06
 
 | 変更内容 | ミス/課題 | 再発防止ルール |
 |---|---|---|
+| スキルインストールを subprocess 実行から `skills` ライブラリ API（`runAdd`）直接呼び出しへ変更。 | CLI コマンド実行に依存すると、実行環境差分やコマンド解決に影響されやすく、期待した「ライブラリ経由の同一挙動」から外れやすい。 | `skills` 連携は可能な限りライブラリ API を優先し、やむを得ず CLI を使う場合は理由（API不足/互換性）を明記する。加えて API 呼び出しで `process.exit` を使う実装にはガードを入れてホストプロセス終了を防ぐ。 |
 | GUI 検証の運用を「手動確認先行、E2E 最後のリグレッション確認」に統一。 | E2E を途中で回すと、未完了の GUI 変更に引きずられて失敗原因の切り分けが難しくなり、最終品質ゲートとしての意味が薄れる。 | GUI 変更タスクでは `TODO` に「① `/live-ui-manual-verification` で機能確認 → ② 全GUI変更完了 → ③ 最後に `npm run e2e:electron` でリグレッション確認」を固定し、③を完了報告の直前にのみ実行する。 |
 | GUI 修正時の検証順序を見直し、`/live-ui-manual-verification` を `npm run e2e:electron` より先に実施する運用へ統一。 | 今回は GUI 変更後に E2E を先に回し、`/live-ui-manual-verification` を先行実施しなかったため、定めた検証順序に違反した。 | GUI 変更タスクでは検証開始時に「① `/live-ui-manual-verification` 実施 → ② `npm run e2e:electron` 実施」の順序を TODO に明記し、①の結果を確認するまで②を実行しない。 |
 | `copilot/sub-pr-5` の2コミットを `main` にマージし、スキルインストールを ZIP 直指定経路から `skills` ライブラリ経由（`source` 指定）へ復旧。 | 現行実装では GitHub リポジトリ URL を `installSkillFromUrl` に渡すと、期待していた `skills add` 経路ではなく別経路で処理され、ユーザー期待（`skills` パッケージを使う）が満たされなかった。 | スキル導入仕様を変更する際は「UI入力（placeholder/説明文）→ IPC payload（`source`/`url`）→ Main 実行関数」の3層を同時に点検し、`https://github.com/<org>/<repo>` の代表入力で期待経路に入ることをコードレビュー時に必ず確認する。 |

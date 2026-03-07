@@ -507,6 +507,24 @@ export class AgentRuntime {
       this._abortReject = null;
     }
     // Discard the current session so the next request starts fresh.
+    this.invalidateSession();
+  }
+
+  refreshSkills(skills: Array<{ name: string }>): void {
+    this.availableSkillNames.clear();
+    for (const skill of skills) {
+      this.availableSkillNames.add(skill.name);
+    }
+
+    this.invalidateSession();
+
+    this.logger.info("agent_skills_refreshed", {
+      skillCount: this.availableSkillNames.size,
+      skills: [...this.availableSkillNames]
+    });
+  }
+
+  private invalidateSession(): void {
     this.session = null;
     this.sessionKey = null;
   }

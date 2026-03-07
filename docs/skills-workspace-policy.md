@@ -2,7 +2,7 @@
 
 - Skill directories:
   - Bundled skills (app managed): `<app data>/skills/bundled`
-  - User-created skills (persistent): `~/.pi/skills`
+  - User-created skills (persistent): `~/.pi/agent/skills`
 - Bundled skills:
   - `agent-browser` (`SKILL.md` + references/templates)
   - `skill-creator` (`SKILL.md` + references/templates, build 時に GitHub から最新取得)
@@ -10,10 +10,16 @@
   - `skills/bundled/*` は Git 管理しない
   - `npm run build` 前に `scripts/sync-skill-creator.js` が最新 `skill-creator` を `skills/bundled/skill-creator` に同期する
 - Discovery target: 両ディレクトリを探索対象に含める（同名衝突時は user-created を優先）
+- List composition policy:
+  - user skill は `skills` ライブラリ管理状態を正として一覧化する
+  - bundled skill はアプリ管理資産として別枠で列挙し、最終一覧は `user + bundled` で構成する
+- Remove policy:
+  - user skill の削除は `skills` ライブラリ管理境界に従って実施する
+  - bundled skill は削除対象外（アプリ固有資産）
 - Pi settings update targets:
   - `~/.pi/settings.json` (legacy compatibility)
   - `~/.pi/agent/settings.json` (current Pi SDK path)
-  - `skills` には `~/.pi/skills` と `<app data>/skills/bundled` を登録する
+  - `skills` には `~/.pi/agent/skills` と `<app data>/skills/bundled` を登録する
 - Workspace root: `~/.pi/workspaces`
 - Project workspace: `~/.pi/workspaces/<project>`
 

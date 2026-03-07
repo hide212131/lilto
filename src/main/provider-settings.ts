@@ -34,7 +34,7 @@ function hasProxyEnvironment(): boolean {
 
 function createDefaultSettings(): ProviderSettings {
   return {
-    activeProvider: "claude",
+    activeProvider: "oauth",
     oauthProvider: "anthropic",
     customProvider: {
       name: "Ollama",
@@ -53,7 +53,7 @@ function toTrimmedString(value: unknown, fallback = ""): string {
 }
 
 function normalizeActiveProvider(value: unknown): ActiveProvider {
-  return value === "custom-openai-completions" ? "custom-openai-completions" : "claude";
+  return value === "custom-openai-completions" ? "custom-openai-completions" : "oauth";
 }
 
 function normalizeOAuthProvider(value: unknown): OAuthProviderId {
@@ -109,7 +109,10 @@ function isValidSavePayload(payload: unknown): payload is {
 } {
   if (!payload || typeof payload !== "object") return false;
   const record = payload as Record<string, unknown>;
-  if (record.activeProvider !== "claude" && record.activeProvider !== "custom-openai-completions") {
+  if (
+    record.activeProvider !== "oauth" &&
+    record.activeProvider !== "custom-openai-completions"
+  ) {
     return false;
   }
   if (record.oauthProvider !== undefined && !OAUTH_PROVIDER_IDS.includes(record.oauthProvider as OAuthProviderId)) {

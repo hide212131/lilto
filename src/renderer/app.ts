@@ -17,7 +17,7 @@ const SESSIONS_STORAGE_KEY = "lilto-sessions";
 export class LiltApp extends LitElement {
   @property({ type: Object }) authState: AuthState | null = null;
   @property({ type: Object }) providerSettings: ProviderSettings = {
-    activeProvider: "claude",
+    activeProvider: "oauth",
     oauthProvider: "anthropic",
     customProvider: {
       name: "Ollama",
@@ -183,7 +183,7 @@ export class LiltApp extends LitElement {
 
   private _canSend(): boolean {
     if (this.isSending) return false;
-    if (this.providerSettings.activeProvider === "claude") {
+    if (this.providerSettings.activeProvider === "oauth") {
       return (
         this.authState?.phase === "authenticated" &&
         this.authState?.provider === this.providerSettings.oauthProvider
@@ -326,7 +326,7 @@ export class LiltApp extends LitElement {
     if (!this._canSend() || !text) {
       if (!this._canSend()) {
         this._addMessage("system",
-          this.providerSettings.activeProvider === "claude"
+          this.providerSettings.activeProvider === "oauth"
             ? "プロバイダー設定が必要です。Settings から OAuth Provider を設定してください。"
             : "Custom Provider の name / baseUrl を設定して保存してから送信してください。"
         );

@@ -42,6 +42,11 @@ export function registerAgentIpcHandlers({
     broadcastAuthState(authService);
   });
 
+  const refreshAgentSkills = () => {
+    const latestSkills = listSkillsWithSource({ bundledSkillsDir, userSkillsDir });
+    agentRuntime.refreshSkills(latestSkills);
+  };
+
   ipcMain.handle("agent:submitPrompt", async (_event, payload: unknown) => {
     const validation = validatePrompt(payload);
     if (!validation.ok) {
@@ -153,7 +158,15 @@ export function registerAgentIpcHandlers({
   });
 
   ipcMain.handle("skills:list", () => {
-    return listSkillsWithSource({ bundledSkillsDir, userSkillsDir });
+    try {
+      return {
+        ok: true as const,
+        skills: listSkillsWithSource({ bundledSkillsDir, userSkillsDir })
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false as const, error: message };
+    }
   });
 
   ipcMain.handle("skills:install", async (_event, payload: unknown) => {
@@ -161,11 +174,19 @@ export function registerAgentIpcHandlers({
     if (!p) return { ok: false, error: "payload が必須です" };
 
     if (typeof p.source === "string") {
-      return installSkillFromSource({ source: p.source });
+      const result = await installSkillFromSource({ source: p.source });
+      if (result.ok) {
+        refreshAgentSkills();
+      }
+      return result;
     }
 
     if (typeof p.url === "string") {
-      return installSkillFromUrl({ url: p.url, userSkillsDir });
+      const result = await installSkillFromUrl({ url: p.url, userSkillsDir });
+      if (result.ok) {
+        refreshAgentSkills();
+      }
+      return result;
     }
 
     return { ok: false, error: "source または url は必須です" };
@@ -175,7 +196,11 @@ export function registerAgentIpcHandlers({
     if (!payload || typeof payload !== "object" || typeof (payload as { filePath?: unknown }).filePath !== "string") {
       return { ok: false, error: "filePath は必須です" };
     }
-    return uninstallUserSkill({ skillFilePath: (payload as { filePath: string }).filePath, userSkillsDir });
+    const result = uninstallUserSkill({ skillFilePath: (payload as { filePath: string }).filePath, userSkillsDir });
+    if (result.ok) {
+      refreshAgentSkills();
+    }
+    return result;
   });
 
   ipcMain.handle("skills:checkUpdates", async () => {

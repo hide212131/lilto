@@ -7,6 +7,8 @@ const path = require("node:path");
 const {
   parseSkillMarkdown,
   discoverSkillMetadata,
+  listSkillsWithSource,
+  uninstallUserSkill,
   ensureSkillDirInPiSettings,
   setupSkillRuntime,
   resolveWorkspaceDir,
@@ -39,6 +41,24 @@ test("スキルディレクトリを探索して metadata 一覧を作成する"
   const skills = discoverSkillMetadata([root]);
   assert.equal(skills.length, 1);
   assert.equal(skills[0].name, "agent-browser");
+});
+
+test("シンボリックリンク先のスキルディレクトリも探索できる", () => {
+  const root = tempDir("skills-symlink-discovery");
+  const actualSkillDir = path.join(root, "actual", "find-skills");
+  const linkRoot = path.join(root, "linked");
+  const linkPath = path.join(linkRoot, "find-skills");
+  fs.mkdirSync(actualSkillDir, { recursive: true });
+  fs.mkdirSync(linkRoot, { recursive: true });
+  fs.writeFileSync(
+    path.join(actualSkillDir, "SKILL.md"),
+    `---\nname: find-skills\ndescription: Discover skills\n---\nUse find skills`
+  );
+  fs.symlinkSync(actualSkillDir, linkPath, "dir");
+
+  const skills = discoverSkillMetadata([linkRoot]);
+  assert.equal(skills.length, 1);
+  assert.equal(skills[0].name, "find-skills");
 });
 
 test("settings.json に skills 配列を追加・重複回避できる", () => {
@@ -122,6 +142,59 @@ test("同名スキルがある場合は user skills を優先する", () => {
   const skills = discoverSkillMetadata([userDir, bundledDir]);
   assert.equal(skills.length, 1);
   assert.equal(skills[0].description, "user version");
+});
+
+test("listSkillsWithSource は user/bundled を source 付きで返す", () => {
+  const root = tempDir("skills-list-source");
+  const userDir = path.join(root, "user");
+  const bundledDir = path.join(root, "bundled");
+  fs.mkdirSync(path.join(userDir, "custom-one"), { recursive: true });
+  fs.mkdirSync(path.join(bundledDir, "agent-browser"), { recursive: true });
+  fs.writeFileSync(
+    path.join(userDir, "custom-one", "SKILL.md"),
+    `---\nname: custom-one\ndescription: user custom\n---\n`
+  );
+  fs.writeFileSync(
+    path.join(bundledDir, "agent-browser", "SKILL.md"),
+    `---\nname: agent-browser\ndescription: bundled browser\n---\n`
+  );
+
+  const listed = listSkillsWithSource({ bundledSkillsDir: bundledDir, userSkillsDir: userDir });
+  assert.deepEqual(
+    listed
+      .map((item) => ({ name: item.name, source: item.source }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
+    [
+      { name: "agent-browser", source: "bundled" },
+      { name: "custom-one", source: "user" }
+    ]
+  );
+});
+
+test("uninstallUserSkill は user skill を削除し bundled/system を拒否する", () => {
+  const root = tempDir("skills-uninstall");
+  const userSkillsDir = path.join(root, "user");
+  const bundledSkillsDir = path.join(root, "bundled");
+
+  const userSkillDir = path.join(userSkillsDir, "custom-one");
+  fs.mkdirSync(userSkillDir, { recursive: true });
+  const userSkillFile = path.join(userSkillDir, "SKILL.md");
+  fs.writeFileSync(userSkillFile, `---\nname: custom-one\ndescription: user custom\n---\n`);
+
+  const uninstallUser = uninstallUserSkill({ skillFilePath: userSkillFile, userSkillsDir });
+  assert.deepEqual(uninstallUser, { ok: true });
+  assert.equal(fs.existsSync(userSkillDir), false);
+
+  const bundledSkillDir = path.join(bundledSkillsDir, "agent-browser");
+  fs.mkdirSync(bundledSkillDir, { recursive: true });
+  const bundledSkillFile = path.join(bundledSkillDir, "SKILL.md");
+  fs.writeFileSync(bundledSkillFile, `---\nname: agent-browser\ndescription: bundled\n---\n`);
+
+  const uninstallBundled = uninstallUserSkill({ skillFilePath: bundledSkillFile, userSkillsDir });
+  assert.equal(uninstallBundled.ok, false);
+  if (!uninstallBundled.ok) {
+    assert.match(uninstallBundled.error, /Cannot uninstall bundled or system skills/);
+  }
 });
 
 test("setupSkillRuntime は bundled/user の両方を設定して skill-creator を一覧化する", () => {

@@ -69,7 +69,7 @@ test("ProviderSettingsService は不正な oauthProvider を拒否する", () =>
   });
 
   const result = service.save({
-    activeProvider: "claude",
+    activeProvider: "oauth",
     oauthProvider: "invalid-provider",
     customProvider: {
       name: "my-custom",
@@ -131,13 +131,13 @@ test("ProviderSettingsService は Proxy 環境変数がある場合 useProxy を
   }
 });
 
-test("ProviderSettingsService は旧データの読み込み時に oauthProvider を anthropic へ補完する", () => {
+test("ProviderSettingsService は oauthProvider 未設定データを anthropic へ補完する", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "lilto-provider-"));
   const storagePath = path.join(tempDir, "providers.json");
   fs.writeFileSync(
     storagePath,
     JSON.stringify({
-      activeProvider: "claude",
+      activeProvider: "oauth",
       customProvider: {
         name: "legacy",
         baseUrl: "https://legacy.example/v1",
