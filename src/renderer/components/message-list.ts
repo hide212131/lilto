@@ -4,7 +4,7 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { marked } from "marked";
 import type { Message } from "../types.js";
 
-const MASCOT_URL = "./mascot.svg";
+const MASCOT_URL = "./mascot.png";
 
 @customElement("lilt-message-list")
 export class LiltMessageList extends LitElement {
@@ -25,11 +25,11 @@ export class LiltMessageList extends LitElement {
       flex: 1;
       min-height: 0;
       overflow: auto;
-      padding: 16px 0;
+      padding: 16px 8px;
       display: flex;
       flex-direction: column;
       gap: 12px;
-      align-items: center;
+      align-items: stretch;
     }
     .msg {
       width: min(680px, calc(100% - 16px));
@@ -270,7 +270,9 @@ export class LiltMessageList extends LitElement {
       display: flex;
       align-items: flex-start;
       gap: 10px;
-      width: min(680px, calc(100% - 16px));
+      width: 100%;
+      max-width: min(740px, 100%);
+      margin-right: auto;
     }
     .mascot-avatar {
       flex-shrink: 0;
@@ -295,6 +297,7 @@ export class LiltMessageList extends LitElement {
       flex: 1;
       min-width: 0;
       width: auto;
+      max-width: min(680px, calc(100% - 54px));
     }
   `;
 

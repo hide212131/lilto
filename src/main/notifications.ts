@@ -1,5 +1,6 @@
 import { app, BrowserWindow, nativeImage, Notification, Tray } from "electron";
 import { deflateSync } from "node:zlib";
+import { resolveBadgeIcon, resolveTrayIcon } from "./icon-assets";
 
 /**
  * マスコット（緑の電球キャラクター）の顔を模した PNG を生成する。
@@ -105,12 +106,16 @@ export class NotificationService {
    */
   setupTray(getWindow: () => BrowserWindow | null): void {
     const trayIconSize = process.platform === "darwin" ? 22 : 16;
-    // 通常アイコン: マスコットの顔（緑）
-    this._trayNormalImage = nativeImage.createFromBuffer(
-      createMascotFacePng(trayIconSize, false)
-    );
-    // バッジありアイコン: マスコットの顔（赤）
-    this._trayBadgeImage = nativeImage.createFromBuffer(createMascotFacePng(trayIconSize, true));
+    const normalFromAsset = resolveTrayIcon(trayIconSize);
+    const badgeFromAsset = resolveBadgeIcon(trayIconSize);
+
+    this._trayNormalImage = normalFromAsset.isEmpty()
+      ? nativeImage.createFromBuffer(createMascotFacePng(trayIconSize, false))
+      : normalFromAsset;
+
+    this._trayBadgeImage = badgeFromAsset.isEmpty()
+      ? nativeImage.createFromBuffer(createMascotFacePng(trayIconSize, true))
+      : badgeFromAsset;
 
     this._tray = new Tray(this._trayNormalImage);
     this._tray.setToolTip("lilto");
@@ -154,7 +159,10 @@ export class NotificationService {
 
   private _getBadgeOverlayImage(): ReturnType<typeof nativeImage.createFromBuffer> {
     if (!this._badgeImage) {
-      this._badgeImage = nativeImage.createFromBuffer(createMascotFacePng(16, true));
+      const badgeFromAsset = resolveBadgeIcon(16);
+      this._badgeImage = badgeFromAsset.isEmpty()
+        ? nativeImage.createFromBuffer(createMascotFacePng(16, true))
+        : badgeFromAsset;
     }
     return this._badgeImage;
   }

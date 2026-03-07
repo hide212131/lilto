@@ -11,6 +11,7 @@ import { NotificationService } from "./notifications";
 import { ProviderSettingsService } from "./provider-settings";
 import { setupSkillRuntime } from "./skill-runtime";
 import { createCliCompatibilityMap } from "./command-compat";
+import { resolveAppIcon, resolveWindowIcon } from "./icon-assets";
 
 const config = readConfig();
 const logger = createLogger("main");
@@ -40,6 +41,7 @@ function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 980,
     height: 720,
+    icon: resolveWindowIcon(),
     webPreferences: {
       preload: path.join(process.cwd(), "dist", "preload.js"),
       contextIsolation: true,
@@ -63,6 +65,13 @@ function createWindow(): void {
 }
 
 void app.whenReady().then(() => {
+  if (process.platform === "darwin") {
+    const dockIcon = resolveAppIcon(512);
+    if (!dockIcon.isEmpty()) {
+      app.dock.setIcon(dockIcon);
+    }
+  }
+
   logger.info("cli_compatibility_resolved", {
     platform: process.platform,
     commands: createCliCompatibilityMap()
