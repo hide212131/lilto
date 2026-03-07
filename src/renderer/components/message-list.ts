@@ -4,6 +4,8 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { marked } from "marked";
 import type { Message } from "../types.js";
 
+const MASCOT_URL = "./mascot.png";
+
 @customElement("lilt-message-list")
 export class LiltMessageList extends LitElement {
   @property({ type: Array }) messages: Message[] = [];
@@ -23,11 +25,11 @@ export class LiltMessageList extends LitElement {
       flex: 1;
       min-height: 0;
       overflow: auto;
-      padding: 16px 0;
+      padding: 16px 8px;
       display: flex;
       flex-direction: column;
       gap: 12px;
-      align-items: center;
+      align-items: stretch;
     }
     .msg {
       width: min(680px, calc(100% - 16px));
@@ -264,6 +266,39 @@ export class LiltMessageList extends LitElement {
         width: calc(100% - 8px);
       }
     }
+    .assistant-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      width: 100%;
+      max-width: min(740px, 100%);
+      margin-right: auto;
+    }
+    .mascot-avatar {
+      flex-shrink: 0;
+      width: 44px;
+      height: 48px;
+      margin-top: 2px;
+    }
+    .mascot-avatar img {
+      width: 44px;
+      height: 48px;
+      object-fit: contain;
+    }
+    .mascot-avatar.talking img {
+      animation: mascot-talk 0.4s ease-in-out infinite alternate;
+      transform-origin: 50% 100%;
+    }
+    @keyframes mascot-talk {
+      0%   { transform: scaleY(1) translateY(0); }
+      100% { transform: scaleY(1.06) translateY(-2px); }
+    }
+    .assistant-row .msg-assistant {
+      flex: 1;
+      min-width: 0;
+      width: auto;
+      max-width: min(680px, calc(100% - 54px));
+    }
   `;
 
   updated() {
@@ -422,7 +457,16 @@ export class LiltMessageList extends LitElement {
     return html`
       <div class="chat" aria-live="polite" @click=${this._handleChatClick}>
         ${this.messages.map(
-          (m) => html`<div class="msg msg-${m.role} ${m.pending ? "msg-pending" : ""}">${m.role === "assistant" ? this._renderAssistantBody(m) : this._renderMarkdown(m.text ?? "")}</div>`
+          (m) => m.role === "assistant"
+            ? html`
+                <div class="assistant-row">
+                  <div class="mascot-avatar ${m.pending ? "talking" : ""}">
+                    <img src=${MASCOT_URL} alt="" aria-hidden="true" draggable="false"/>
+                  </div>
+                  <div class="msg msg-assistant ${m.pending ? "msg-pending" : ""}">${this._renderAssistantBody(m)}</div>
+                </div>
+              `
+            : html`<div class="msg msg-${m.role} ${m.pending ? "msg-pending" : ""}">${this._renderMarkdown(m.text ?? "")}</div>`
         )}
       </div>
     `;

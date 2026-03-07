@@ -1,89 +1,58 @@
 import { app, BrowserWindow, nativeImage, Notification, Tray } from "electron";
 import { deflateSync } from "node:zlib";
+import { resolveBadgeIcon, resolveTrayIcon } from "./icon-assets";
 
 /**
- * 16x16 の赤い円 PNG をプログラムで生成する。
- * アイコンファイルが存在しない環境でも動作するよう zlib で圧縮した生 PNG バイト列を返す。
+ * マスコット（緑の電球キャラクター）の顔を模した PNG を生成する。
+ * 緑の円に白目・黒目・口を描画したトレイアイコン用。
  */
-function createRedDotPng(size = 16): Buffer {
-  const center = size / 2;
-  const radius = size / 2 - 0.5;
-  const rowStride = 1 + size * 4; // filter byte + RGBA * width
-  const raw = Buffer.alloc(size * rowStride, 0);
-
-  for (let y = 0; y < size; y++) {
-    raw[y * rowStride] = 0; // filter: None
-    for (let x = 0; x < size; x++) {
-      const dx = x + 0.5 - center;
-      const dy = y + 0.5 - center;
-      if (dx * dx + dy * dy <= radius * radius) {
-        const off = y * rowStride + 1 + x * 4;
-        raw[off] = 229; // R
-        raw[off + 1] = 62; // G
-        raw[off + 2] = 62; // B  => #e53e3e (red)
-        raw[off + 3] = 255; // A
-      }
-    }
-  }
-
-  const compressed = deflateSync(raw);
-
-  function crc32(buf: Buffer): number {
-    let crc = 0xffffffff;
-    for (const b of buf) {
-      crc ^= b;
-      for (let i = 0; i < 8; i++) {
-        crc = (crc & 1) !== 0 ? (0xedb88320 ^ (crc >>> 1)) : (crc >>> 1);
-      }
-    }
-    return (crc ^ 0xffffffff) >>> 0;
-  }
-
-  function chunk(type: string, data: Buffer): Buffer {
-    const typeBytes = Buffer.from(type, "ascii");
-    const lenBuf = Buffer.alloc(4);
-    lenBuf.writeUInt32BE(data.length, 0);
-    const crcBuf = Buffer.alloc(4);
-    crcBuf.writeUInt32BE(crc32(Buffer.concat([typeBytes, data])), 0);
-    return Buffer.concat([lenBuf, typeBytes, data, crcBuf]);
-  }
-
-  const ihdrData = Buffer.alloc(13);
-  ihdrData.writeUInt32BE(size, 0);
-  ihdrData.writeUInt32BE(size, 4);
-  ihdrData[8] = 8; // bit depth
-  ihdrData[9] = 6; // color type: RGBA
-  // compression(0), filter(0), interlace(0) already 0
-
-  return Buffer.concat([
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), // PNG signature
-    chunk("IHDR", ihdrData),
-    chunk("IDAT", compressed),
-    chunk("IEND", Buffer.alloc(0))
-  ]);
-}
-
-/**
- * シンプルな単色塗りつぶし PNG を生成する。
- * トレイアイコン用（グレー系）。
- */
-function createSolidCirclePng(size: number, r: number, g: number, b: number): Buffer {
+function createMascotFacePng(size: number, hasNotification = false): Buffer {
   const center = size / 2;
   const radius = size / 2 - 0.5;
   const rowStride = 1 + size * 4;
   const raw = Buffer.alloc(size * rowStride, 0);
+
+  // 通知あり: 赤めの色、通常: マスコット緑
+  const faceR = hasNotification ? 200 : 184;
+  const faceG = hasNotification ? 80 : 230;
+  const faceB = hasNotification ? 80 : 168;
 
   for (let y = 0; y < size; y++) {
     raw[y * rowStride] = 0;
     for (let x = 0; x < size; x++) {
       const dx = x + 0.5 - center;
       const dy = y + 0.5 - center;
-      if (dx * dx + dy * dy <= radius * radius) {
-        const off = y * rowStride + 1 + x * 4;
-        raw[off] = r;
-        raw[off + 1] = g;
-        raw[off + 2] = b;
-        raw[off + 3] = 255;
+      const distSq = dx * dx + dy * dy;
+      if (distSq > radius * radius) continue;
+
+      const off = y * rowStride + 1 + x * 4;
+
+      // 目の位置: 左目・右目（中心より上）
+      const eyeRadius = Math.max(1.2, size * 0.12);
+      const eyeOffsetX = size * 0.22;
+      const eyeOffsetY = size * 0.08;
+      const leftEyeDx = dx + eyeOffsetX;
+      const leftEyeDy = dy + eyeOffsetY;
+      const rightEyeDx = dx - eyeOffsetX;
+      const rightEyeDy = dy + eyeOffsetY;
+      const inLeftEye = leftEyeDx * leftEyeDx + leftEyeDy * leftEyeDy <= eyeRadius * eyeRadius;
+      const inRightEye = rightEyeDx * rightEyeDx + rightEyeDy * rightEyeDy <= eyeRadius * eyeRadius;
+
+      // 口の位置: 中心より下の弧（簡易: 横長の楕円）
+      const mouthCy = center - size * 0.18;
+      const mouthRx = size * 0.22;
+      const mouthRy = size * 0.1;
+      const mouthDx = (x + 0.5 - center) / mouthRx;
+      const mouthDy = (y + 0.5 - mouthCy) / mouthRy;
+      const inMouth = mouthDx * mouthDx + mouthDy * mouthDy <= 1
+        && y + 0.5 > mouthCy;
+
+      if (inLeftEye || inRightEye) {
+        raw[off] = 26; raw[off + 1] = 26; raw[off + 2] = 26; raw[off + 3] = 255;
+      } else if (inMouth) {
+        raw[off] = 208; raw[off + 1] = 96; raw[off + 2] = 112; raw[off + 3] = 255;
+      } else {
+        raw[off] = faceR; raw[off + 1] = faceG; raw[off + 2] = faceB; raw[off + 3] = 255;
       }
     }
   }
@@ -137,12 +106,16 @@ export class NotificationService {
    */
   setupTray(getWindow: () => BrowserWindow | null): void {
     const trayIconSize = process.platform === "darwin" ? 22 : 16;
-    // 通常アイコン: 薄いグレーの円
-    this._trayNormalImage = nativeImage.createFromBuffer(
-      createSolidCirclePng(trayIconSize, 160, 160, 168)
-    );
-    // バッジありアイコン: 赤い円
-    this._trayBadgeImage = nativeImage.createFromBuffer(createRedDotPng(trayIconSize));
+    const normalFromAsset = resolveTrayIcon(trayIconSize);
+    const badgeFromAsset = resolveBadgeIcon(trayIconSize);
+
+    this._trayNormalImage = normalFromAsset.isEmpty()
+      ? nativeImage.createFromBuffer(createMascotFacePng(trayIconSize, false))
+      : normalFromAsset;
+
+    this._trayBadgeImage = badgeFromAsset.isEmpty()
+      ? nativeImage.createFromBuffer(createMascotFacePng(trayIconSize, true))
+      : badgeFromAsset;
 
     this._tray = new Tray(this._trayNormalImage);
     this._tray.setToolTip("lilto");
@@ -186,7 +159,10 @@ export class NotificationService {
 
   private _getBadgeOverlayImage(): ReturnType<typeof nativeImage.createFromBuffer> {
     if (!this._badgeImage) {
-      this._badgeImage = nativeImage.createFromBuffer(createRedDotPng(16));
+      const badgeFromAsset = resolveBadgeIcon(16);
+      this._badgeImage = badgeFromAsset.isEmpty()
+        ? nativeImage.createFromBuffer(createMascotFacePng(16, true))
+        : badgeFromAsset;
     }
     return this._badgeImage;
   }

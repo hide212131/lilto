@@ -82,7 +82,7 @@ export class LiltApp extends LitElement {
       min-height: 0;
       display: flex;
       flex-direction: column;
-      align-items: center;
+      align-items: stretch;
       overflow: hidden;
     }
     .stage {
@@ -91,6 +91,7 @@ export class LiltApp extends LitElement {
       display: flex;
       flex-direction: column;
       min-height: 0;
+      margin: 0;
     }
     @media (max-width: 720px) {
       .stage {
