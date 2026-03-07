@@ -32,6 +32,10 @@ function hasProxyEnvironment(): boolean {
   return vars.some((value) => typeof value === "string" && value.trim().length > 0);
 }
 
+function defaultGlobalShortcut(): string {
+  return process.platform === "darwin" ? "Command+L" : "Alt+L";
+}
+
 function createDefaultSettings(): ProviderSettings {
   return {
     activeProvider: "oauth",
@@ -43,7 +47,7 @@ function createDefaultSettings(): ProviderSettings {
       modelId: DEFAULT_MODEL_ID
     },
     networkProxy: { useProxy: hasProxyEnvironment() },
-    chatSettings: { ...DEFAULT_CHAT_SETTINGS },
+    chatSettings: { ...DEFAULT_CHAT_SETTINGS, globalShortcut: defaultGlobalShortcut() },
     updatedAt: Date.now()
   };
 }
@@ -66,7 +70,8 @@ function normalizeOAuthProvider(value: unknown): OAuthProviderId {
 function normalizeChatSettings(value: unknown): ChatSettings {
   const record = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
   return {
-    enterToSend: typeof record.enterToSend === "boolean" ? record.enterToSend : DEFAULT_CHAT_SETTINGS.enterToSend
+    enterToSend: typeof record.enterToSend === "boolean" ? record.enterToSend : DEFAULT_CHAT_SETTINGS.enterToSend,
+    globalShortcut: typeof record.globalShortcut === "string" ? record.globalShortcut : defaultGlobalShortcut()
   };
 }
 
@@ -140,6 +145,7 @@ function isValidSavePayload(payload: unknown): payload is {
     if (!record.chatSettings || typeof record.chatSettings !== "object") return false;
     const chat = record.chatSettings as Record<string, unknown>;
     if (typeof chat.enterToSend !== "boolean") return false;
+    if (chat.globalShortcut !== undefined && typeof chat.globalShortcut !== "string") return false;
   }
 
   return true;

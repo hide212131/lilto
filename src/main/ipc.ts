@@ -28,7 +28,8 @@ export function registerAgentIpcHandlers({
   providerSettingsService,
   bundledSkillsDir,
   userSkillsDir,
-  notificationService
+  notificationService,
+  onSettingsSaved
 }: {
   agentRuntime: AgentRuntime;
   authService: ClaudeAuthService;
@@ -36,6 +37,7 @@ export function registerAgentIpcHandlers({
   bundledSkillsDir: string;
   userSkillsDir: string;
   notificationService: NotificationService;
+  onSettingsSaved?: (settings: import("./provider-settings").ProviderSettings) => void;
 }): void {
   const logger = createLogger("ipc");
   authService.subscribe(() => {
@@ -130,7 +132,11 @@ export function registerAgentIpcHandlers({
   });
 
   ipcMain.handle("providers:saveSettings", (_event, payload: unknown) => {
-    return providerSettingsService.save(payload);
+    const result = providerSettingsService.save(payload);
+    if (result.ok && onSettingsSaved) {
+      onSettingsSaved(result.state);
+    }
+    return result;
   });
 
   ipcMain.handle("app:openExternal", async (_event, payload: unknown) => {

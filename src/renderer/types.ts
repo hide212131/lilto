@@ -104,8 +104,10 @@ declare global {
       installSkillFromSource: (source: string) => Promise<{ ok: true; output: string } | { ok: false; error: string }>;
       uninstallSkill: (filePath: string) => Promise<{ ok: true } | { ok: false; error: string }>;
       checkSkillUpdates: () => Promise<SkillUpdateInfo[]>;
+      getPlatform: () => string;
       onAgentLoopEvent: (listener: (event: AgentLoopEvent) => void) => () => void;
       onAuthStateChanged: (listener: (state: AuthState) => void) => () => void;
+      onFocusComposer: (listener: () => void) => () => void;
     };
   }
 }
