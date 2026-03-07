@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 
@@ -553,6 +554,14 @@ type SkillSourceRecord = {
   url: string;
   installedAt: number;
   installedVersion: string | null;
+  /** SHA-256 hash of the downloaded archive content */
+  contentHash?: string | null;
+  /** HTTP ETag header value captured at install time */
+  etag?: string | null;
+  /** HTTP Last-Modified header value captured at install time */
+  lastModified?: string | null;
+  /** Git commit SHA for branch-based installs */
+  commitSha?: string | null;
 };
 
 type GitHubReleaseInfo = {
@@ -560,6 +569,8 @@ type GitHubReleaseInfo = {
   owner: string;
   repo: string;
   version: string | null;
+  /** Branch or tag ref name (used for commit SHA comparison) */
+  ref: string | null;
 };
 
 type GitLabReleaseInfo = {
@@ -567,29 +578,34 @@ type GitLabReleaseInfo = {
   host: string;
   projectPath: string;
   version: string | null;
+  /** Branch or tag ref name (used for commit SHA comparison) */
+  ref: string | null;
 };
 
-function parseReleaseUrl(url: string): GitHubReleaseInfo | GitLabReleaseInfo | null {
+export function parseReleaseUrl(url: string): GitHubReleaseInfo | GitLabReleaseInfo | null {
   try {
     const parsed = new URL(url);
     if (parsed.hostname === "github.com") {
       // /owner/repo/releases/download/vX.Y.Z/file.zip
       const m = parsed.pathname.match(/^\/([^/]+)\/([^/]+)\/releases\/download\/([^/]+)\//);
-      if (m) return { type: "github", owner: m[1], repo: m[2], version: m[3] };
+      if (m) return { type: "github", owner: m[1], repo: m[2], version: m[3], ref: m[3] };
       // /owner/repo/archive/refs/tags/vX.Y.Z.zip
-      const m2 = parsed.pathname.match(/^\/([^/]+)\/([^/]+)\/archive\/refs\/tags\/([^/]+)\.zip$/);
-      if (m2) return { type: "github", owner: m2[1], repo: m2[2], version: m2[3] };
-      // /owner/repo/archive/refs/heads/... (branch, no version)
-      const m3 = parsed.pathname.match(/^\/([^/]+)\/([^/]+)\/archive\//);
-      if (m3) return { type: "github", owner: m3[1], repo: m3[2], version: null };
+      const m2 = parsed.pathname.match(/^\/([^/]+)\/([^/]+)\/archive\/refs\/tags\/([^/]+?)(?:\.zip)?$/);
+      if (m2) return { type: "github", owner: m2[1], repo: m2[2], version: m2[3], ref: m2[3] };
+      // /owner/repo/archive/refs/heads/branch-name.zip (branch, no version)
+      const m3 = parsed.pathname.match(/^\/([^/]+)\/([^/]+)\/archive\/refs\/heads\/(.+?)(?:\.zip)?$/);
+      if (m3) return { type: "github", owner: m3[1], repo: m3[2], version: null, ref: m3[3] };
+      // /owner/repo/archive/shorthand.zip (branch shorthand, no version)
+      const m4 = parsed.pathname.match(/^\/([^/]+)\/([^/]+)\/archive\/([^/]+?)(?:\.(?:zip|tar\.gz))?$/);
+      if (m4) return { type: "github", owner: m4[1], repo: m4[2], version: null, ref: m4[3] };
     }
     if (parsed.hostname.includes("gitlab")) {
       // /namespace/repo/-/releases/vX.Y.Z/downloads/file.zip
       const m = parsed.pathname.match(/^(\/[^/]+\/[^/]+)\/-\/releases\/([^/]+)\//);
-      if (m) return { type: "gitlab", host: parsed.origin, projectPath: m[1].slice(1), version: m[2] };
+      if (m) return { type: "gitlab", host: parsed.origin, projectPath: m[1].slice(1), version: m[2], ref: m[2] };
       // /namespace/repo/-/archive/vX.Y.Z/file.zip
       const m2 = parsed.pathname.match(/^(\/[^/]+\/[^/]+)\/-\/archive\/([^/]+)\//);
-      if (m2) return { type: "gitlab", host: parsed.origin, projectPath: m2[1].slice(1), version: m2[2] };
+      if (m2) return { type: "gitlab", host: parsed.origin, projectPath: m2[1].slice(1), version: m2[2], ref: m2[2] };
     }
   } catch {
     // invalid URL
@@ -620,6 +636,50 @@ async function fetchLatestReleaseTag(info: GitHubReleaseInfo | GitLabReleaseInfo
   return null;
 }
 
+async function fetchLatestCommitSha(
+  info: GitHubReleaseInfo | GitLabReleaseInfo,
+  ref: string
+): Promise<string | null> {
+  try {
+    if (info.type === "github") {
+      const apiUrl = `https://api.github.com/repos/${info.owner}/${info.repo}/commits/${encodeURIComponent(ref)}`;
+      const res = await fetch(apiUrl, { headers: { Accept: "application/vnd.github+json" } });
+      if (!res.ok) return null;
+      const data = await res.json() as { sha?: string };
+      return data.sha ?? null;
+    }
+    if (info.type === "gitlab") {
+      const encodedPath = encodeURIComponent(info.projectPath);
+      const apiUrl = `${info.host}/api/v4/projects/${encodedPath}/repository/commits?ref_name=${encodeURIComponent(ref)}&per_page=1`;
+      const res = await fetch(apiUrl);
+      if (!res.ok) return null;
+      const data = await res.json() as Array<{ id?: string }>;
+      return data[0]?.id ?? null;
+    }
+  } catch {
+    // network error
+  }
+  return null;
+}
+
+async function fetchHttpUpdateMetadata(url: string): Promise<{ etag: string | null; lastModified: string | null } | null> {
+  try {
+    const res = await fetch(url, { method: "HEAD" });
+    if (!res.ok) return null;
+    return {
+      etag: res.headers.get("etag"),
+      lastModified: res.headers.get("last-modified"),
+    };
+  } catch {
+    // network error
+  }
+  return null;
+}
+
+export function computeContentHash(data: Buffer): string {
+  return createHash("sha256").update(data).digest("hex");
+}
+
 export type SkillUpdateInfo = {
   skillName: string;
   skillFilePath: string;
@@ -627,6 +687,8 @@ export type SkillUpdateInfo = {
   installedVersion: string | null;
   latestVersion: string | null;
   updateAvailable: boolean;
+  /** How the update check was performed */
+  updateCheckMethod: "release-tag" | "commit-sha" | "etag" | "last-modified" | "content-hash" | "none";
 };
 
 export async function checkSkillUpdates(options: { userSkillsDir: string }): Promise<SkillUpdateInfo[]> {
@@ -657,11 +719,47 @@ export async function checkSkillUpdates(options: { userSkillsDir: string }): Pro
 
     const releaseInfo = parseReleaseUrl(record.url);
     let latestVersion: string | null = null;
-    if (releaseInfo && releaseInfo.version !== null) {
-      latestVersion = await fetchLatestReleaseTag(releaseInfo);
-    }
+    let updateAvailable = false;
+    let updateCheckMethod: SkillUpdateInfo["updateCheckMethod"] = "none";
 
-    const updateAvailable = latestVersion !== null && latestVersion !== record.installedVersion;
+    if (releaseInfo && releaseInfo.version !== null) {
+      // GitHub/GitLab release tag comparison
+      latestVersion = await fetchLatestReleaseTag(releaseInfo);
+      updateAvailable = latestVersion !== null && latestVersion !== record.installedVersion;
+      updateCheckMethod = "release-tag";
+    } else if (releaseInfo && releaseInfo.ref !== null) {
+      // GitHub/GitLab branch: compare latest commit SHA
+      const latestSha = await fetchLatestCommitSha(releaseInfo, releaseInfo.ref);
+      if (latestSha !== null && record.commitSha !== null && record.commitSha !== undefined) {
+        updateAvailable = latestSha !== record.commitSha;
+        updateCheckMethod = "commit-sha";
+      }
+    } else {
+      // Plain HTTP source: use ETag / Last-Modified / content hash
+      const meta = await fetchHttpUpdateMetadata(record.url);
+      if (meta) {
+        if (record.etag !== null && record.etag !== undefined && meta.etag !== null) {
+          updateAvailable = record.etag !== meta.etag;
+          updateCheckMethod = "etag";
+        } else if (record.lastModified !== null && record.lastModified !== undefined && meta.lastModified !== null) {
+          updateAvailable = record.lastModified !== meta.lastModified;
+          updateCheckMethod = "last-modified";
+        }
+      }
+      // Fallback: re-download and compare content hash
+      if (updateCheckMethod === "none" && record.contentHash !== null && record.contentHash !== undefined) {
+        try {
+          const res = await fetch(record.url);
+          if (res.ok) {
+            const freshHash = computeContentHash(Buffer.from(await res.arrayBuffer()));
+            updateAvailable = freshHash !== record.contentHash;
+            updateCheckMethod = "content-hash";
+          }
+        } catch {
+          // network error – leave updateAvailable = false
+        }
+      }
+    }
 
     results.push({
       skillName: entry.name,
@@ -669,7 +767,8 @@ export async function checkSkillUpdates(options: { userSkillsDir: string }): Pro
       sourceUrl: record.url,
       installedVersion: record.installedVersion,
       latestVersion,
-      updateAvailable
+      updateAvailable,
+      updateCheckMethod
     });
   }
 
@@ -719,12 +818,16 @@ export async function installSkillFromUrl(options: {
 
   let data: Buffer;
   let finalUrl = url;
+  let etag: string | null = null;
+  let lastModified: string | null = null;
   try {
     const res = await fetch(url);
     if (!res.ok) {
       return { ok: false, error: `HTTP ${res.status}: ${res.statusText}` };
     }
     finalUrl = res.url || url;
+    etag = res.headers.get("etag");
+    lastModified = res.headers.get("last-modified");
     data = Buffer.from(await res.arrayBuffer());
   } catch (e) {
     return { ok: false, error: `Download failed: ${e instanceof Error ? e.message : String(e)}` };
@@ -732,6 +835,13 @@ export async function installSkillFromUrl(options: {
 
   const releaseInfo = parseReleaseUrl(finalUrl) ?? parseReleaseUrl(url);
   const installedVersion = releaseInfo?.version ?? null;
+  const contentHash = computeContentHash(data);
+
+  // For branch-based installs, fetch the latest commit SHA
+  let commitSha: string | null = null;
+  if (releaseInfo && releaseInfo.version === null && releaseInfo.ref !== null) {
+    commitSha = await fetchLatestCommitSha(releaseInfo, releaseInfo.ref);
+  }
 
   const tmpBase = path.join(os.tmpdir(), `lilto-skill-${Date.now()}`);
   const tmpFile = `${tmpBase}.zip`;
@@ -755,7 +865,15 @@ export async function installSkillFromUrl(options: {
       const targetDir = path.join(options.userSkillsDir, metadata.name);
       fs.cpSync(path.dirname(skillFile), targetDir, { recursive: true, force: true });
 
-      const sourceRecord: SkillSourceRecord = { url, installedAt: Date.now(), installedVersion };
+      const sourceRecord: SkillSourceRecord = {
+        url,
+        installedAt: Date.now(),
+        installedVersion,
+        contentHash,
+        etag,
+        lastModified,
+        commitSha
+      };
       fs.writeFileSync(path.join(targetDir, SKILL_SOURCE_FILE), `${JSON.stringify(sourceRecord, null, 2)}\n`, "utf8");
 
       installedSkills.push(metadata.name);
