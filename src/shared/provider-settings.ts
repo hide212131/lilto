@@ -21,10 +21,12 @@ export type NetworkProxySettings = {
 
 export type ChatSettings = {
   enterToSend: boolean;
+  globalShortcut: string;
 };
 
 export const DEFAULT_CHAT_SETTINGS: ChatSettings = {
-  enterToSend: false
+  enterToSend: false,
+  globalShortcut: "CommandOrControl+L"
 };
 
 export type ProviderSettings = {

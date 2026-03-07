@@ -45,6 +45,7 @@ export class LiltApp extends LitElement {
 
   private _unsubscribeAuthListener: (() => void) | null = null;
   private _unsubscribeLoopListener: (() => void) | null = null;
+  private _unsubscribeFocusListener: (() => void) | null = null;
   private _pendingAssistantIndex: number | null = null;
   private _activeRequestId: string | null = null;
   private _messageSeq = 0;
@@ -111,14 +112,21 @@ export class LiltApp extends LitElement {
     this._unsubscribeLoopListener = window.lilto.onAgentLoopEvent((event) => {
       this._onLoopEvent(event);
     });
+    this._unsubscribeFocusListener = window.lilto.onFocusComposer(() => {
+      void this.updateComplete.then(() => {
+        this._composer?.focusInput();
+      });
+    });
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
     this._unsubscribeAuthListener?.();
     this._unsubscribeLoopListener?.();
+    this._unsubscribeFocusListener?.();
     this._unsubscribeAuthListener = null;
     this._unsubscribeLoopListener = null;
+    this._unsubscribeFocusListener = null;
   }
 
   private _loadSessions() {

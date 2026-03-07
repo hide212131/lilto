@@ -37,7 +37,11 @@ export class LiltSettingsModal extends LitElement {
   @state() private _oauthProvider: OAuthProviderId = "anthropic";
   @state() private _activeSection: "providers" | "chat" = "providers";
   @state() private _enterToSend = false;
+  @state() private _globalShortcut = "";
   @state() private _chatSaveStatus = "";
+  @state() private _shortcutDialogOpen = false;
+  @state() private _pendingShortcut = "";
+  @state() private _shortcutError = "";
 
   // Tab state
   @state() private _activeTab: "providers" | "chat" | "skills" = "providers";
@@ -52,6 +56,8 @@ export class LiltSettingsModal extends LitElement {
   @state() private _skillUpdates: SkillUpdateInfo[] = [];
   @state() private _skillUpdatesChecking = false;
   @state() private _skillUpdatesChecked = false;
+
+  private readonly _isMac = window.lilto.getPlatform() === "darwin";
 
   private _boundKeydown = (e: KeyboardEvent) => {
     if (e.key === "Escape" && this.open) this._close();
@@ -80,6 +86,7 @@ export class LiltSettingsModal extends LitElement {
       this._useProxy = np.useProxy;
       this._oauthProvider = this.providerSettings.oauthProvider;
       this._enterToSend = cs?.enterToSend ?? false;
+      this._globalShortcut = cs?.globalShortcut ?? "";
     }
     if (changedProps.has("authState")) {
       const as = this.authState;
@@ -360,6 +367,88 @@ export class LiltSettingsModal extends LitElement {
         font-size: 24px;
       }
     }
+    .shortcut-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 8px;
+    }
+    .shortcut-btn {
+      background: #f3f4f6;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      padding: 6px 14px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: "Hiragino Sans", "Yu Gothic", sans-serif;
+      letter-spacing: 0.02em;
+      color: #111827;
+    }
+    .shortcut-btn:hover {
+      background: #e5e7eb;
+    }
+    .shortcut-dialog-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+    .shortcut-dialog {
+      background: #fff;
+      border: 1px solid #d1d5db;
+      border-radius: 14px;
+      padding: 24px 28px;
+      min-width: 320px;
+      max-width: 420px;
+      box-shadow: 0 16px 40px rgba(0,0,0,0.2);
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      font-family: "Hiragino Sans", "Yu Gothic", sans-serif;
+    }
+    .shortcut-dialog h4 {
+      margin: 0;
+      font-size: 18px;
+    }
+    .shortcut-capture-area {
+      border: 2px dashed #d1d5db;
+      border-radius: 10px;
+      padding: 18px;
+      text-align: center;
+      font-size: 22px;
+      font-weight: 700;
+      min-height: 60px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      outline: none;
+      cursor: pointer;
+      color: #111827;
+      letter-spacing: 0.04em;
+      transition: border-color 0.15s;
+    }
+    .shortcut-capture-area:focus {
+      border-color: #6366f1;
+    }
+    .shortcut-capture-hint {
+      font-size: 13px;
+      color: #6b7280;
+      text-align: center;
+      margin: 0;
+    }
+    .shortcut-dialog-actions {
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+    }
+    .shortcut-error {
+      font-size: 13px;
+      color: #dc2626;
+    }
   `;
 
   render() {
@@ -398,6 +487,7 @@ export class LiltSettingsModal extends LitElement {
           </div>
         </div>
       </div>
+      ${this._shortcutDialogOpen ? this._renderShortcutDialog() : ""}
     `;
   }
 
@@ -935,6 +1025,7 @@ export class LiltSettingsModal extends LitElement {
   }
 
   private _renderChatSection() {
+    const displayShortcut = this._formatShortcutDisplay(this._globalShortcut);
     return html`
       <h3>Chat</h3>
       <p>チャット画面の操作設定です。</p>
@@ -961,6 +1052,17 @@ export class LiltSettingsModal extends LitElement {
           <span class="status">${this._chatSaveStatus}</span>
         </div>
       </section>
+
+      <section class="provider-section" style="margin-top: 12px;">
+        <h4>グローバルショートカット</h4>
+        <p>アプリが閉じている状態でもショートカットキーでアプリを開き、入力欄にフォーカスします。</p>
+        <div class="shortcut-row">
+          <button class="shortcut-btn" @click=${this._openShortcutDialog} title="クリックしてショートカットを変更">
+            ${displayShortcut}
+          </button>
+          <span class="status">クリックして変更</span>
+        </div>
+      </section>
     `;
   }
 
@@ -968,7 +1070,8 @@ export class LiltSettingsModal extends LitElement {
     const next: ProviderSettings = {
       ...this.providerSettings,
       chatSettings: {
-        enterToSend: this._enterToSend
+        enterToSend: this._enterToSend,
+        globalShortcut: this._globalShortcut
       }
     };
     const result = await window.lilto.saveProviderSettings(next);
@@ -1098,5 +1201,164 @@ export class LiltSettingsModal extends LitElement {
       default:
         return provider;
     }
+  }
+
+  private _formatShortcutDisplay(accelerator: string): string {
+    if (!accelerator) return "—";
+    const isMac = this._isMac;
+    return accelerator
+      .split("+")
+      .map((part) => {
+        switch (part) {
+          case "Command": return "⌘";
+          case "CommandOrControl": return isMac ? "⌘" : "Ctrl";
+          case "Control": return isMac ? "⌃" : "Ctrl";
+          case "Shift": return isMac ? "⇧" : "Shift";
+          case "Alt":
+          case "Option": return isMac ? "⌥" : "Alt";
+          case "Super": return isMac ? "⌘" : "Win";
+          default: return part.toUpperCase();
+        }
+      })
+      .join(isMac ? "" : "+");
+  }
+
+  private _openShortcutDialog() {
+    this._pendingShortcut = this._globalShortcut;
+    this._shortcutError = "";
+    this._shortcutDialogOpen = true;
+    // Focus the capture area after render
+    this.updateComplete.then(() => {
+      this.renderRoot.querySelector<HTMLElement>(".shortcut-capture-area")?.focus();
+    });
+  }
+
+  private _closeShortcutDialog() {
+    this._shortcutDialogOpen = false;
+    this._pendingShortcut = "";
+    this._shortcutError = "";
+  }
+
+  private _onShortcutCaptureKeydown(e: KeyboardEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    // Ignore modifier-only keypresses
+    if (["Control", "Shift", "Alt", "Meta", "OS", "Super"].includes(e.key)) {
+      return;
+    }
+
+    // Build accelerator string
+    const parts: string[] = [];
+    const isMac = this._isMac;
+
+    if (e.metaKey) parts.push(isMac ? "Command" : "Super");
+    if (e.ctrlKey) parts.push("Control");
+    if (e.altKey) parts.push("Alt");
+    if (e.shiftKey) parts.push("Shift");
+
+    // Require at least one modifier
+    if (parts.length === 0) {
+      this._shortcutError = "修飾キー（Command / Ctrl / Alt / Shift）を組み合わせてください。";
+      return;
+    }
+
+    // Normalize key name
+    let key = e.key;
+    if (key.length === 1) {
+      key = key.toUpperCase();
+    } else {
+      // Handle special keys
+      const keyMap: Record<string, string> = {
+        " ": "Space",
+        ArrowUp: "Up",
+        ArrowDown: "Down",
+        ArrowLeft: "Left",
+        ArrowRight: "Right",
+        Escape: "Escape",
+        Enter: "Return",
+        Backspace: "Backspace",
+        Delete: "Delete",
+        Tab: "Tab",
+        Home: "Home",
+        End: "End",
+        PageUp: "PageUp",
+        PageDown: "PageDown"
+      };
+      key = keyMap[key] ?? key;
+    }
+
+    parts.push(key);
+    this._pendingShortcut = parts.join("+");
+    this._shortcutError = "";
+  }
+
+  private async _saveShortcut() {
+    if (!this._pendingShortcut) {
+      this._shortcutError = "ショートカットを入力してください。";
+      return;
+    }
+    this._globalShortcut = this._pendingShortcut;
+    this._closeShortcutDialog();
+    // Save immediately
+    const next: ProviderSettings = {
+      ...this.providerSettings,
+      chatSettings: {
+        enterToSend: this._enterToSend,
+        globalShortcut: this._globalShortcut
+      }
+    };
+    const result = await window.lilto.saveProviderSettings(next);
+    if (result.ok) {
+      this._chatSaveStatus = "ショートカットを保存しました。";
+      this.dispatchEvent(
+        new CustomEvent("provider-settings-changed", {
+          detail: result.state,
+          bubbles: true,
+          composed: true
+        })
+      );
+    } else {
+      this._chatSaveStatus = `${result.error.code}: ${result.error.message}`;
+    }
+  }
+
+  private _onShortcutDialogBackdropClick(e: MouseEvent) {
+    if (e.target === e.currentTarget) this._closeShortcutDialog();
+  }
+
+  private _renderShortcutDialog() {
+    const displayPending = this._pendingShortcut
+      ? this._formatShortcutDisplay(this._pendingShortcut)
+      : "キーを押してください…";
+    return html`
+      <div class="shortcut-dialog-backdrop" @click=${this._onShortcutDialogBackdropClick}>
+        <div class="shortcut-dialog">
+          <h4>グローバルショートカットの変更</h4>
+          <p style="margin:0;font-size:14px;color:#374151;">
+            新しいショートカットキーを押してください。
+          </p>
+          <div
+            class="shortcut-capture-area"
+            tabindex="0"
+            @keydown=${this._onShortcutCaptureKeydown}
+          >
+            ${displayPending}
+          </div>
+          <p class="shortcut-capture-hint">
+            macOS: Command / Shift / Option + 任意のキー<br>
+            Windows: Alt / Ctrl / Shift + 任意のキー
+          </p>
+          ${this._shortcutError ? html`<span class="shortcut-error">${this._shortcutError}</span>` : ""}
+          <div class="shortcut-dialog-actions">
+            <button @click=${this._closeShortcutDialog}>キャンセル</button>
+            <button
+              .disabled=${!this._pendingShortcut}
+              @click=${this._saveShortcut}
+            >保存</button>
+          </div>
+        </div>
+      </div>
+    `;
   }
 }

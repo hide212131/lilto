@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld("lilto", {
   installSkillFromSource: async (source: string) => ipcRenderer.invoke("skills:install", { source }),
   uninstallSkill: async (filePath: string) => ipcRenderer.invoke("skills:uninstall", { filePath }),
   checkSkillUpdates: async () => ipcRenderer.invoke("skills:checkUpdates"),
+  getPlatform: () => process.platform,
   onAgentLoopEvent: (listener: (event: AgentLoopEvent) => void) => {
     const wrapped = (_event: unknown, event: AgentLoopEvent) => listener(event);
     ipcRenderer.on(AGENT_LOOP_EVENT_CHANNEL, wrapped);
@@ -26,5 +27,10 @@ contextBridge.exposeInMainWorld("lilto", {
     const wrapped = (_event: unknown, state: unknown) => listener(state);
     ipcRenderer.on("auth:stateChanged", wrapped);
     return () => ipcRenderer.removeListener("auth:stateChanged", wrapped);
+  },
+  onFocusComposer: (listener: () => void) => {
+    const wrapped = () => listener();
+    ipcRenderer.on("app:focusComposer", wrapped);
+    return () => ipcRenderer.removeListener("app:focusComposer", wrapped);
   }
 });

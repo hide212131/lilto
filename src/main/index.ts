@@ -4,6 +4,7 @@ import { app, BrowserWindow } from "electron";
 import { AgentRuntime } from "./agent-sdk";
 import { ClaudeAuthService } from "./auth-service";
 import { readConfig } from "./config";
+import { registerAppShortcut, unregisterAppShortcut } from "./global-shortcut";
 import { HeartbeatScheduler } from "./heartbeat";
 import { registerAgentIpcHandlers } from "./ipc";
 import { createLogger } from "./logger";
@@ -120,11 +121,18 @@ void app.whenReady().then(() => {
     providerSettingsService,
     notificationService,
     bundledSkillsDir: skillRuntime.bundledSkillsDir,
-    userSkillsDir: skillRuntime.userSkillsDir
+    userSkillsDir: skillRuntime.userSkillsDir,
+    onSettingsSaved: (settings) => {
+      registerAppShortcut(settings.chatSettings.globalShortcut, () => mainWindow);
+    }
   });
   createWindow();
   notificationService.setupTray(() => mainWindow);
   heartbeat.start();
+
+  // グローバルショートカットを設定
+  const initialShortcut = providerSettingsService.getState().chatSettings.globalShortcut;
+  registerAppShortcut(initialShortcut, () => mainWindow);
 
   app.on("activate", () => {
     if (!mainWindow) {
@@ -137,6 +145,7 @@ void app.whenReady().then(() => {
 
 app.on("before-quit", () => {
   isQuitting = true;
+  unregisterAppShortcut();
   heartbeat.stop();
   authService.dispose();
 });
