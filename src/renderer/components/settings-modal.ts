@@ -603,6 +603,7 @@ export class LiltSettingsModal extends LitElement {
                 <thead>
                   <tr>
                     <th>名前</th>
+                    <th>バージョン</th>
                     <th>説明</th>
                     <th>種別</th>
                     <th>ファイルパス</th>
@@ -613,6 +614,7 @@ export class LiltSettingsModal extends LitElement {
                   ${this._skills.map((skill) => html`
                     <tr>
                       <td><strong>${skill.name}</strong></td>
+                      <td>${skill.installedVersion ?? "不明"}</td>
                       <td>${skill.description}</td>
                       <td>
                         <span class="skill-badge ${skill.source}">
@@ -643,7 +645,7 @@ export class LiltSettingsModal extends LitElement {
         <p>GitHub / GitLab のリリースからインストールしたスキルの最新バージョンを確認します。</p>
         ${this._skillUpdatesChecked
           ? this._skillUpdates.length === 0
-            ? html`<p class="status">アップデート対象のスキルがありません（バージョン情報なし）。</p>`
+            ? html`<p class="status">アップデートが必要なスキルはありません。</p>`
             : html`
               <table class="skills-table">
                 <thead>
@@ -741,7 +743,7 @@ export class LiltSettingsModal extends LitElement {
     this._skillUpdatesChecking = true;
     this._skillUpdatesChecked = false;
     try {
-      this._skillUpdates = await window.lilto.checkSkillUpdates();
+      this._skillUpdates = (await window.lilto.checkSkillUpdates()).filter((item) => item.updateAvailable);
       this._skillUpdatesChecked = true;
     } finally {
       this._skillUpdatesChecking = false;
@@ -752,9 +754,9 @@ export class LiltSettingsModal extends LitElement {
     this._skillInstalling = true;
     this._skillInstallStatus = "";
     try {
-      const result = await window.lilto.installSkill(sourceUrl);
+      const result = await window.lilto.installSkillFromSource(sourceUrl);
       if (result.ok) {
-        this._skillInstallStatus = `更新完了: ${result.installedSkills.join(", ")}（次回の送信から有効になります）`;
+        this._skillInstallStatus = `更新完了（次回の送信から有効になります）`;
         await this._loadSkills();
         await this._checkUpdates();
       } else {

@@ -160,18 +160,32 @@ test("listSkillsWithSource は user/bundled を source 付きで返す", () => {
     `---\nname: custom-one\ndescription: user custom\n---\n`
   );
   fs.writeFileSync(
+    path.join(userDir, "custom-one", ".skill-source.json"),
+    JSON.stringify({
+      url: "https://github.com/owner/repo/releases/download/v1.2.3/skill.zip",
+      installedAt: Date.now(),
+      installedVersion: "v1.2.3"
+    }, null, 2)
+  );
+  fs.writeFileSync(
     path.join(bundledDir, "agent-browser", "SKILL.md"),
-    `---\nname: agent-browser\ndescription: bundled browser\n---\n`
+    `---\nname: agent-browser\ndescription: bundled browser\nmetadata:\n  version: "v9.9.9"\n---\n`
+  );
+  fs.mkdirSync(path.join(userDir, "custom-two"), { recursive: true });
+  fs.writeFileSync(
+    path.join(userDir, "custom-two", "SKILL.md"),
+    `---\nname: custom-two\ndescription: user custom two\nmetadata:\n  version: "0.1.0"\n---\n`
   );
 
   const listed = listSkillsWithSource({ bundledSkillsDir: bundledDir, userSkillsDir: userDir });
   assert.deepEqual(
     listed
-      .map((item) => ({ name: item.name, source: item.source }))
+      .map((item) => ({ name: item.name, source: item.source, installedVersion: item.installedVersion }))
       .sort((a, b) => a.name.localeCompare(b.name)),
     [
-      { name: "agent-browser", source: "bundled" },
-      { name: "custom-one", source: "user" }
+      { name: "agent-browser", source: "bundled", installedVersion: "v9.9.9" },
+      { name: "custom-one", source: "user", installedVersion: "v1.2.3" },
+      { name: "custom-two", source: "user", installedVersion: "0.1.0" }
     ]
   );
 });
@@ -318,6 +332,99 @@ function makeSkillDir(userSkillsDir, skillName, sourceRecord) {
   fs.writeFileSync(path.join(dir, ".skill-source.json"), JSON.stringify(sourceRecord, null, 2));
 }
 
+test("checkSkillUpdates: local SKILL.md mtime で更新あり を検出する", async () => {
+  const root = tempDir("update-check-local-mtime");
+  const localSourceDir = tempDir("local-source");
+  const sourceSkillDir = path.join(localSourceDir, "local-skill");
+  const sourceSkillPath = path.join(sourceSkillDir, "SKILL.md");
+  fs.mkdirSync(sourceSkillDir, { recursive: true });
+  fs.writeFileSync(sourceSkillPath, `---\nname: local-skill\ndescription: local source\nmetadata:\n  version: "1.0.0"\n---\n`);
+  const initialMtime = fs.statSync(sourceSkillPath).mtimeMs;
+
+  makeSkillDir(root, "local-skill", {
+    url: localSourceDir,
+    installedAt: Date.now(),
+    installedVersion: null,
+    sourceSkillPath,
+    sourceSkillMtime: initialMtime
+  });
+  fs.writeFileSync(
+    path.join(root, "local-skill", "SKILL.md"),
+    `---\nname: local-skill\ndescription: installed local skill\nmetadata:\n  version: "0.1.0"\n---\n`
+  );
+
+  const updatedTime = new Date(Date.now() + 2_000);
+  fs.utimesSync(sourceSkillPath, updatedTime, updatedTime);
+
+  const results = await checkSkillUpdates({ userSkillsDir: root });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].updateAvailable, true);
+  assert.equal(results[0].updateCheckMethod, "local-skill-mtime");
+  assert.equal(results[0].installedVersion, "0.1.0");
+  assert.equal(results[0].latestVersion, "1.0.0");
+});
+
+test("checkSkillUpdates: local SKILL.md mtime が同じなら更新なし", async () => {
+  const root = tempDir("update-check-local-mtime-same");
+  const localSourceDir = tempDir("local-source-same");
+  const sourceSkillDir = path.join(localSourceDir, "local-skill");
+  const sourceSkillPath = path.join(sourceSkillDir, "SKILL.md");
+  fs.mkdirSync(sourceSkillDir, { recursive: true });
+  fs.writeFileSync(sourceSkillPath, `---\nname: local-skill\ndescription: local source\nmetadata:\n  version: "0.1.0"\n---\n`);
+  const initialMtime = fs.statSync(sourceSkillPath).mtimeMs;
+
+  makeSkillDir(root, "local-skill", {
+    url: localSourceDir,
+    installedAt: Date.now(),
+    installedVersion: null,
+    sourceSkillPath,
+    sourceSkillMtime: initialMtime
+  });
+
+  const results = await checkSkillUpdates({ userSkillsDir: root });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].updateAvailable, false);
+  assert.equal(results[0].updateCheckMethod, "local-skill-mtime");
+  assert.equal(results[0].latestVersion, "0.1.0");
+});
+
+test("checkSkillUpdates: symlink されたスキルディレクトリも更新確認対象になる", async () => {
+  const root = tempDir("update-check-symlink");
+  const actualRoot = tempDir("update-check-symlink-actual");
+  const actualSkillDir = path.join(actualRoot, "symlink-skill");
+  fs.mkdirSync(actualSkillDir, { recursive: true });
+
+  fs.writeFileSync(path.join(actualSkillDir, "SKILL.md"), `---\nname: symlink-skill\ndescription: test\n---\n`);
+  fs.writeFileSync(path.join(actualSkillDir, ".skill-source.json"), JSON.stringify({
+    url: "https://example.com/skill.zip",
+    installedAt: Date.now(),
+    installedVersion: null,
+    etag: '"old-etag"'
+  }, null, 2));
+
+  fs.symlinkSync(actualSkillDir, path.join(root, "symlink-skill"), "dir");
+
+  const fetchMock = mock.method(global, "fetch", async () => ({
+    ok: true,
+    headers: {
+      get: (name) => {
+        if (name === "etag") return '"new-etag"';
+        return null;
+      }
+    }
+  }));
+
+  try {
+    const results = await checkSkillUpdates({ userSkillsDir: root });
+    assert.equal(results.length, 1);
+    assert.equal(results[0].skillName, "symlink-skill");
+    assert.equal(results[0].updateAvailable, true);
+    assert.equal(results[0].updateCheckMethod, "etag");
+  } finally {
+    fetchMock.mock.restore();
+  }
+});
+
 test("checkSkillUpdates: release-tag で更新あり を検出する", async () => {
   const root = tempDir("update-check-release");
   makeSkillDir(root, "my-skill", {
@@ -442,6 +549,42 @@ test("checkSkillUpdates: commitSha 未記録の branch ソースは更新不明 
     assert.equal(results.length, 1);
     assert.equal(results[0].updateAvailable, false);
     assert.equal(results[0].updateCheckMethod, "none");
+  } finally {
+    fetchMock.mock.restore();
+  }
+});
+
+test("checkSkillUpdates: GitHub リポジトリURL + commitSha で更新あり を検出する", async () => {
+  const root = tempDir("update-check-github-repo-sha");
+  makeSkillDir(root, "repo-skill", {
+    url: "https://github.com/owner/repo",
+    installedAt: Date.now(),
+    installedVersion: null,
+    commitSha: "oldsha123"
+  });
+
+  const calledUrls = [];
+  const fetchMock = mock.method(global, "fetch", async (url) => {
+    calledUrls.push(String(url));
+    if (String(url).includes("/repos/owner/repo/commits/main")) {
+      return {
+        ok: true,
+        json: async () => ({ sha: "newsha456" })
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({ default_branch: "main" })
+    };
+  });
+
+  try {
+    const results = await checkSkillUpdates({ userSkillsDir: root });
+    assert.equal(results.length, 1);
+    assert.equal(results[0].updateAvailable, true);
+    assert.equal(results[0].updateCheckMethod, "commit-sha");
+    assert.ok(calledUrls.some((url) => /api\.github\.com\/repos\/owner\/repo$/.test(url)));
+    assert.ok(calledUrls.some((url) => /api\.github\.com\/repos\/owner\/repo\/commits\/main/.test(url)));
   } finally {
     fetchMock.mock.restore();
   }
