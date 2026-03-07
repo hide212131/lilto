@@ -9,6 +9,7 @@ export type SkillInfo = {
   parameters: unknown;
   filePath: string;
   source: SkillSource;
+  installedVersion: string | null;
 };
 
 export type SkillUpdateInfo = {
