@@ -4,6 +4,7 @@
 
 | 変更内容 | ミス/課題 | 再発防止ルール |
 |---|---|---|
+| GitHub repo root ソースの更新確認で `latestVersion` を取得できるよう、remote `SKILL.md` の `metadata.version` を読み、raw 取得不可時は shallow clone でフォールバックするよう修正。 | repo URL の更新判定を commit SHA 比較だけで済ませると `latestVersion` が常に `null` になり、UI が「取得失敗」を表示してしまう。さらに GitHub raw/codeload が使えない repo では追加フォールバックが必要だった。 | repo ソース更新では「更新有無（SHA）」と「表示用バージョン」を別問題として扱う。表示用 version は remote `SKILL.md` から取り、HTTP raw が使えないケースに備えて Git 経路フォールバックも持たせる。 |
 | アップデート確認テーブルを「更新が必要なスキルだけ」表示するよう修正し、空状態文言を「アップデートが必要なスキルはありません。」へ変更。 | `最新` の項目まで一覧に残すと、ユーザーは「何をすべきか」を即座に判断しづらく、更新UIの行動導線が弱くなる。 | アクション一覧UIは「対応が必要なものだけ」を基本にし、対象ゼロ時は空状態メッセージで明示する。情報一覧と作業一覧を同じ表に混在させない。 |
 | ローカルソース更新チェックで `installedVersion/latestVersion` を `SKILL.md metadata.version` から埋め、更新ボタンは ZIP 更新経路ではなく `installSkillFromSource` を使うよう修正。 | ローカルパス導入なのに更新ボタンが `installSkill(url)`（ZIP/HTTP前提）を叩いており、表示も `record.installedVersion` 依存で `不明/取得失敗` のままになっていた。 | 更新UIは「判定経路」と「更新実行経路」を一致させる。ローカルソース判定なら表示値も更新動作も source ベースに統一し、HTTP/ZIP 前提の API を流用しない。 |
 | スキル一覧のバージョン表示で、`.skill-source.json` の `installedVersion` が無い場合に `SKILL.md` frontmatter の `metadata.version` をフォールバック表示するよう修正。 | ローカルパス導入や手動配置のスキルでは `installedVersion` が空のことがあり、一覧が常に「不明」になって `SKILL.md` 上の明示バージョンを活用できていなかった。 | 一覧表示の主要属性（version など）は単一ソース依存にせず、永続メタデータ→`SKILL.md` の順でフォールバックする。frontmatter の慣用構造（`metadata.version`）は回帰テストで固定する。 |

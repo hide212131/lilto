@@ -486,12 +486,18 @@ test("checkSkillUpdates: commit-sha で更新あり を検出する", async () =
     commitSha: "aaabbbccc111"
   });
 
-  let calledUrl = null;
+  const calledUrls = [];
   const fetchMock = mock.method(global, "fetch", async (url) => {
-    calledUrl = url;
+    calledUrls.push(String(url));
+    if (String(url).includes("/commits/main")) {
+      return {
+        ok: true,
+        json: async () => ({ sha: "dddeeefff222" })
+      };
+    }
     return {
       ok: true,
-      json: async () => ({ sha: "dddeeefff222" })
+      text: async () => "---\nname: branch-skill\ndescription: test\nmetadata:\n  version: \"1.2.3\"\n---\n"
     };
   });
 
@@ -500,7 +506,8 @@ test("checkSkillUpdates: commit-sha で更新あり を検出する", async () =
     assert.equal(results.length, 1);
     assert.equal(results[0].updateAvailable, true);
     assert.equal(results[0].updateCheckMethod, "commit-sha");
-    assert.match(calledUrl, /api\.github\.com\/repos\/owner\/repo\/commits\/main/);
+    assert.equal(results[0].latestVersion, "1.2.3");
+    assert.ok(calledUrls.some((url) => /api\.github\.com\/repos\/owner\/repo\/commits\/main/.test(url)));
   } finally {
     fetchMock.mock.restore();
   }

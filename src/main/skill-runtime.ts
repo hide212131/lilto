@@ -716,8 +716,53 @@ async function fetchDefaultBranch(info: GitHubRepositoryInfo): Promise<string | 
     return null;
   }
 }
+type GitLabRepositoryInfo = {
+  type: "gitlab";
+  host: string;
+  projectPath: string;
+};
 
-async function fetchLatestRepositoryCommitSha(url: string): Promise<string | null> {
+function parseGitLabRepositoryUrl(url: string): GitLabRepositoryInfo | null {
+  try {
+    const parsed = new URL(url);
+    if (!parsed.hostname.includes("gitlab")) {
+      return null;
+    }
+
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    if (segments.length < 2) {
+      return null;
+    }
+
+    return {
+      type: "gitlab",
+      host: parsed.origin,
+      projectPath: segments.join("/").replace(/\.git$/i, "")
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function fetchGitLabDefaultBranch(info: GitLabRepositoryInfo): Promise<string | null> {
+  try {
+    const encodedPath = encodeURIComponent(info.projectPath);
+    const apiUrl = `${info.host}/api/v4/projects/${encodedPath}`;
+    const res = await fetch(apiUrl);
+    if (!res.ok) return null;
+    const data = await res.json() as { default_branch?: string };
+    return data.default_branch ?? null;
+  } catch {
+    return null;
+  }
+}
+
+type RepositoryHeadInfo = {
+  sha: string | null;
+  ref: string | null;
+};
+
+async function fetchRepositoryHeadInfo(url: string): Promise<RepositoryHeadInfo> {
   try {
     const output = execFileSync(
       "git",
@@ -726,31 +771,204 @@ async function fetchLatestRepositoryCommitSha(url: string): Promise<string | nul
     );
 
     const lines = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const refLine = lines.find((line) => line.startsWith("ref:") && /\sHEAD$/.test(line));
     const headLine = lines.find((line) => /\sHEAD$/.test(line) && !line.startsWith("ref:"));
-    if (headLine) {
-      const sha = headLine.split(/\s+/)[0];
-      if (/^[0-9a-f]{40}$/i.test(sha)) {
-        return sha;
+    const ref = refLine?.match(/^ref:\s+refs\/heads\/(.+)\s+HEAD$/)?.[1] ?? null;
+    const sha = headLine?.split(/\s+/)[0] ?? null;
+
+    return {
+      sha: sha && /^[0-9a-f]{40}$/i.test(sha) ? sha : null,
+      ref
+    };
+  } catch {
+    // fall through
+  }
+
+  const githubRepo = parseRepositoryUrl(url);
+  if (githubRepo) {
+    const defaultBranch = await fetchDefaultBranch(githubRepo);
+    if (!defaultBranch) {
+      return { sha: null, ref: null };
+    }
+    const sha = await fetchLatestCommitSha(
+      { type: "github", owner: githubRepo.owner, repo: githubRepo.repo, version: null, ref: defaultBranch },
+      defaultBranch
+    );
+    return { sha, ref: defaultBranch };
+  }
+
+  const gitlabRepo = parseGitLabRepositoryUrl(url);
+  if (gitlabRepo) {
+    const defaultBranch = await fetchGitLabDefaultBranch(gitlabRepo);
+    if (!defaultBranch) {
+      return { sha: null, ref: null };
+    }
+    const sha = await fetchLatestCommitSha(
+      { type: "gitlab", host: gitlabRepo.host, projectPath: gitlabRepo.projectPath, version: null, ref: defaultBranch },
+      defaultBranch
+    );
+    return { sha, ref: defaultBranch };
+  }
+
+  return { sha: null, ref: null };
+}
+
+async function fetchLatestRepositoryCommitSha(url: string): Promise<string | null> {
+  const headInfo = await fetchRepositoryHeadInfo(url);
+  return headInfo.sha;
+}
+
+async function fetchArchiveBuffer(url: string): Promise<Buffer | null> {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      return null;
+    }
+    return Buffer.from(await res.arrayBuffer());
+  } catch {
+    return null;
+  }
+}
+
+function findSkillVersionInDirectory(rootDir: string, skillName: string): string | null {
+  const candidatePaths = [
+    path.join(rootDir, "skills", skillName, "SKILL.md"),
+    path.join(rootDir, skillName, "SKILL.md")
+  ];
+
+  for (const candidate of candidatePaths) {
+    const version = readMetadataVersionFromSkillMarkdown(candidate);
+    if (version) {
+      return version;
+    }
+  }
+
+  return findSkillVersionInExtractedArchive(rootDir, skillName);
+}
+
+async function readSkillVersionFromGitClone(sourceUrl: string, skillName: string, ref?: string | null): Promise<string | null> {
+  const tmpDir = path.join(os.tmpdir(), `lilto-skill-clone-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  try {
+    const cloneArgs = ["clone", "--depth", "1"];
+    if (ref) {
+      cloneArgs.push("--branch", ref);
+    }
+    cloneArgs.push(sourceUrl, tmpDir);
+    execFileSync("git", cloneArgs, { stdio: ["ignore", "pipe", "pipe"] });
+    return findSkillVersionInDirectory(tmpDir, skillName);
+  } catch {
+    return null;
+  } finally {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+}
+
+function findSkillVersionInExtractedArchive(extractDir: string, skillName: string): string | null {
+  const skillFiles = collectSkillMarkdownFiles(extractDir);
+  for (const skillFile of skillFiles) {
+    try {
+      const content = fs.readFileSync(skillFile, "utf8");
+      const metadata = parseSkillMarkdown(content, skillFile);
+      if (!metadata || metadata.name !== skillName) {
+        continue;
+      }
+      return readMetadataVersionFromSkillMarkdown(skillFile);
+    } catch {
+      // best effort
+    }
+  }
+  return null;
+}
+
+async function readSkillVersionFromArchiveBuffer(buffer: Buffer, skillName: string): Promise<string | null> {
+  const tmpBase = path.join(os.tmpdir(), `lilto-skill-version-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const tmpFile = `${tmpBase}.zip`;
+  const extractDir = `${tmpBase}-extract`;
+
+  try {
+    fs.writeFileSync(tmpFile, buffer);
+    fs.mkdirSync(extractDir, { recursive: true });
+    await extractZip(tmpFile, extractDir);
+    return findSkillVersionInExtractedArchive(extractDir, skillName);
+  } catch {
+    return null;
+  } finally {
+    try { fs.rmSync(tmpFile, { force: true }); } catch { /* ignore */ }
+    try { fs.rmSync(extractDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+}
+
+async function fetchLatestSkillVersionFromRemoteSource(sourceUrl: string, skillName: string): Promise<string | null> {
+  const releaseInfo = parseReleaseUrl(sourceUrl);
+  if (releaseInfo?.type === "github" && releaseInfo.version === null && releaseInfo.ref !== null) {
+    const candidates = [
+      `https://raw.githubusercontent.com/${releaseInfo.owner}/${releaseInfo.repo}/${encodeURIComponent(releaseInfo.ref)}/skills/${encodeURIComponent(skillName)}/SKILL.md`,
+      `https://raw.githubusercontent.com/${releaseInfo.owner}/${releaseInfo.repo}/${encodeURIComponent(releaseInfo.ref)}/${encodeURIComponent(skillName)}/SKILL.md`
+    ];
+    for (const candidate of candidates) {
+      try {
+        const res = await fetch(candidate);
+        if (!res.ok) continue;
+        const markdown = await res.text();
+        const tmp = path.join(os.tmpdir(), `lilto-remote-skill-${skillName}-${Date.now()}.md`);
+        try {
+          fs.writeFileSync(tmp, markdown, "utf8");
+          const version = readMetadataVersionFromSkillMarkdown(tmp);
+          if (version) return version;
+        } finally {
+          try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ }
+        }
+      } catch {
+        // try next candidate
       }
     }
-  } catch {
-    // fallback to GitHub API
+    return readSkillVersionFromGitClone(sourceUrl, skillName, releaseInfo.ref);
   }
 
-  const repoInfo = parseRepositoryUrl(url);
-  if (!repoInfo) {
-    return null;
+  const githubRepo = parseRepositoryUrl(sourceUrl);
+  if (githubRepo) {
+    const headInfo = await fetchRepositoryHeadInfo(sourceUrl);
+    if (!headInfo.ref) {
+      return null;
+    }
+    const rawVersion = await fetchLatestSkillVersionFromRemoteSource(
+      `https://github.com/${githubRepo.owner}/${githubRepo.repo}/archive/refs/heads/${headInfo.ref}.zip`,
+      skillName
+    );
+    return rawVersion ?? readSkillVersionFromGitClone(sourceUrl, skillName, headInfo.ref);
   }
 
-  const defaultBranch = await fetchDefaultBranch(repoInfo);
-  if (!defaultBranch) {
-    return null;
+  const gitlabRepo = parseGitLabRepositoryUrl(sourceUrl);
+  if (gitlabRepo) {
+    const headInfo = await fetchRepositoryHeadInfo(sourceUrl);
+    if (!headInfo.ref) {
+      return null;
+    }
+    const candidates = [
+      `${gitlabRepo.host}/${gitlabRepo.projectPath}/-/raw/${encodeURIComponent(headInfo.ref)}/skills/${encodeURIComponent(skillName)}/SKILL.md`,
+      `${gitlabRepo.host}/${gitlabRepo.projectPath}/-/raw/${encodeURIComponent(headInfo.ref)}/${encodeURIComponent(skillName)}/SKILL.md`
+    ];
+    for (const candidate of candidates) {
+      try {
+        const res = await fetch(candidate);
+        if (!res.ok) continue;
+        const markdown = await res.text();
+        const tmp = path.join(os.tmpdir(), `lilto-remote-skill-${skillName}-${Date.now()}.md`);
+        try {
+          fs.writeFileSync(tmp, markdown, "utf8");
+          const version = readMetadataVersionFromSkillMarkdown(tmp);
+          if (version) return version;
+        } finally {
+          try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ }
+        }
+      } catch {
+        // try next candidate
+      }
+    }
+    return readSkillVersionFromGitClone(sourceUrl, skillName, headInfo.ref);
   }
 
-  return fetchLatestCommitSha(
-    { type: "github", owner: repoInfo.owner, repo: repoInfo.repo, version: null, ref: defaultBranch },
-    defaultBranch
-  );
+  return null;
 }
 
 export function parseReleaseUrl(url: string): GitHubReleaseInfo | GitLabReleaseInfo | null {
@@ -1017,12 +1235,14 @@ export async function checkSkillUpdates(options: { userSkillsDir: string }): Pro
       const latestSha = await fetchLatestCommitSha(releaseInfo, releaseInfo.ref);
       if (latestSha !== null && record.commitSha !== null && record.commitSha !== undefined) {
         updateAvailable = latestSha !== record.commitSha;
+        latestVersion = await fetchLatestSkillVersionFromRemoteSource(record.url, entry.name);
         updateCheckMethod = "commit-sha";
       }
     } else if (updateCheckMethod === "none" && record.commitSha !== null && record.commitSha !== undefined) {
       const latestSha = await fetchLatestRepositoryCommitSha(record.url);
       if (latestSha !== null) {
         updateAvailable = latestSha !== record.commitSha;
+        latestVersion = await fetchLatestSkillVersionFromRemoteSource(record.url, entry.name);
         updateCheckMethod = "commit-sha";
       }
     }
@@ -1150,7 +1370,7 @@ export async function installSkillFromSource(options: {
         const sourceRecord: SkillSourceRecord = {
           url: source,
           installedAt: Date.now(),
-          installedVersion: releaseInfo?.version ?? localInfo?.version ?? null,
+          installedVersion: releaseInfo?.version ?? localInfo?.version ?? readInstalledVersionFromSkillDir(skillDir),
           contentHash: null,
           etag: null,
           lastModified: null,
