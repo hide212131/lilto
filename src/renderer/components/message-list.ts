@@ -70,6 +70,55 @@ export class LiltMessageList extends LitElement {
     .msg-pending {
       opacity: 0.8;
     }
+    .msg-wrapper {
+      display: contents;
+    }
+    .msg-wrapper-user {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 4px;
+    }
+    .msg-wrapper-assistant {
+      display: contents;
+    }
+    .msg-actions {
+      display: flex;
+      gap: 4px;
+      opacity: 0;
+      transition: opacity 0.15s;
+    }
+    .msg-wrapper-user:hover .msg-actions,
+    .assistant-row:hover .msg-actions {
+      opacity: 1;
+    }
+    .msg-actions-assistant {
+      margin-top: 4px;
+      justify-content: flex-start;
+    }
+    .action-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      background: #ffffff;
+      cursor: pointer;
+      color: #6b7280;
+      padding: 0;
+      transition: background 0.1s, color 0.1s;
+    }
+    .action-btn:hover {
+      background: #f3f4f6;
+      color: #111827;
+    }
+    .action-btn svg {
+      width: 14px;
+      height: 14px;
+      flex-shrink: 0;
+    }
     .assistant-progress {
       display: flex;
       flex-direction: column;
@@ -453,6 +502,32 @@ export class LiltMessageList extends LitElement {
     `;
   }
 
+  private _copyIcon() {
+    return html`<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="5" y="5" width="8" height="9" rx="1.5"/>
+      <path d="M3 11V3.5A1.5 1.5 0 0 1 4.5 2H11"/>
+    </svg>`;
+  }
+
+  private _reloadIcon() {
+    return html`<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M13.5 8A5.5 5.5 0 1 1 10 3.04"/>
+      <polyline points="10 1 10 4 13 4"/>
+    </svg>`;
+  }
+
+  private _copyText(text: string) {
+    void navigator.clipboard.writeText(text);
+  }
+
+  private _retryMessage(message: Message) {
+    this.dispatchEvent(new CustomEvent("retry-message", {
+      detail: { messageId: message.id, text: message.text },
+      bubbles: true,
+      composed: true
+    }));
+  }
+
   render() {
     return html`
       <div class="chat" aria-live="polite" @click=${this._handleChatClick}>
@@ -463,10 +538,33 @@ export class LiltMessageList extends LitElement {
                   <div class="mascot-avatar ${m.pending ? "talking" : ""}">
                     <img src=${MASCOT_URL} alt="" aria-hidden="true" draggable="false"/>
                   </div>
-                  <div class="msg msg-assistant ${m.pending ? "msg-pending" : ""}">${this._renderAssistantBody(m)}</div>
+                  <div style="display:flex;flex-direction:column;flex:1;min-width:0;">
+                    <div class="msg msg-assistant ${m.pending ? "msg-pending" : ""}">${this._renderAssistantBody(m)}</div>
+                    ${!m.pending && m.text ? html`
+                      <div class="msg-actions msg-actions-assistant">
+                        <button class="action-btn" title="コピー" @click=${() => this._copyText(m.text ?? "")}>
+                          ${this._copyIcon()}
+                        </button>
+                      </div>
+                    ` : ""}
+                  </div>
                 </div>
               `
-            : html`<div class="msg msg-${m.role} ${m.pending ? "msg-pending" : ""}">${this._renderMarkdown(m.text ?? "")}</div>`
+            : m.role === "user"
+              ? html`
+                  <div class="msg-wrapper-user">
+                    <div class="msg msg-user ${m.pending ? "msg-pending" : ""}">${this._renderMarkdown(m.text ?? "")}</div>
+                    <div class="msg-actions">
+                      <button class="action-btn" title="再送信" @click=${() => this._retryMessage(m)}>
+                        ${this._reloadIcon()}
+                      </button>
+                      <button class="action-btn" title="コピー" @click=${() => this._copyText(m.text ?? "")}>
+                        ${this._copyIcon()}
+                      </button>
+                    </div>
+                  </div>
+                `
+              : html`<div class="msg msg-${m.role} ${m.pending ? "msg-pending" : ""}">${this._renderMarkdown(m.text ?? "")}</div>`
         )}
       </div>
     `;
