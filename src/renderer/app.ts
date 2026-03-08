@@ -14,7 +14,24 @@ import { createInitialLoopState, reduceLoopState } from "../shared/agent-loop.js
 
 const SESSIONS_STORAGE_KEY = "lilto-sessions";
 
-  private async _doSend(text: string) {
+@customElement("lilt-app")
+export class LiltApp extends LitElement {
+  @property({ type: Object }) authState: AuthState | null = null;
+  @property({ type: Object }) providerSettings: ProviderSettings = {
+    activeProvider: "oauth",
+    oauthProvider: "anthropic",
+    customProvider: {
+      name: "Ollama",
+      baseUrl: "http://127.0.0.1:11434/v1",
+      apiKey: "",
+      modelId: "qwen2.5:0.5b"
+    },
+    networkProxy: {
+      useProxy: false
+    },
+    chatSettings: {
+      enterToSend: false
+    },
     updatedAt: Date.now()
   };
   @property({ type: Array }) messages: Message[] = [];
@@ -344,26 +361,7 @@ const SESSIONS_STORAGE_KEY = "lilto-sessions";
     void window.lilto.abortPrompt();
   }
 
-<<<<<<< HEAD
-  private async _onSendMessage(e: CustomEvent<{ text: string }>) {
-    const text = e.detail.text;
-    if (!this._canSend() || !text) {
-      if (!this._canSend()) {
-        this._addMessage("system",
-          this.providerSettings.activeProvider === "oauth"
-            ? "プロバイダー設定が必要です。Settings から OAuth Provider を設定してください。"
-            : "Custom Provider の name / baseUrl を設定して保存してから送信してください。"
-        );
-        this.settingsOpen = true;
-      }
-      return;
-    }
-
-    this._addMessage("user", text);
-    this._saveCurrentSession();
-=======
   private async _doSend(text: string) {
->>>>>>> e64b26e (feat: UI enhancements - reload button, copy button, chat history menu)
     const pendingIdx = this._addPendingMessage("assistant", "実行開始を待っています...");
     this._pendingAssistantIndex = pendingIdx;
     this._activeRequestId = null;

@@ -1,0 +1,38 @@
+name: release-candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (example: 0.1.0)"
+        required: true
+      channel:
+        description: "Release channel"
+        required: false
+        default: "candidate"
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest]
+        include:
+          - os: macos-latest
+            package_script: package:release:mac
+          - os: windows-latest
+            package_script: package:release:win
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+      - run: npm run prepare:release -- --version "${{ inputs.version }}" --channel "${{ inputs.channel }}"
+      - run: npm run ${{ matrix.package_script }} -- --version "${{ inputs.version }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.os }}-${{ inputs.version }}
+          path: release/${{ inputs.version }}

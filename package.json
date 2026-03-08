@@ -1,5 +1,6 @@
 {
   "name": "lilt-o",
+  "productName": "Lilt-o",
   "version": "0.1.0",
   "private": true,
   "description": "Lilt-o desktop shell with Pi SDK bridge",
@@ -9,11 +10,33 @@
     "build:native": "node scripts/build-native.js",
     "build": "tsc -p tsconfig.json && vite build",
     "start": "npm run build:native && npm run build && electron .",
+    "prepare:release": "node scripts/prepare-release.js",
+    "package:release:mac": "node scripts/package-release.js --platform mac",
+    "package:release:win": "node scripts/package-release.js --platform win",
+    "package:release:win:prepare": "node scripts/package-release.js --platform win --prepare-only",
+    "publish:release": "node scripts/publish-release.js",
     "test": "npm run build && node --test",
     "e2e:electron": "npm run build && node scripts/e2e-electron-agent-browser.js",
     "e2e:electron:skills-live": "npm run build && node scripts/e2e-electron-agent-skills-live.js"
   },
   "build": {
+    "appId": "com.hide.lilto",
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "mac": {
+      "target": [
+        "zip"
+      ]
+    },
+    "win": {
+      "target": [
+        "portable"
+      ]
+    },
+    "artifactName": "${productName}-${version}-${arch}.${ext}",
     "extraResources": [
       {
         "from": "native/scheduler-daemon/target/release",
@@ -34,6 +57,7 @@
   "devDependencies": {
     "@types/node": "^25.3.5",
     "agent-browser": "^0.13.0",
+    "electron-builder": "^26.0.12",
     "electron": "^31.7.7",
     "lit": "^3.3.2",
     "typescript": "^5.7.3",
