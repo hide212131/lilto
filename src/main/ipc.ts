@@ -57,12 +57,17 @@ export function registerAgentIpcHandlers({
     }
 
     const text = (payload as { text: string }).text;
+    const conversationId =
+      typeof (payload as { conversationId?: unknown }).conversationId === "string"
+        ? (payload as { conversationId: string }).conversationId
+        : undefined;
     const requestId = randomUUID();
     broadcastLoopEvent({ type: "run_start", requestId });
     try {
       const providerSettings = providerSettingsService.getState();
       const result = await agentRuntime.submitPrompt(text, providerSettings, {
         requestId,
+        conversationId,
         onLoopEvent: (event) => {
           broadcastLoopEvent(event);
         }

@@ -88,6 +88,24 @@ function getMessagesText() {
   );
 }
 
+function injectSchedulerNotification(messageText, followUpInstruction) {
+  evalJs(
+    `(() => {
+      const app = document.querySelector('lilt-app');
+      if (!app || !app.activeSessionId) return 'missing-session';
+      app._bindBackendSession?.(app.activeSessionId, 'agent-session-e2e');
+      app._onSchedulerNotification?.({
+        id: 'schedule-e2e-1',
+        sessionId: 'agent-session-e2e',
+        message: ${JSON.stringify(messageText)},
+        followUpInstruction: ${JSON.stringify(followUpInstruction ?? null)},
+        firedAt: new Date().toISOString()
+      });
+      return 'ok';
+    })()`
+  );
+}
+
 function clickSettingsButton() {
   evalJs(
     "document.querySelector('lilt-app')?.shadowRoot?.querySelector('lilt-top-bar')?.shadowRoot?.querySelector('button[title=\"Settings\"]')?.click()"
@@ -406,11 +424,21 @@ async function main() {
     ]);
     console.log(`✓ Mock loop progress + final response received: "${expectedFinal}"`);
 
-    // 13. 最終ステータス確認
+    // 13. scheduler notification と follow-up assistant 実行を確認
+    const schedulerMessage = "3分たちました。";
+    const schedulerFollowUp = "alpha.co.jp を開きます";
+    injectSchedulerNotification(schedulerMessage, schedulerFollowUp);
+    await waitForResponse(schedulerMessage);
+    await waitForResponse(`続きの処理: ${schedulerFollowUp}`);
+    const schedulerFinal = "[E2E_MOCK_FINAL] 要求「以下はこの会話で発火した scheduler 通知です。";
+    await waitForResponse(schedulerFinal);
+    console.log(`✓ Scheduler notification + follow-up rendered: "${schedulerMessage}" / "${schedulerFollowUp}"`);
+
+    // 14. 最終ステータス確認
     const finalStatus = await waitForStatus(["待機中"]);
     console.log(`✓ Final status: "${finalStatus}"`);
 
-    // 14. 新規セッション開始で会話履歴を初期化
+    // 15. 新規セッション開始で会話履歴を初期化
     const countBeforeReset = getMessageCount();
     if (countBeforeReset < 4) throw new Error(`Unexpected message count before reset: ${countBeforeReset}`);
     clickNewSessionButton();
@@ -420,7 +448,7 @@ async function main() {
     if (isNewSessionDisabled()) throw new Error("New session button should be enabled after sending");
     console.log("✓ New session reset cleared conversation");
 
-    // 15. 最終スクリーンショット
+    // 16. 最終スクリーンショット
     agentBrowser(["screenshot", screenshotPath]);
     console.log(`✓ Final screenshot: ${screenshotPath}`);
 

@@ -3,6 +3,7 @@
 ## 事前準備
 - `npm install`
 - 必要な認証情報を環境変数または Pi の設定として用意する
+- scheduler 機能を実バイナリで確認する場合は `npm run build:native` を実行する
 - GUI 変更がある場合は `npm run e2e:electron` を実行できる状態にする
 
 ## Windows OpenSpec 互換確認
@@ -35,6 +36,13 @@
 ## heartbeat-jobs
 1. Main プロセスログで `heartbeat_tick` が定期出力されることを確認する
 2. 失敗するジョブを追加しても後続ジョブが実行されることをログで確認する
+
+## cron-scheduler-tool
+1. `npm run build:native` 済み、または `LILTO_SCHEDULER_BIN` で scheduler daemon 実行ファイルを指せる状態にする
+2. 認証済みまたは Custom Provider 設定済みの状態で「3分後に知らせて」のような依頼を送る
+3. AI が `cron` ツールを使って schedule を登録し、「3分後にお知らせします」のように応答することを確認する
+4. 指定時刻後に対象会話へ scheduler 通知メッセージが追加されることを確認する
+5. アプリ非フォーカス時は OS 通知と未読バッジも更新されることを確認する
 
 ## GUI 変更時の必須チェック
 1. `npm run e2e:electron` を実行する

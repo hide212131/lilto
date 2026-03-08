@@ -2,6 +2,7 @@ import { LitElement, html, css } from "lit";
 import { customElement, property, query } from "lit/decorators.js";
 import type { AuthState, ProviderSettings, Message, AssistantProgress, AssistantToolProgress, Session } from "./types.js";
 import type { OAuthProviderId } from "../shared/provider-settings.js";
+import type { SchedulerNotificationEvent } from "../shared/scheduler.js";
 import "./components/top-bar.js";
 import "./components/message-list.js";
 import "./components/composer.js";
@@ -45,6 +46,7 @@ export class LiltApp extends LitElement {
 
   private _unsubscribeAuthListener: (() => void) | null = null;
   private _unsubscribeLoopListener: (() => void) | null = null;
+  private _unsubscribeSchedulerListener: (() => void) | null = null;
   private _unsubscribeFocusListener: (() => void) | null = null;
   private _pendingAssistantIndex: number | null = null;
   private _activeRequestId: string | null = null;
@@ -112,6 +114,9 @@ export class LiltApp extends LitElement {
     this._unsubscribeLoopListener = window.lilto.onAgentLoopEvent((event) => {
       this._onLoopEvent(event);
     });
+    this._unsubscribeSchedulerListener = window.lilto.onSchedulerNotification((event) => {
+      this._onSchedulerNotification(event);
+    });
     this._unsubscribeFocusListener = window.lilto.onFocusComposer(() => {
       void this.updateComplete.then(() => {
         this._composer?.focusInput();
@@ -123,9 +128,11 @@ export class LiltApp extends LitElement {
     super.disconnectedCallback();
     this._unsubscribeAuthListener?.();
     this._unsubscribeLoopListener?.();
+    this._unsubscribeSchedulerListener?.();
     this._unsubscribeFocusListener?.();
     this._unsubscribeAuthListener = null;
     this._unsubscribeLoopListener = null;
+    this._unsubscribeSchedulerListener = null;
     this._unsubscribeFocusListener = null;
   }
 
@@ -161,7 +168,7 @@ export class LiltApp extends LitElement {
       // 既存セッションを更新
       this.sessions = this.sessions.map((s) =>
         s.id === this._currentSessionId
-          ? { ...s, messages: [...this.messages] }
+          ? { ...s, title, messages: [...this.messages] }
           : s
       );
     } else {
@@ -345,6 +352,7 @@ export class LiltApp extends LitElement {
     }
 
     this._addMessage("user", text);
+    this._saveCurrentSession();
     const pendingIdx = this._addPendingMessage("assistant", "実行開始を待っています...");
     this._pendingAssistantIndex = pendingIdx;
     this._activeRequestId = null;
@@ -359,7 +367,7 @@ export class LiltApp extends LitElement {
     this.isSending = true;
 
     try {
-      const result = await window.lilto.submitPrompt(text);
+      const result = await window.lilto.submitPrompt(text, this._currentSessionId);
       if (result.ok) {
         this._resolvePendingMessage(pendingIdx, result.response.text, this._buildProgress());
         this._saveCurrentSession();
@@ -389,7 +397,73 @@ export class LiltApp extends LitElement {
 
   private _onLoopEvent(event: AgentLoopEvent) {
     this.loopState = reduceLoopState(this.loopState, event);
+    if (event.type === "session_bound" && event.conversationId) {
+      this._bindBackendSession(event.conversationId, event.agentSessionId);
+    }
     this._appendProgressLineFromLoopEvent(event);
+  }
+
+  private _onSchedulerNotification(event: SchedulerNotificationEvent) {
+    const targetSession = this.sessions.find((session) => session.backendSessionId === event.sessionId);
+    if (!targetSession) {
+      return;
+    }
+
+    const notificationText = event.followUpInstruction
+      ? `${event.message}\n続きの処理: ${event.followUpInstruction}`
+      : event.message;
+    this._appendMessageToSession(targetSession.id, {
+      id: this._nextMessageId(),
+      role: "system",
+      text: notificationText
+    });
+
+    if (event.followUpInstruction) {
+      void this._runSchedulerFollowUp(targetSession.id, event);
+    }
+  }
+
+  private async _runSchedulerFollowUp(conversationId: string, event: SchedulerNotificationEvent) {
+    const pendingMessageId = this._appendMessageToSession(conversationId, {
+      id: this._nextMessageId(),
+      role: "assistant",
+      text: "スケジュールに続く処理を実行中...",
+      pending: true
+    });
+
+    try {
+      const result = await window.lilto.submitPrompt(this._buildSchedulerFollowUpPrompt(event), conversationId);
+      if (result.ok) {
+        this._updateSessionMessage(conversationId, pendingMessageId, {
+          text: result.response.text,
+          pending: false
+        });
+        return;
+      }
+
+      const error = result.error ?? { code: "UNKNOWN", message: "不明なエラー" };
+      this._updateSessionMessage(conversationId, pendingMessageId, {
+        role: "error",
+        text: `${error.code}: ${error.message}`,
+        pending: false
+      });
+    } catch (error) {
+      this._updateSessionMessage(conversationId, pendingMessageId, {
+        role: "error",
+        text: `UNEXPECTED: ${String(error)}`,
+        pending: false
+      });
+    }
+  }
+
+  private _buildSchedulerFollowUpPrompt(event: SchedulerNotificationEvent): string {
+    return [
+      "以下はこの会話で発火した scheduler 通知です。",
+      `通知文言: ${event.message}`,
+      `続きの処理: ${event.followUpInstruction ?? ""}`,
+      "通知文言はすでにユーザーへ表示されています。",
+      "まず必要なら一言だけ何をするかを伝え、その後に続きの処理をこの会話で実行してください。"
+    ].join("\n");
   }
 
   private _appendProgressLineFromLoopEvent(event: AgentLoopEvent) {
@@ -401,6 +475,9 @@ export class LiltApp extends LitElement {
         this._activeRequestId = event.requestId;
         this._attachRequestIdToPendingMessage(event.requestId);
         changed = true;
+        break;
+      case "session_bound":
+        changed = false;
         break;
       case "thinking_start":
         if (this._statusLines.length === 0 || this._statusLines[this._statusLines.length - 1] !== "考え中...") {
@@ -555,5 +632,55 @@ export class LiltApp extends LitElement {
 
   private _removePendingMessage(idx: number) {
     this.messages = this.messages.filter((_, i) => i !== idx);
+  }
+
+  private _appendMessageToSession(sessionId: string, message: Message): string {
+    this.sessions = this.sessions.map((session) =>
+      session.id === sessionId
+        ? { ...session, messages: [...session.messages, message] }
+        : session
+    );
+
+    if (this._currentSessionId === sessionId) {
+      this.messages = [...this.messages, message];
+    }
+
+    this._saveSessions();
+    return message.id;
+  }
+
+  private _updateSessionMessage(sessionId: string, messageId: string, patch: Partial<Message>) {
+    this.sessions = this.sessions.map((session) =>
+      session.id === sessionId
+        ? {
+          ...session,
+          messages: session.messages.map((message) =>
+            message.id === messageId ? { ...message, ...patch } : message
+          )
+        }
+        : session
+    );
+
+    if (this._currentSessionId === sessionId) {
+      this.messages = this.messages.map((message) =>
+        message.id === messageId ? { ...message, ...patch } : message
+      );
+    }
+
+    this._saveSessions();
+  }
+
+  private _bindBackendSession(conversationId: string, backendSessionId: string) {
+    let updated = false;
+    this.sessions = this.sessions.map((session) => {
+      if (session.id !== conversationId || session.backendSessionId === backendSessionId) {
+        return session;
+      }
+      updated = true;
+      return { ...session, backendSessionId };
+    });
+    if (updated) {
+      this._saveSessions();
+    }
   }
 }
