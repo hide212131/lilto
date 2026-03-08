@@ -1,10 +1,12 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { AgentLoopEvent } from "./shared/agent-loop";
+import type { SchedulerNotificationEvent } from "./shared/scheduler";
 
 const AGENT_LOOP_EVENT_CHANNEL = "agent:loopEvent";
+const SCHEDULER_NOTIFICATION_CHANNEL = "scheduler:notification";
 
 contextBridge.exposeInMainWorld("lilto", {
-  submitPrompt: async (text: string) => ipcRenderer.invoke("agent:submitPrompt", { text }),
+  submitPrompt: async (text: string, conversationId?: string | null) => ipcRenderer.invoke("agent:submitPrompt", { text, conversationId }),
   abortPrompt: async () => ipcRenderer.invoke("agent:abort"),
   openExternalUrl: async (url: string) => ipcRenderer.invoke("app:openExternal", { url }),
   startClaudeOauth: async () => ipcRenderer.invoke("auth:startClaudeOauth"),
@@ -22,6 +24,11 @@ contextBridge.exposeInMainWorld("lilto", {
     const wrapped = (_event: unknown, event: AgentLoopEvent) => listener(event);
     ipcRenderer.on(AGENT_LOOP_EVENT_CHANNEL, wrapped);
     return () => ipcRenderer.removeListener(AGENT_LOOP_EVENT_CHANNEL, wrapped);
+  },
+  onSchedulerNotification: (listener: (event: SchedulerNotificationEvent) => void) => {
+    const wrapped = (_event: unknown, event: SchedulerNotificationEvent) => listener(event);
+    ipcRenderer.on(SCHEDULER_NOTIFICATION_CHANNEL, wrapped);
+    return () => ipcRenderer.removeListener(SCHEDULER_NOTIFICATION_CHANNEL, wrapped);
   },
   onAuthStateChanged: (listener: (state: unknown) => void) => {
     const wrapped = (_event: unknown, state: unknown) => listener(state);

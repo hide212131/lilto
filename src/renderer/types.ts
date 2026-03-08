@@ -1,5 +1,6 @@
 import type { AgentLoopEvent } from "../shared/agent-loop.js";
 import type { ActiveProvider, OAuthProviderId, ProviderSettings } from "../shared/provider-settings.js";
+import type { SchedulerNotificationEvent } from "../shared/scheduler.js";
 
 export type SkillSource = "bundled" | "user";
 
@@ -64,6 +65,7 @@ export type Session = {
   id: string;
   title: string;
   createdAt: number;
+  backendSessionId?: string;
   messages: Message[];
 };
 
@@ -71,7 +73,8 @@ declare global {
   interface Window {
     lilto: {
       submitPrompt: (
-        text: string
+        text: string,
+        conversationId?: string | null
       ) => Promise<
         // 既存契約との互換性維持: submitPrompt の戻り値は変更しない。
         | { ok: true; response: { text: string } }
@@ -106,6 +109,7 @@ declare global {
       checkSkillUpdates: () => Promise<SkillUpdateInfo[]>;
       getPlatform: () => string;
       onAgentLoopEvent: (listener: (event: AgentLoopEvent) => void) => () => void;
+      onSchedulerNotification: (listener: (event: SchedulerNotificationEvent) => void) => () => void;
       onAuthStateChanged: (listener: (state: AuthState) => void) => () => void;
       onFocusComposer: (listener: () => void) => () => void;
     };

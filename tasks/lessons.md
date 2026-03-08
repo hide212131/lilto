@@ -1,5 +1,17 @@
 # Lessons
 
+## 2026-03-08
+
+| 変更内容 | ミス/課題 | 再発防止ルール |
+|---|---|---|
+| `npm start` だけでは scheduler binary 解決が `process.resourcesPath/bin` 側に寄ってしまい、開発中に `scheduler binary not found` で cron 機能が使えなかったため、開発用 binary を優先解決し、`start` で native build を先に実行するよう修正。 | Electron 開発起動では `process.resourcesPath !== process.cwd()` が常に成り立ちやすく、これをそのまま「配布環境」と見なすと、開発用 native binary が存在していても誤った場所を参照してしまう。さらに `npm start` が native build を含まないと、新規環境で binary 自体が未生成のまま起動して壊れる。 | Electron で native companion binary を使う機能は、環境判定を `resourcesPath` 差分だけに頼らず「開発用出力が存在するか」を先に見る。加えて、日常導線の起動コマンド（`npm start` など）には必要な native build を含め、追加の環境変数なしで最小動作する状態を標準にする。 |
+| `add-cron-scheduler-tool` の OpenSpec proposal/design/specs/tasks を新規作成し、Rust 製 scheduler daemon・Pi custom tool・session 通知配送の責務分割を artifacts に明文化した。 | 「新しい機能」と「既存 runtime への組み込み」を1つの capability に混ぜると、spec が肥大化し、どこが新規要件でどこが既存変更か曖昧になりやすい。 | 非同期機能や外部 daemon を伴う change では、まず「ユーザー向け capability」と「既存基盤への delta requirement」を分離して proposal に書く。specs でも新規 capability spec と既存 capability delta spec を分け、tool責務と runtime責務を混同しない。 |
+| `cron` tool 実装で、Renderer の会話 ID と Pi session ID を `session_bound` イベントで対応付け、scheduler 通知を `backendSessionId` 基準で会話へ戻すようにした。 | UI 独自 session ID と SDK の session ID を同一視すると、バックグラウンド通知の配送先が決まらず、別会話へ誤配信または不達になりやすい。 | バックグラウンドイベントや外部 daemon が session を参照する機能では、「UI の会話ID」と「runtime の sessionID」を最初に分離して考える。必要なら bind イベントやマッピングを追加し、保存層と実行層の識別子を混同しない。 |
+| Main 起動時に ESM 依存の `@mariozechner/pi-ai` を CommonJS から静的 import して Electron 起動不能になったため、`cron-tool` を dynamic import 化した。 | Node/Electron Main が CJS 出力のまま ESM パッケージを静的 import すると、TypeScript build は通っても実起動で `ERR_REQUIRE_ESM` が出て初めて壊れる。 | Electron Main から外部 ESM パッケージを追加するときは、`tsc` 成功だけで安心せず実際にアプリを起動する。CJS 出力のままなら dynamic import ラッパーで読めるかを実装時点で確認する。 |
+| `scheduler-daemon` の native build を再開し、`tokio` の `io-std` feature 追加、one-shot 登録の `Duration` 化、DB 復元時のエラー型整理、ジョブ解除キー修正を入れて release build と実バイナリ発火確認まで完了した。 | TypeScript/Electron 側が通っていても、native daemon を同時導入した変更では Rust 側の feature 不足や crate API 差分が最後に残りがちで、実機ビルドまで回さないと未完成のまま見逃しやすい。 | Native バイナリを追加した change では、完了判定前に `cargo check` と本番相当の build script を必ず両方実行する。さらに最小スモークテストで「起動できる」「コマンド応答できる」「イベント発火する」を 1 回確認してから締める。 |
+| `cron` tool の引数生成失敗に対し、高水準 operation（`set_timer`, `set_reminder_at`, `set_daily_reminder`）を追加し、AI が cron 式や RFC3339 を直接組み立てなくても登録できるよう整理した。 | LLM に自由度の高い日時書式を直接組み立てさせると、tool schema が正しくても引数生成段階で失敗しやすく、ツール未実行のまま終わる。 | 自然言語から時刻指定を受ける custom tool では、高頻度ケースを高水準 operation に切り出し、複雑ケースだけ低水準 API を残す。AI に書式化させる項目は最小化し、正規化は tool 実装側に寄せる。 |
+| scheduler 通知に optional な `followUpInstruction` を追加し、通知表示の直後に同一会話へ background prompt を投げて AI が後続処理を続けられるようにした。 | Main だけで follow-up を完結させようとすると、`conversationId` は Renderer 側セッション管理にしかなく、`backendSessionId` だけでは UI への書き戻し先と follow-up 表示順序を維持しにくい。 | scheduler 由来の follow-up で UI 会話への追記順序が重要な場合は、Renderer が持つ `conversationId` と `backendSessionId` の対応を使う。発火イベントは必要最小限の payload を Main から送り、follow-up 実行の起点は通知を書き込む側に寄せる。 |
+
 ## 2026-03-07
 
 | 変更内容 | ミス/課題 | 再発防止ルール |

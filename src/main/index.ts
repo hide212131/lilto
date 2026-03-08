@@ -6,13 +6,16 @@ import { ClaudeAuthService } from "./auth-service";
 import { readConfig } from "./config";
 import { registerAppShortcut, unregisterAppShortcut } from "./global-shortcut";
 import { HeartbeatScheduler } from "./heartbeat";
+import { SCHEDULER_NOTIFICATION_CHANNEL } from "./ipc-contract";
 import { registerAgentIpcHandlers } from "./ipc";
 import { createLogger } from "./logger";
 import { NotificationService } from "./notifications";
 import { ProviderSettingsService } from "./provider-settings";
+import { SchedulerService } from "./scheduler";
 import { setupSkillRuntime } from "./skill-runtime";
 import { createCliCompatibilityMap } from "./command-compat";
 import { resolveAppIcon, resolveWindowIcon } from "./icon-assets";
+import type { SchedulerNotificationEvent } from "../shared/scheduler";
 
 const config = readConfig();
 const logger = createLogger("main");
@@ -24,6 +27,12 @@ const notificationService = new NotificationService();
 
 const authService = new ClaudeAuthService({ logger: createLogger("auth") });
 const providerSettingsService = new ProviderSettingsService({ logger: createLogger("providers") });
+
+function broadcastSchedulerNotification(event: SchedulerNotificationEvent): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send(SCHEDULER_NOTIFICATION_CHANNEL, event);
+  }
+}
 
 const heartbeat = new HeartbeatScheduler({
   intervalMs: config.heartbeatIntervalMs,
@@ -108,10 +117,27 @@ void app.whenReady().then(() => {
     };
   }
 
+  const scheduler = new SchedulerService({
+    logger: createLogger("scheduler"),
+    userDataDir: app.getPath("userData"),
+    onNotification: (event) => {
+      broadcastSchedulerNotification(event);
+      if (BrowserWindow.getFocusedWindow() === null) {
+        notificationService.notify("lilto - スケジュール通知", event.message);
+        notificationService.incrementBadge();
+      }
+    }
+  });
+  void scheduler.start().catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error("scheduler_start_failed", { message });
+  });
+
   const agentRuntime = new AgentRuntime({
     logger: createLogger("agent"),
     authService,
     workspaceDir: skillRuntime.workspaceDir,
+    scheduler,
     availableSkills: skillRuntime.availableSkills
   });
 

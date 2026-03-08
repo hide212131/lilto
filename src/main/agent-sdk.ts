@@ -5,6 +5,8 @@ import type { ProviderSettings } from "./provider-settings";
 import { isCustomProviderReady } from "./provider-settings";
 import { shouldPrioritizeAgentBrowser, shouldPrioritizeSkillCreator } from "./skill-runtime";
 import { createCliCompatibilityMap, isWindowsExecutionPolicyError } from "./command-compat";
+import { createCronTool } from "./cron-tool";
+import type { SchedulerClient } from "./scheduler";
 import type { AgentLoopEvent } from "../shared/agent-loop";
 import type { OAuthProviderId } from "../shared/provider-settings";
 
@@ -45,6 +47,7 @@ type AgentEvent = {
 type PiSession = {
   prompt: (text: string) => Promise<void>;
   subscribe: (listener: (event: AgentEvent) => void) => () => void;
+  sessionId?: string;
 };
 
 type PiModel = {
@@ -115,6 +118,8 @@ export async function createPiSessionFromSdk(options: {
   model?: PiModel;
   oauthProvider?: OAuthProviderId;
   cwd?: string;
+  customTools?: unknown[];
+  sessionManager?: unknown;
 }): Promise<PiSession> {
   const sessionCwd = options.cwd ?? process.cwd();
   const { AuthStorage, createAgentSession, ModelRegistry, SessionManager } = (await importEsm(
@@ -127,6 +132,7 @@ export async function createPiSessionFromSdk(options: {
       modelRegistry: unknown;
       cwd: string;
       model?: PiModel;
+      customTools?: unknown[];
     }) => Promise<{ session: unknown }>;
     ModelRegistry: new (authStorage: unknown) => unknown;
     SessionManager: {
@@ -144,15 +150,16 @@ export async function createPiSessionFromSdk(options: {
   }
   const modelRegistry = new ModelRegistry(authStorage);
 
-  const sessionManager =
-    typeof SessionManager.create === "function" ? SessionManager.create(sessionCwd) : SessionManager.inMemory(sessionCwd);
+  const sessionManager = options.sessionManager ??
+    (typeof SessionManager.create === "function" ? SessionManager.create(sessionCwd) : SessionManager.inMemory(sessionCwd));
 
   const { session } = await createAgentSession({
     sessionManager,
     authStorage,
     modelRegistry,
     cwd: sessionCwd,
-    model: selectedModel
+    model: selectedModel,
+    customTools: options.customTools
   });
 
   return session as PiSession;
@@ -472,25 +479,41 @@ function withScopedProxyEnvironment(settings: ProviderSettings): () => void {
 }
 
 export class AgentRuntime {
-  private readonly createSession: (options: { apiKey: string | null; model?: PiModel; cwd?: string }) => Promise<PiSession>;
+  private readonly createSession: (options: {
+    apiKey: string | null;
+    model?: PiModel;
+    cwd?: string;
+    oauthProvider?: OAuthProviderId;
+    customTools?: unknown[];
+    sessionManager?: unknown;
+  }) => Promise<PiSession>;
   private readonly authService: Pick<ClaudeAuthService, "getState" | "getApiKey">;
   private readonly logger: Logger;
   private readonly workspaceDir?: string;
   private readonly availableSkillNames: Set<string>;
-  private session: PiSession | null = null;
-  private sessionKey: string | null = null;
+  private readonly scheduler?: SchedulerClient;
+  private readonly sessionCache = new Map<string, PiSession>();
   private _abortReject: ((reason: Error) => void) | null = null;
 
   constructor({
     createSession = createPiSessionFromSdk,
     authService,
     workspaceDir,
+    scheduler,
     availableSkills = [],
     logger = createLogger("agent")
   }: {
-    createSession?: (options: { apiKey: string | null; model?: PiModel; cwd?: string }) => Promise<PiSession>;
+    createSession?: (options: {
+      apiKey: string | null;
+      model?: PiModel;
+      cwd?: string;
+      oauthProvider?: OAuthProviderId;
+      customTools?: unknown[];
+      sessionManager?: unknown;
+    }) => Promise<PiSession>;
     authService: Pick<ClaudeAuthService, "getState" | "getApiKey">;
     workspaceDir?: string;
+    scheduler?: SchedulerClient;
     availableSkills?: Array<{ name: string }>;
     logger?: Logger;
   }) {
@@ -498,6 +521,7 @@ export class AgentRuntime {
     this.authService = authService;
     this.logger = logger;
     this.workspaceDir = workspaceDir;
+    this.scheduler = scheduler;
     this.availableSkillNames = new Set(availableSkills.map((skill) => skill.name));
   }
 
@@ -506,7 +530,6 @@ export class AgentRuntime {
       this._abortReject(new Error("aborted"));
       this._abortReject = null;
     }
-    // Discard the current session so the next request starts fresh.
     this.invalidateSession();
   }
 
@@ -525,8 +548,7 @@ export class AgentRuntime {
   }
 
   private invalidateSession(): void {
-    this.session = null;
-    this.sessionKey = null;
+    this.sessionCache.clear();
   }
 
   private async ensureSession(options: {
@@ -534,8 +556,10 @@ export class AgentRuntime {
     model?: PiModel;
     oauthProvider?: OAuthProviderId;
     cwd?: string;
+    conversationId?: string;
   }): Promise<PiSession> {
     const signature = JSON.stringify({
+      conversationId: options.conversationId ?? "default",
       apiKey: options.apiKey,
       provider: options.model?.provider ?? "anthropic",
       model: options.model?.id ?? "default",
@@ -544,29 +568,35 @@ export class AgentRuntime {
       cwd: options.cwd ?? process.cwd()
     });
 
-    if (this.session && this.sessionKey === signature) {
+    const existing = this.sessionCache.get(signature);
+    if (existing) {
       this.logger.info("agent_session_reused", {
+        conversationId: options.conversationId ?? "default",
         provider: options.model?.provider ?? options.oauthProvider ?? "anthropic",
         modelId: options.model?.id ?? null
       });
-      return this.session;
+      return existing;
     }
 
     this.logger.info("agent_session_creating", {
+      conversationId: options.conversationId ?? "default",
       provider: options.model?.provider ?? options.oauthProvider ?? "anthropic",
       modelId: options.model?.id ?? null,
       cwd: options.cwd ?? process.cwd()
     });
-    this.session = await this.createSession(options);
-    this.sessionKey = signature;
-    return this.session;
+    const customTools = this.scheduler
+      ? [await createCronTool({ scheduler: this.scheduler, logger: this.logger })]
+      : [];
+    const session = await this.createSession({ ...options, customTools });
+    this.sessionCache.set(signature, session);
+    return session;
   }
 
   private async runSessionPrompt(
     text: string,
-    options: { apiKey: string | null; model?: PiModel; oauthProvider?: OAuthProviderId; cwd?: string },
+    options: { apiKey: string | null; model?: PiModel; oauthProvider?: OAuthProviderId; cwd?: string; conversationId?: string },
     providerSettings: ProviderSettings,
-    hooks?: { requestId: string; onLoopEvent?: (event: AgentLoopEvent) => void }
+    hooks?: { requestId: string; conversationId?: string; onLoopEvent?: (event: AgentLoopEvent) => void }
   ): Promise<AgentResult> {
     const restoreProxyEnv = withScopedProxyEnvironment(providerSettings);
     try {
@@ -576,6 +606,12 @@ export class AgentRuntime {
         modelId: options.model?.id ?? null
       });
       const session = await this.ensureSession(options);
+      hooks?.onLoopEvent?.({
+        type: "session_bound",
+        requestId: hooks.requestId,
+        conversationId: hooks.conversationId,
+        agentSessionId: session.sessionId ?? "unknown"
+      });
       let streamOutput = "";
       let finalOutput = "";
       let thinkingDeltaSeenInBlock = false;
@@ -733,7 +769,7 @@ export class AgentRuntime {
   async submitPrompt(
     text: string,
     providerSettings: ProviderSettings,
-    hooks?: { requestId: string; onLoopEvent?: (event: AgentLoopEvent) => void }
+    hooks?: { requestId: string; conversationId?: string; onLoopEvent?: (event: AgentLoopEvent) => void }
   ): Promise<AgentResult> {
     this.logger.info("agent_prompt_received", {
       textLength: text.length,
@@ -839,7 +875,7 @@ export class AgentRuntime {
               : "not-required";
         return await this.runSessionPrompt(
           promptText,
-          { apiKey, model, oauthProvider: providerSettings.oauthProvider, ...runOptionsBase },
+          { apiKey, model, oauthProvider: providerSettings.oauthProvider, conversationId: hooks?.conversationId, ...runOptionsBase },
           providerSettings,
           hooks
         );
@@ -873,7 +909,7 @@ export class AgentRuntime {
 
       return await this.runSessionPrompt(
         promptText,
-        { apiKey, model: undefined, oauthProvider: providerSettings.oauthProvider, ...runOptionsBase },
+        { apiKey, model: undefined, oauthProvider: providerSettings.oauthProvider, conversationId: hooks?.conversationId, ...runOptionsBase },
         providerSettings,
         hooks
       );

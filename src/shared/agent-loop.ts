@@ -2,6 +2,7 @@ export type AgentRunEndStatus = "completed" | "failed" | "aborted";
 
 export type AgentLoopEvent =
   | { type: "run_start"; requestId: string }
+  | { type: "session_bound"; requestId: string; conversationId?: string; agentSessionId: string }
   | { type: "thinking_start"; requestId: string }
   | { type: "thinking_delta"; requestId: string; delta: string }
   | { type: "thinking_end"; requestId: string }

@@ -8,3 +8,4 @@ test/artifacts/
 .lilto-provider-settings.json
 skills/bundled/
 build/
+native/scheduler-daemon/target
