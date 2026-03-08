@@ -1,11 +1,30 @@
 import { LitElement, html, css } from "lit";
-import { customElement, property } from "lit/decorators.js";
+import { customElement, property, state } from "lit/decorators.js";
 import type { Session } from "../types.js";
 
 @customElement("lilt-chat-history")
 export class LiltChatHistory extends LitElement {
   @property({ type: Array }) sessions: Session[] = [];
   @property() activeSessionId: string | null = null;
+  @state() private _menuOpenId: string | null = null;
+  @state() private _editingId: string | null = null;
+  @state() private _editingTitle = "";
+
+  private _onDocClick = () => {
+    if (this._menuOpenId !== null) {
+      this._menuOpenId = null;
+    }
+  };
+
+  connectedCallback() {
+    super.connectedCallback();
+    document.addEventListener("click", this._onDocClick);
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    document.removeEventListener("click", this._onDocClick);
+  }
 
   static styles = css`
     :host {
@@ -51,10 +70,12 @@ export class LiltChatHistory extends LitElement {
       line-height: 1.5;
     }
     .session-item {
+      position: relative;
       display: flex;
-      flex-direction: column;
+      flex-direction: row;
+      align-items: center;
       gap: 2px;
-      padding: 10px 16px;
+      padding: 10px 8px 10px 16px;
       cursor: pointer;
       border-left: 3px solid transparent;
       transition: background 0.1s;
@@ -65,6 +86,16 @@ export class LiltChatHistory extends LitElement {
     .session-item.active {
       background: #eff6ff;
       border-left-color: #3b82f6;
+    }
+    .session-item.editing {
+      cursor: default;
+    }
+    .session-info {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
     }
     .session-title {
       font-size: 13px;
@@ -77,6 +108,76 @@ export class LiltChatHistory extends LitElement {
     .session-date {
       font-size: 11px;
       color: var(--muted, #6b7280);
+    }
+    .session-title-input {
+      font-size: 13px;
+      font-weight: 500;
+      font-family: inherit;
+      color: var(--text, #1f2328);
+      border: 1px solid #3b82f6;
+      border-radius: 4px;
+      padding: 1px 5px;
+      width: 100%;
+      box-sizing: border-box;
+      outline: none;
+      background: #ffffff;
+    }
+    .menu-btn {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      border: none;
+      border-radius: 4px;
+      background: transparent;
+      cursor: pointer;
+      color: var(--muted, #6b7280);
+      opacity: 0;
+      transition: opacity 0.1s, background 0.1s;
+      padding: 0;
+      font-size: 16px;
+      line-height: 1;
+    }
+    .session-item:hover .menu-btn,
+    .menu-btn.open {
+      opacity: 1;
+    }
+    .menu-btn:hover {
+      background: var(--line, #dddddf);
+      color: var(--text, #1f2328);
+    }
+    .dropdown {
+      position: absolute;
+      right: 8px;
+      top: calc(100% - 4px);
+      z-index: 100;
+      background: #ffffff;
+      border: 1px solid var(--line, #dddddf);
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+      min-width: 140px;
+      overflow: hidden;
+    }
+    .dropdown-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 14px;
+      font-size: 13px;
+      color: var(--text, #1f2328);
+      cursor: pointer;
+      transition: background 0.1s;
+    }
+    .dropdown-item:hover {
+      background: var(--bg, #f3f3f4);
+    }
+    .dropdown-item.danger {
+      color: #dc2626;
+    }
+    .dropdown-item.danger:hover {
+      background: #fef2f2;
     }
   `;
 
@@ -94,17 +195,101 @@ export class LiltChatHistory extends LitElement {
 
   private _renderItem(session: Session) {
     const isActive = session.id === this.activeSessionId;
+    const isEditing = this._editingId === session.id;
     const date = new Date(session.createdAt);
     const dateLabel = this._formatDate(date);
+    const menuOpen = this._menuOpenId === session.id;
     return html`
       <div
-        class="session-item ${isActive ? "active" : ""}"
-        @click=${() => this._selectSession(session)}
+        class="session-item ${isActive ? "active" : ""} ${isEditing ? "editing" : ""}"
+        @click=${() => !isEditing && this._selectSession(session)}
       >
-        <div class="session-title">${session.title}</div>
-        <div class="session-date">${dateLabel}</div>
+        <div class="session-info">
+          ${isEditing
+            ? html`<input
+                class="session-title-input"
+                .value=${this._editingTitle}
+                @input=${(e: Event) => { this._editingTitle = (e.target as HTMLInputElement).value; }}
+                @keydown=${(e: KeyboardEvent) => this._onEditKeydown(e, session)}
+                @blur=${() => this._commitRename(session)}
+                @click=${(e: Event) => e.stopPropagation()}
+              />`
+            : html`<div class="session-title">${session.title}</div>`
+          }
+          <div class="session-date">${dateLabel}</div>
+        </div>
+        ${!isEditing ? html`
+          <button
+            class="menu-btn ${menuOpen ? "open" : ""}"
+            title="オプション"
+            @click=${(e: Event) => this._toggleMenu(e, session.id)}
+          >⋮</button>
+          ${menuOpen ? html`
+            <div class="dropdown" @click=${(e: Event) => e.stopPropagation()}>
+              <div class="dropdown-item" @click=${(e: Event) => this._onRename(e, session)}>
+                ✏️ 名称変更
+              </div>
+              <div class="dropdown-item danger" @click=${(e: Event) => this._onDelete(e, session)}>
+                🗑️ 削除
+              </div>
+            </div>
+          ` : ""}
+        ` : ""}
       </div>
     `;
+  }
+
+  private _toggleMenu(e: Event, sessionId: string) {
+    e.stopPropagation();
+    this._menuOpenId = this._menuOpenId === sessionId ? null : sessionId;
+  }
+
+  private _onRename(e: Event, session: Session) {
+    e.stopPropagation();
+    this._menuOpenId = null;
+    this._editingId = session.id;
+    this._editingTitle = session.title;
+    // Focus the input after render
+    void this.updateComplete.then(() => {
+      const input = this.renderRoot.querySelector<HTMLInputElement>(".session-title-input");
+      input?.focus();
+      input?.select();
+    });
+  }
+
+  private _onEditKeydown(e: KeyboardEvent, session: Session) {
+    if (e.key === "Enter") {
+      this._commitRename(session);
+    } else if (e.key === "Escape") {
+      this._cancelRename();
+    }
+  }
+
+  private _commitRename(session: Session) {
+    if (this._editingId !== session.id) return;
+    const newTitle = this._editingTitle.trim();
+    this._editingId = null;
+    if (newTitle && newTitle !== session.title) {
+      this.dispatchEvent(new CustomEvent("rename-session", {
+        detail: { sessionId: session.id, newTitle },
+        bubbles: true,
+        composed: true
+      }));
+    }
+  }
+
+  private _cancelRename() {
+    this._editingId = null;
+  }
+
+  private _onDelete(e: Event, session: Session) {
+    e.stopPropagation();
+    this._menuOpenId = null;
+    this.dispatchEvent(new CustomEvent("delete-session", {
+      detail: { sessionId: session.id },
+      bubbles: true,
+      composed: true
+    }));
   }
 
   private _formatDate(date: Date): string {

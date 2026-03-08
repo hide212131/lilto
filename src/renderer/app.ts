@@ -14,24 +14,7 @@ import { createInitialLoopState, reduceLoopState } from "../shared/agent-loop.js
 
 const SESSIONS_STORAGE_KEY = "lilto-sessions";
 
-@customElement("lilt-app")
-export class LiltApp extends LitElement {
-  @property({ type: Object }) authState: AuthState | null = null;
-  @property({ type: Object }) providerSettings: ProviderSettings = {
-    activeProvider: "oauth",
-    oauthProvider: "anthropic",
-    customProvider: {
-      name: "Ollama",
-      baseUrl: "http://127.0.0.1:11434/v1",
-      apiKey: "",
-      modelId: "qwen2.5:0.5b"
-    },
-    networkProxy: {
-      useProxy: false
-    },
-    chatSettings: {
-      enterToSend: false
-    },
+  private async _doSend(text: string) {
     updatedAt: Date.now()
   };
   @property({ type: Array }) messages: Message[] = [];
@@ -91,7 +74,6 @@ export class LiltApp extends LitElement {
     .stage {
       width: min(980px, calc(100% - 24px));
       height: 100%;
-      display: flex;
       flex-direction: column;
       min-height: 0;
       margin: 0;
@@ -260,11 +242,16 @@ export class LiltApp extends LitElement {
           .sessions=${this.sessions}
           .activeSessionId=${this.activeSessionId}
           @select-session=${this._onSelectSession}
+          @rename-session=${this._onRenameSession}
+          @delete-session=${this._onDeleteSession}
         ></lilt-chat-history>
 
         <div class="main">
           <div class="stage">
-            <lilt-message-list .messages=${this.messages}></lilt-message-list>
+            <lilt-message-list
+              .messages=${this.messages}
+              @retry-message=${this._onRetryMessage}
+            ></lilt-message-list>
             <lilt-composer
               .disabled=${!this._canSend()}
               .isSending=${this.isSending}
@@ -308,6 +295,26 @@ export class LiltApp extends LitElement {
     this._pendingLabel = "";
   }
 
+  private _onRenameSession(e: CustomEvent<{ sessionId: string; newTitle: string }>) {
+    const { sessionId, newTitle } = e.detail;
+    this.sessions = this.sessions.map((s) =>
+      s.id === sessionId ? { ...s, title: newTitle } : s
+    );
+    this._saveSessions();
+  }
+
+  private _onDeleteSession(e: CustomEvent<{ sessionId: string }>) {
+    const { sessionId } = e.detail;
+    this.sessions = this.sessions.filter((s) => s.id !== sessionId);
+    this._saveSessions();
+    if (sessionId === this._currentSessionId) {
+      this.messages = [];
+      this.loopState = createInitialLoopState();
+      this._currentSessionId = null;
+      this.activeSessionId = null;
+    }
+  }
+
   private _onAuthStateUpdated(e: CustomEvent<AuthState>) {
     this.authState = e.detail;
     this._syncSendability();
@@ -337,6 +344,7 @@ export class LiltApp extends LitElement {
     void window.lilto.abortPrompt();
   }
 
+<<<<<<< HEAD
   private async _onSendMessage(e: CustomEvent<{ text: string }>) {
     const text = e.detail.text;
     if (!this._canSend() || !text) {
@@ -353,6 +361,9 @@ export class LiltApp extends LitElement {
 
     this._addMessage("user", text);
     this._saveCurrentSession();
+=======
+  private async _doSend(text: string) {
+>>>>>>> e64b26e (feat: UI enhancements - reload button, copy button, chat history menu)
     const pendingIdx = this._addPendingMessage("assistant", "実行開始を待っています...");
     this._pendingAssistantIndex = pendingIdx;
     this._activeRequestId = null;
@@ -393,6 +404,34 @@ export class LiltApp extends LitElement {
       this._toolProgress = [];
       this._pendingLabel = "";
     }
+  }
+
+  private async _onSendMessage(e: CustomEvent<{ text: string }>) {
+    const text = e.detail.text;
+    if (!this._canSend() || !text) {
+      if (!this._canSend()) {
+        this._addMessage("system",
+          this.providerSettings.activeProvider === "oauth"
+            ? "プロバイダー設定が必要です。Settings から OAuth Provider を設定してください。"
+            : "Custom Provider の name / baseUrl を設定して保存してから送信してください。"
+        );
+        this.settingsOpen = true;
+      }
+      return;
+    }
+
+    this._addMessage("user", text);
+    await this._doSend(text);
+  }
+
+  private async _onRetryMessage(e: CustomEvent<{ messageId: string; text: string }>) {
+    if (!this._canSend()) return;
+    const { messageId, text } = e.detail;
+    const idx = this.messages.findIndex((m) => m.id === messageId);
+    if (idx === -1) return;
+    // Remove all messages from idx+1 onwards (clears the assistant response and any subsequent messages)
+    this.messages = this.messages.slice(0, idx + 1);
+    await this._doSend(text);
   }
 
   private _onLoopEvent(event: AgentLoopEvent) {
