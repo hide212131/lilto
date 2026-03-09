@@ -91,3 +91,21 @@ npx.cmd agent-browser screenshot test/artifacts/live-ui-manual.png
 - 観測結果（成功/失敗、返り値）
 - 最終判定（目的を満たしたか）
 - 失敗時は次の一手
+
+## Windows Practical Learnings (2026-03-10)
+
+- On some Windows environments, `npx.cmd agent-browser ...` can fail with `spawn EFTYPE` when Node reports `process.arch=arm64` but the usable binary is x64.
+- If this happens, run the x64 binary directly:
+
+```powershell
+& .\node_modules\agent-browser\bin\agent-browser-win32-x64.exe --help
+```
+
+- If `agent-browser` fails to start daemon with a socket-like path error, continue manual verification via CDP using Playwright:
+
+```js
+const { chromium } = require("playwright-core");
+const browser = await chromium.connectOverCDP("http://127.0.0.1:9222");
+```
+
+- For Japanese prompt verification on Windows, avoid piping multi-line scripts into `node` from PowerShell; use a UTF-8 `.js` file to prevent mojibake.
