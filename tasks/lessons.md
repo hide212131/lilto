@@ -1,5 +1,11 @@
 # Lessons
 
+## 2026-03-12
+
+| 変更内容 | ミス/課題 | 再発防止ルール |
+|---|---|---|
+| `main` 追従の rebase 中に `tasks/lessons.md` が競合したため、main 側の追記と作業ブランチ側の追記を両方残す形で解消。 | 学びログのように末尾追記が続く単一ファイルは、別ブランチでも同じ位置へ追記されやすく、`main` 追従時の競合点になりやすい。 | 継続的に追記する運用ログを持つブランチでは、`main` 取り込み前に競合しやすいファイルを先に確認し、rebase 時は「どちらを消すか」ではなく「日付順で両方残せるか」を基準に解消する。 |
+
 ## 2026-03-11
 
 | 変更内容 | ミス/課題 | 再発防止ルール |
@@ -178,3 +184,29 @@
 | メイン画面の未準備ステータス文言を「プロバイダー設定が必要」へ統一。 | provider 対応後にステータスメッセージが provider 固有名を含むままだと、UX 文言と設定モデルがずれる。 | provider 複数対応時の状態文言は特定サービス名を避け、設定アクションを示す汎用表現（例: プロバイダー設定が必要）へ統一する。 |
 | OAuth Provider を切り替えても認証ボタンで Claude サイトへ遷移する不具合を修正。 | OAuth Provider 選択値を UI ローカル状態に保持しただけで認証開始すると、保存済み設定（既定 anthropic）が使われ続ける。 | 設定依存のアクション（OAuth 開始）では、実行直前に対象設定を永続化してから処理を呼び出し、UI状態と実行時設定の乖離を防ぐ。 |
 | OpenAI Codex / Gemini CLI 選択時の空応答を修正し、agent 実行ログを拡充。 | OAuth provider を切り替えても session 作成時の provider/model 解決を既定 anthropic に任せると、認証先と実行モデルがずれて空応答や誤動作を招く。 | OAuth provider ベースで実行する処理は、API key 注入先だけでなく利用モデルも同じ provider に固定し、console へ provider/model/event 単位の進行ログを残して調査可能性を確保する。 |
+
+## 2026-03-09
+
+| �ύX��e | �~�X/�C�Â� | �Ĕ��h�~���[�� |
+|---|---|---|
+| Windows�� skills add ���ꂽsymlink�X�L�����ꗗ�ɏo�Ȃ��s���C�� | SKILL.md ��frontmatter�p�[�T�� \n �Œ�ŁACRLF (\r\n) ��܂ރt�@�C�����͂ł��� metadata �擾�Ɏ��s���Ă��� | frontmatter��͉͂��s�R�[�h��ˑ� (\r?\n) �Ŏ������ACRLF���͂̃e�X�g��K���ǉ����� |
+
+| 組み込み Skill の更新対象を拡張する際に user/bundled の優先順位を先に固定しないと判定漏れが起きる | 更新対象の拡張時に source 優先順位と重複排除の設計が後手になった | 更新対象拡張の変更は source 優先順位（user優先）と重複排除を実装前に決め、対応テストを同時に追加してから実装する |
+
+## 2026-03-10
+
+| 変更内容 | ミス/課題 | 再発防止ルール |
+|---|---|---|
+| `.github/skills/live-ui-manual-verification/SKILL.md` を、ライブ検証の前に `electron` Skill の接続フローを必須にする内容へ更新し、Windows向けコマンドを `npm.cmd` / `npx.cmd` に統一。 | 旧手順は `agent-browser` 実行方法が OS 混在で、Windows で実行ポリシーや起動手順の差分により再現性が落ちる余地があった。 | Electronライブ検証系 Skill を更新するときは、最初に「接続は `electron` Skill 準拠」を明記し、Windows 例は必ず `.cmd` 実行形式で記載する。 |
+
+## 2026-03-10 (Windows live-ui follow-up)
+
+| �ύX/���� | �~�X/���� | �Ĕ��h�~���[�� |
+|---|---|---|
+| Windows �� live UI ���؎��� `agent-browser` ���s�s�����i`spawn EFTYPE` / daemon start failure�j�ɑ��� | Node �� `process.arch` �Ǝ��s�\�o�C�i���̕s��v�ACLI �ˑ��̂܂ܐi�߂� | Windows �� live UI ���؂ł͍ŏ��� `node -p "process.platform + ' ' + process.arch"` ���m�F���A`agent-browser` ���s����Ȃ瑦 CDP + Playwright (`connectOverCDP`) �փt�H�[���o�b�N����B���{��v�����v�g���M�� UTF-8 `.js` �t�@�C�����s��D�悷��B |
+
+## 2026-03-10 (OpenSpec)
+
+| 作業 | ミス/気づき | 再発防止ルール |
+|---|---|---|
+| Windows Sandbox 対応の変更提案を OpenSpec で作成 | 提案時点で実装を盛り込みすぎると、後続の apply でスコープ逸脱しやすい。 | `proposal` は Why/What に限定し、`design` で技術判断、`tasks` で実装粒度を分離して最小変更を維持する。 |
