@@ -29,6 +29,9 @@ export class LiltApp extends LitElement {
     networkProxy: {
       useProxy: false
     },
+    toolExecution: {
+      useWindowsSandboxForTools: false
+    },
     chatSettings: {
       enterToSend: false
     },

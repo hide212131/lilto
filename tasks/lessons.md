@@ -210,3 +210,9 @@
 | 作業 | ミス/気づき | 再発防止ルール |
 |---|---|---|
 | Windows Sandbox 対応の変更提案を OpenSpec で作成 | 提案時点で実装を盛り込みすぎると、後続の apply でスコープ逸脱しやすい。 | `proposal` は Why/What に限定し、`design` で技術判断、`tasks` で実装粒度を分離して最小変更を維持する。 |
+
+## 2026-03-10 (Windows Sandbox apply)
+
+| 作業 | ミス/気づき | 再発防止ルール |
+|---|---|---|
+| Windows Sandbox 実行モードの実装と GUI 検証 | `agent-browser` は環境依存で daemon 起動（`.sock`）に失敗しうるため、`npm.cmd run e2e:electron` が不安定。 | GUI 変更時は `npm.cmd run e2e:electron` を最優先で試し、失敗時は原因（daemon 起動・権限・残留プロセス）を切り分けてログ付きで報告し、手動検証のスクリーンショットと設定永続化確認を併記する。 |

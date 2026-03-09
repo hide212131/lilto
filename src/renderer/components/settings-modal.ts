@@ -19,6 +19,9 @@ export class LiltSettingsModal extends LitElement {
     networkProxy: {
       useProxy: false
     },
+    toolExecution: {
+      useWindowsSandboxForTools: false
+    },
     chatSettings: {
       enterToSend: false
     },
@@ -31,6 +34,7 @@ export class LiltSettingsModal extends LitElement {
   @state() private _customApiKey = "";
   @state() private _customModelId = "";
   @state() private _useProxy = false;
+  @state() private _useWindowsSandboxForTools = false;
   @state() private _authCodeValue = "";
   @state() private _saveStatus = "";
   @state() private _providerSelStatus = "";
@@ -58,6 +62,7 @@ export class LiltSettingsModal extends LitElement {
   @state() private _skillUpdatesChecked = false;
 
   private readonly _isMac = window.lilto.getPlatform() === "darwin";
+  private readonly _isWindows = window.lilto.getPlatform() === "win32";
 
   private _boundKeydown = (e: KeyboardEvent) => {
     if (e.key === "Escape" && this.open) this._close();
@@ -84,6 +89,7 @@ export class LiltSettingsModal extends LitElement {
       this._customApiKey = cp.apiKey;
       this._customModelId = cp.modelId;
       this._useProxy = np.useProxy;
+      this._useWindowsSandboxForTools = this.providerSettings.toolExecution?.useWindowsSandboxForTools ?? false;
       this._oauthProvider = this.providerSettings.oauthProvider;
       this._enterToSend = cs?.enterToSend ?? false;
       this._globalShortcut = cs?.globalShortcut ?? "";
@@ -639,6 +645,24 @@ export class LiltSettingsModal extends LitElement {
             Proxy を使う（HTTP_PROXY / HTTPS_PROXY / NO_PROXY を利用）
           </label>
         </div>
+        ${this._isWindows
+          ? html`
+              <h4>Tool Execution</h4>
+              <div class="input-grid">
+                <label>
+                  <input
+                    id="use-windows-sandbox-tools"
+                    type="checkbox"
+                    .checked=${this._useWindowsSandboxForTools}
+                    @change=${(e: InputEvent) => {
+                      this._useWindowsSandboxForTools = (e.target as HTMLInputElement).checked;
+                    }}
+                  />
+                  Windows Sandbox で Bash / Write ツールを実行する
+                </label>
+              </div>
+            `
+          : ""}
         <div class="provider-actions">
           <button @click=${this._saveProviderAndProxy}>Save Provider Settings</button>
           <span class="status">${this._saveStatus}</span>
@@ -1016,6 +1040,24 @@ export class LiltSettingsModal extends LitElement {
             Proxy を使う（HTTP_PROXY / HTTPS_PROXY / NO_PROXY を利用）
           </label>
         </div>
+        ${this._isWindows
+          ? html`
+              <h4>Tool Execution</h4>
+              <div class="input-grid">
+                <label>
+                  <input
+                    id="use-windows-sandbox-tools"
+                    type="checkbox"
+                    .checked=${this._useWindowsSandboxForTools}
+                    @change=${(e: InputEvent) => {
+                      this._useWindowsSandboxForTools = (e.target as HTMLInputElement).checked;
+                    }}
+                  />
+                  Windows Sandbox で Bash / Write ツールを実行する
+                </label>
+              </div>
+            `
+          : ""}
         <div class="provider-actions">
           <button @click=${this._saveProviderAndProxy}>Save Provider Settings</button>
           <span class="status">${this._saveStatus}</span>
@@ -1125,6 +1167,9 @@ export class LiltSettingsModal extends LitElement {
       },
       networkProxy: {
         useProxy: this._useProxy
+      },
+      toolExecution: {
+        useWindowsSandboxForTools: this._useWindowsSandboxForTools
       }
     };
     const result = await window.lilto.saveProviderSettings(next);

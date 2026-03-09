@@ -6,6 +6,7 @@ import { isCustomProviderReady } from "./provider-settings";
 import { shouldPrioritizeAgentBrowser, shouldPrioritizeSkillCreator } from "./skill-runtime";
 import { createCliCompatibilityMap, isWindowsExecutionPolicyError } from "./command-compat";
 import { createCronTool } from "./cron-tool";
+import { WindowsSandboxError, WindowsSandboxExecutor } from "./windows-sandbox-executor";
 import type { SchedulerClient } from "./scheduler";
 import type { AgentLoopEvent } from "../shared/agent-loop";
 import type { OAuthProviderId } from "../shared/provider-settings";
@@ -49,6 +50,9 @@ type PiSession = {
   subscribe: (listener: (event: AgentEvent) => void) => () => void;
   sessionId?: string;
 };
+
+type PiTool = unknown;
+type ToolExecutionMode = "host" | "windows-sandbox";
 
 type PiModel = {
   id: string;
@@ -101,6 +105,14 @@ export function standardizeError(
 }
 
 function standardizeAgentRuntimeError(error: unknown): AgentError {
+  if (error instanceof WindowsSandboxError) {
+    return {
+      code: error.code,
+      message: error.message,
+      details: `stage=${error.stage}`,
+      retryable: false
+    };
+  }
   if (isWindowsExecutionPolicyError(error)) {
     const map = createCliCompatibilityMap("win32");
     return {
@@ -119,6 +131,7 @@ export async function createPiSessionFromSdk(options: {
   oauthProvider?: OAuthProviderId;
   cwd?: string;
   customTools?: unknown[];
+  tools?: PiTool[];
   sessionManager?: unknown;
 }): Promise<PiSession> {
   const sessionCwd = options.cwd ?? process.cwd();
@@ -132,6 +145,7 @@ export async function createPiSessionFromSdk(options: {
       modelRegistry: unknown;
       cwd: string;
       model?: PiModel;
+      tools?: PiTool[];
       customTools?: unknown[];
     }) => Promise<{ session: unknown }>;
     ModelRegistry: new (authStorage: unknown) => unknown;
@@ -159,6 +173,7 @@ export async function createPiSessionFromSdk(options: {
     modelRegistry,
     cwd: sessionCwd,
     model: selectedModel,
+    tools: options.tools,
     customTools: options.customTools
   });
 
@@ -237,6 +252,43 @@ function normalizeBaseUrl(baseUrl: string): string {
   } catch {
     return baseUrl;
   }
+}
+
+function resolveToolExecutionMode(settings: ProviderSettings): ToolExecutionMode {
+  if (process.platform !== "win32") {
+    return "host";
+  }
+  return settings.toolExecution?.useWindowsSandboxForTools ? "windows-sandbox" : "host";
+}
+
+async function createToolsForMode(
+  mode: ToolExecutionMode,
+  workspaceDir: string,
+  logger: Logger
+): Promise<PiTool[] | undefined> {
+  if (mode !== "windows-sandbox") {
+    return undefined;
+  }
+
+  const sandboxExecutor = new WindowsSandboxExecutor({ workspaceDir, logger });
+  sandboxExecutor.ensureAvailable();
+
+  const { createReadTool, createBashTool, createEditTool, createWriteTool } = (await importEsm(
+    "@mariozechner/pi-coding-agent"
+  )) as {
+    createReadTool: (cwd: string) => PiTool;
+    createBashTool: (cwd: string, options: { operations: ReturnType<WindowsSandboxExecutor["createBashOperations"]> }) => PiTool;
+    createEditTool: (cwd: string, options: { operations: ReturnType<WindowsSandboxExecutor["createEditOperations"]> }) => PiTool;
+    createWriteTool: (cwd: string, options: { operations: ReturnType<WindowsSandboxExecutor["createWriteOperations"]> }) => PiTool;
+  };
+
+  logger.info("tool_execution_mode_sandbox_enabled", { workspaceDir });
+  return [
+    createReadTool(workspaceDir),
+    createBashTool(workspaceDir, { operations: sandboxExecutor.createBashOperations() }),
+    createEditTool(workspaceDir, { operations: sandboxExecutor.createEditOperations() }),
+    createWriteTool(workspaceDir, { operations: sandboxExecutor.createWriteOperations() })
+  ];
 }
 
 function extractTextFromContent(content: unknown): string {
@@ -484,6 +536,7 @@ export class AgentRuntime {
     model?: PiModel;
     cwd?: string;
     oauthProvider?: OAuthProviderId;
+    tools?: PiTool[];
     customTools?: unknown[];
     sessionManager?: unknown;
   }) => Promise<PiSession>;
@@ -508,6 +561,7 @@ export class AgentRuntime {
       model?: PiModel;
       cwd?: string;
       oauthProvider?: OAuthProviderId;
+      tools?: PiTool[];
       customTools?: unknown[];
       sessionManager?: unknown;
     }) => Promise<PiSession>;
@@ -557,6 +611,8 @@ export class AgentRuntime {
     oauthProvider?: OAuthProviderId;
     cwd?: string;
     conversationId?: string;
+    tools?: PiTool[];
+    toolExecutionMode?: ToolExecutionMode;
   }): Promise<PiSession> {
     const signature = JSON.stringify({
       conversationId: options.conversationId ?? "default",
@@ -565,7 +621,8 @@ export class AgentRuntime {
       model: options.model?.id ?? "default",
       baseUrl: options.model?.baseUrl ?? "",
       oauthProvider: options.oauthProvider ?? "anthropic",
-      cwd: options.cwd ?? process.cwd()
+      cwd: options.cwd ?? process.cwd(),
+      toolExecutionMode: options.toolExecutionMode ?? "host"
     });
 
     const existing = this.sessionCache.get(signature);
@@ -582,7 +639,8 @@ export class AgentRuntime {
       conversationId: options.conversationId ?? "default",
       provider: options.model?.provider ?? options.oauthProvider ?? "anthropic",
       modelId: options.model?.id ?? null,
-      cwd: options.cwd ?? process.cwd()
+      cwd: options.cwd ?? process.cwd(),
+      toolExecutionMode: options.toolExecutionMode ?? "host"
     });
     const customTools = this.scheduler
       ? [await createCronTool({ scheduler: this.scheduler, logger: this.logger })]
@@ -594,7 +652,15 @@ export class AgentRuntime {
 
   private async runSessionPrompt(
     text: string,
-    options: { apiKey: string | null; model?: PiModel; oauthProvider?: OAuthProviderId; cwd?: string; conversationId?: string },
+    options: {
+      apiKey: string | null;
+      model?: PiModel;
+      oauthProvider?: OAuthProviderId;
+      cwd?: string;
+      conversationId?: string;
+      tools?: PiTool[];
+      toolExecutionMode?: ToolExecutionMode;
+    },
     providerSettings: ProviderSettings,
     hooks?: { requestId: string; conversationId?: string; onLoopEvent?: (event: AgentLoopEvent) => void }
   ): Promise<AgentResult> {
@@ -603,7 +669,8 @@ export class AgentRuntime {
       this.logger.info("agent_prompt_session_start", {
         requestId: hooks?.requestId ?? null,
         provider: options.model?.provider ?? options.oauthProvider ?? providerSettings.activeProvider,
-        modelId: options.model?.id ?? null
+        modelId: options.model?.id ?? null,
+        toolExecutionMode: options.toolExecutionMode ?? "host"
       });
       const session = await this.ensureSession(options);
       hooks?.onLoopEvent?.({
@@ -850,7 +917,37 @@ export class AgentRuntime {
       }
 
       const promptText = this.buildPromptWithSkillHint(text);
-      const runOptionsBase = { cwd: this.workspaceDir };
+      const runtimeCwd = this.workspaceDir ?? process.cwd();
+      const toolExecutionMode = resolveToolExecutionMode(providerSettings);
+      let tools: PiTool[] | undefined;
+      try {
+        tools = await createToolsForMode(toolExecutionMode, runtimeCwd, this.logger);
+      } catch (error) {
+        if (error instanceof WindowsSandboxError) {
+          this.logger.error("tool_execution_mode_prepare_failed", {
+            mode: toolExecutionMode,
+            stage: error.stage,
+            message: error.message
+          });
+          return {
+            ok: false,
+            error: {
+              code: error.code,
+              message: error.message,
+              details: `stage=${error.stage}`,
+              retryable: false
+            }
+          };
+        }
+        throw error;
+      }
+
+      this.logger.info("tool_execution_mode_resolved", {
+        mode: toolExecutionMode,
+        useWindowsSandboxForTools: providerSettings.toolExecution?.useWindowsSandboxForTools ?? false
+      });
+
+      const runOptionsBase = { cwd: this.workspaceDir, tools, toolExecutionMode };
 
       if (providerSettings.activeProvider === "custom-openai-completions") {
         if (!isCustomProviderReady(providerSettings)) {

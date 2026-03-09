@@ -19,6 +19,10 @@ export type NetworkProxySettings = {
   useProxy: boolean;
 };
 
+export type ToolExecutionSettings = {
+  useWindowsSandboxForTools: boolean;
+};
+
 export type ChatSettings = {
   enterToSend: boolean;
   globalShortcut: string;
@@ -34,10 +38,15 @@ export type ProviderSettings = {
   oauthProvider: OAuthProviderId;
   customProvider: CustomProviderSettings;
   networkProxy: NetworkProxySettings;
+  toolExecution: ToolExecutionSettings;
   chatSettings: ChatSettings;
   updatedAt: number;
 };
 
 export const DEFAULT_NETWORK_PROXY_SETTINGS: NetworkProxySettings = {
   useProxy: false
+};
+
+export const DEFAULT_TOOL_EXECUTION_SETTINGS: ToolExecutionSettings = {
+  useWindowsSandboxForTools: false
 };

@@ -28,6 +28,9 @@ function createProviderSettings(overrides = {}) {
     networkProxy: {
       useProxy: false
     },
+    toolExecution: {
+      useWindowsSandboxForTools: false
+    },
     updatedAt: Date.now(),
     ...overrides
   };
@@ -393,6 +396,54 @@ test("useProxy が OFF の場合は環境変数の Proxy を使わない", async
       process.env.HTTP_PROXY = prevHttpProxy;
     }
   }
+});
+
+test("toolExecution が OFF の場合は host モードで実行する", async () => {
+  let receivedOptions = null;
+  const runtime = new AgentRuntime({
+    authService: createAuthService("authenticated"),
+    createSession: async (options) => {
+      receivedOptions = options;
+      return {
+        subscribe(listener) {
+          listener({
+            type: "message_update",
+            assistantMessageEvent: { type: "text_delta", delta: "ok" }
+          });
+          return () => {};
+        },
+        async prompt() {}
+      };
+    },
+    logger: { info() {}, error() {} }
+  });
+
+  const result = await runtime.submitPrompt("test", createProviderSettings());
+  assert.equal(result.ok, true);
+  assert.equal(receivedOptions.toolExecutionMode, "host");
+  assert.equal(receivedOptions.tools, undefined);
+});
+
+test("Windows Sandbox 実行が ON で利用不可なら明示エラーを返す", async () => {
+  if (process.platform !== "win32") return;
+
+  const runtime = new AgentRuntime({
+    authService: createAuthService("authenticated"),
+    createSession: async () => {
+      throw new Error("should not be called");
+    },
+    logger: { info() {}, error() {} }
+  });
+
+  const result = await runtime.submitPrompt(
+    "test",
+    createProviderSettings({
+      toolExecution: { useWindowsSandboxForTools: true }
+    })
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "WINDOWS_SANDBOX_UNAVAILABLE");
 });
 
 test("useProxy が ON の場合は環境変数の Proxy を使う", async () => {

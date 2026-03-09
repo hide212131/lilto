@@ -7,8 +7,10 @@ import {
   type CustomProviderSettings,
   DEFAULT_CHAT_SETTINGS,
   type NetworkProxySettings,
+  DEFAULT_TOOL_EXECUTION_SETTINGS,
   OAUTH_PROVIDER_IDS,
   type OAuthProviderId,
+  type ToolExecutionSettings,
   type ProviderSettings
 } from "../shared/provider-settings";
 
@@ -17,6 +19,7 @@ export type {
   ChatSettings,
   CustomProviderSettings,
   NetworkProxySettings,
+  ToolExecutionSettings,
   OAuthProviderId,
   ProviderSettings
 } from "../shared/provider-settings";
@@ -47,6 +50,7 @@ function createDefaultSettings(): ProviderSettings {
       modelId: DEFAULT_MODEL_ID
     },
     networkProxy: { useProxy: hasProxyEnvironment() },
+    toolExecution: { ...DEFAULT_TOOL_EXECUTION_SETTINGS },
     chatSettings: { ...DEFAULT_CHAT_SETTINGS, globalShortcut: defaultGlobalShortcut() },
     updatedAt: Date.now()
   };
@@ -85,8 +89,16 @@ function normalizeSettings(value: unknown): ProviderSettings {
     record.networkProxy && typeof record.networkProxy === "object"
       ? (record.networkProxy as Record<string, unknown>)
       : {};
+  const toolExecution =
+    record.toolExecution && typeof record.toolExecution === "object"
+      ? (record.toolExecution as Record<string, unknown>)
+      : {};
   const defaultUseProxy = hasProxyEnvironment();
   const useProxy = typeof proxy.useProxy === "boolean" ? proxy.useProxy : defaultUseProxy;
+  const useWindowsSandboxForTools =
+    typeof toolExecution.useWindowsSandboxForTools === "boolean"
+      ? toolExecution.useWindowsSandboxForTools
+      : DEFAULT_TOOL_EXECUTION_SETTINGS.useWindowsSandboxForTools;
 
   return {
     activeProvider: normalizeActiveProvider(record.activeProvider),
@@ -100,6 +112,9 @@ function normalizeSettings(value: unknown): ProviderSettings {
     networkProxy: {
       useProxy
     },
+    toolExecution: {
+      useWindowsSandboxForTools
+    },
     chatSettings: normalizeChatSettings(record.chatSettings),
     updatedAt: typeof record.updatedAt === "number" ? record.updatedAt : Date.now()
   };
@@ -110,6 +125,7 @@ function isValidSavePayload(payload: unknown): payload is {
   oauthProvider?: OAuthProviderId;
   customProvider: CustomProviderSettings;
   networkProxy?: NetworkProxySettings;
+  toolExecution?: ToolExecutionSettings;
   chatSettings?: ChatSettings;
 } {
   if (!payload || typeof payload !== "object") return false;
@@ -139,6 +155,12 @@ function isValidSavePayload(payload: unknown): payload is {
     if (!record.networkProxy || typeof record.networkProxy !== "object") return false;
     const proxy = record.networkProxy as Record<string, unknown>;
     if (typeof proxy.useProxy !== "boolean") return false;
+  }
+
+  if (record.toolExecution !== undefined) {
+    if (!record.toolExecution || typeof record.toolExecution !== "object") return false;
+    const toolExecution = record.toolExecution as Record<string, unknown>;
+    if (typeof toolExecution.useWindowsSandboxForTools !== "boolean") return false;
   }
 
   if (record.chatSettings !== undefined) {
@@ -190,6 +212,7 @@ export class ProviderSettingsService {
       ...this.state,
       customProvider: { ...this.state.customProvider },
       networkProxy: { ...this.state.networkProxy },
+      toolExecution: { ...this.state.toolExecution },
       chatSettings: { ...this.state.chatSettings }
     };
   }
