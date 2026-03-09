@@ -5,6 +5,7 @@
 | 変更内容 | ミス/課題 | 再発防止ルール |
 |---|---|---|
 | Windows 配布物生成で `scripts/package-release.js` の `spawnSync("npm.cmd", ...)` が `EINVAL` を返して停止する問題を修正し、`.cmd` 起動が `EINVAL` のときは `cmd.exe /d /s /c` 経由で再試行するフォールバックを追加した。 | PowerShell からは `npm.cmd` が実行できても、Node の `spawnSync` 直呼びでは環境依存で `EINVAL`（status null）になるケースがあり、`status` だけ見たエラーメッセージでは根因が見えにくかった。 | Windows の release 自動化で `.cmd` を子プロセス起動する箇所は、`result.error` を必ず診断に含める。加えて `.cmd` 直実行が `EINVAL` の場合に `cmd.exe` 経由の再試行フォールバックを標準実装にして、CLI 実行成功と Node 子プロセス成功を同一視しない。 |
+| Windows で `electron-builder` が `No JSON content found in output` で停止する問題を修正し、`ComSpec` と `System32` を subprocess 環境へ明示注入した。 | `electron-builder` の依存収集は内部で `cmd.exe` 経由の `npm list` を実行するため、親プロセスの `PATH` から `System32` が落ちると `cmd.exe` 自体が見つからず JSON 取得が空になって失敗する。 | Windows の build/publish 自動化でサブプロセスを起動する共通関数では、`PATH` に `%SystemRoot%\System32` を必ず含め、`ComSpec` を `cmd.exe` へ明示する。特に `electron-builder` のようなネストした subprocess を呼ぶツールでは、親で通るコマンドだけを前提にしない。 |
 
 ## 2026-03-08
 

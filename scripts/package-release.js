@@ -16,10 +16,20 @@ const {
 function runCommand(command, args, options = {}) {
   const mergedEnv = { ...process.env, ...options.env };
   const nodeBinDir = path.dirname(process.execPath);
+  const systemRoot = mergedEnv.SystemRoot ?? process.env.SystemRoot ?? "C:\\Windows";
+  const system32Dir = path.join(systemRoot, "System32");
+  mergedEnv.ComSpec = mergedEnv.ComSpec ?? path.join(system32Dir, "cmd.exe");
   const existingPath = mergedEnv.PATH ?? mergedEnv.Path ?? "";
   const pathParts = existingPath.split(path.delimiter).filter(Boolean);
-  if (!pathParts.includes(nodeBinDir)) {
-    const normalizedPath = [nodeBinDir, existingPath].filter(Boolean).join(path.delimiter);
+  const nextPathParts = [...pathParts];
+  if (!nextPathParts.includes(system32Dir)) {
+    nextPathParts.unshift(system32Dir);
+  }
+  if (!nextPathParts.includes(nodeBinDir)) {
+    nextPathParts.unshift(nodeBinDir);
+  }
+  if (nextPathParts.length !== pathParts.length) {
+    const normalizedPath = nextPathParts.join(path.delimiter);
     mergedEnv.PATH = normalizedPath;
     mergedEnv.Path = normalizedPath;
   }
@@ -165,8 +175,8 @@ function main() {
       targetName,
       "--publish",
       "never",
-      `-c.directories.output=${distDir}`,
-      `-c.extraMetadata.version=${manifest.release.version}`
+      `--config.directories.output=${distDir}`,
+      `--config.extraMetadata.version=${manifest.release.version}`
     ],
     {
       env: {
