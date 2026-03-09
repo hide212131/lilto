@@ -132,15 +132,13 @@ function parseInlineValue(raw: string): unknown {
 
 function splitFrontmatter(markdown: string): { frontmatter: string; body: string } | null {
   const trimmed = markdown.trimStart();
-  if (!trimmed.startsWith("---\n")) return null;
+  const match = trimmed.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  if (!match) return null;
 
-  const end = trimmed.indexOf("\n---\n");
-  if (end < 0) return null;
+  const frontmatter = match[1] ?? "";
+  const body = trimmed.slice(match[0].length);
 
-  return {
-    frontmatter: trimmed.slice(4, end),
-    body: trimmed.slice(end + 5)
-  };
+  return { frontmatter, body };
 }
 
 export function parseSkillMarkdown(markdown: string, filePath: string): SkillMetadata | null {
