@@ -1,5 +1,11 @@
 # Lessons
 
+## 2026-03-09
+
+| 変更内容 | ミス/課題 | 再発防止ルール |
+|---|---|---|
+| Windows 配布物生成で `scripts/package-release.js` の `spawnSync("npm.cmd", ...)` が `EINVAL` を返して停止する問題を修正し、`.cmd` 起動が `EINVAL` のときは `cmd.exe /d /s /c` 経由で再試行するフォールバックを追加した。 | PowerShell からは `npm.cmd` が実行できても、Node の `spawnSync` 直呼びでは環境依存で `EINVAL`（status null）になるケースがあり、`status` だけ見たエラーメッセージでは根因が見えにくかった。 | Windows の release 自動化で `.cmd` を子プロセス起動する箇所は、`result.error` を必ず診断に含める。加えて `.cmd` 直実行が `EINVAL` の場合に `cmd.exe` 経由の再試行フォールバックを標準実装にして、CLI 実行成功と Node 子プロセス成功を同一視しない。 |
+
 ## 2026-03-08
 
 | 変更内容 | ミス/課題 | 再発防止ルール |

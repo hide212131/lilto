@@ -14,13 +14,54 @@ const {
 } = require("./release-common");
 
 function runCommand(command, args, options = {}) {
-  const result = spawnSync(command, args, {
+  const mergedEnv = { ...process.env, ...options.env };
+  const nodeBinDir = path.dirname(process.execPath);
+  const existingPath = mergedEnv.PATH ?? mergedEnv.Path ?? "";
+  const pathParts = existingPath.split(path.delimiter).filter(Boolean);
+  if (!pathParts.includes(nodeBinDir)) {
+    const normalizedPath = [nodeBinDir, existingPath].filter(Boolean).join(path.delimiter);
+    mergedEnv.PATH = normalizedPath;
+    mergedEnv.Path = normalizedPath;
+  }
+
+  const baseOptions = {
     cwd: rootDir,
     stdio: "inherit",
-    env: { ...process.env, ...options.env }
-  });
+    env: mergedEnv
+  };
+
+  const normalizedCommand = command.toLowerCase();
+  if (process.platform === "win32" && (normalizedCommand === "npm.cmd" || normalizedCommand === "npm")) {
+    mergedEnv.npm_config_scripts_prepend_node_path = "true";
+    const npmCliPath = path.join(nodeBinDir, "node_modules", "npm", "bin", "npm-cli.js");
+    if (fs.existsSync(npmCliPath)) {
+      command = process.execPath;
+      args = [npmCliPath, ...args];
+    }
+  }
+  if (process.platform === "win32" && (normalizedCommand === "npx.cmd" || normalizedCommand === "npx")) {
+    const npxCliPath = path.join(nodeBinDir, "node_modules", "npm", "bin", "npx-cli.js");
+    if (fs.existsSync(npxCliPath)) {
+      command = process.execPath;
+      args = [npxCliPath, ...args];
+    }
+  }
+
+  let result = spawnSync(command, args, baseOptions);
+  const isWindowsCmd = process.platform === "win32" && command.toLowerCase().endsWith(".cmd");
+  if (isWindowsCmd && result.error?.code === "EINVAL") {
+    const commandLine = [command, ...args].map((value) => {
+      if (/[\s"&|<>^]/.test(value)) {
+        return `"${value.replace(/"/g, '""')}"`;
+      }
+      return value;
+    }).join(" ");
+    result = spawnSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", commandLine], baseOptions);
+  }
+
   if (result.status !== 0) {
-    throw new Error(`${command} ${args.join(" ")} failed with status ${result.status ?? "unknown"}`);
+    const details = result.error ? ` (${result.error.code ?? "spawn error"}: ${result.error.message})` : "";
+    throw new Error(`${command} ${args.join(" ")} failed with status ${result.status ?? "unknown"}${details}`);
   }
 }
 
@@ -110,17 +151,31 @@ function main() {
   manifest.artifacts = manifest.artifacts.filter((artifact) => artifact.platform !== platform);
   manifest.platforms[platform].artifacts = [];
 
-  runCommand(npmCommand(), ["run", "build:native"], { env: { LILTO_NATIVE_BUILD_REQUIRED: "1" } });
-  runCommand(npmCommand(), ["run", "build"]);
-  runCommand(npxCommand(), [
-    "electron-builder",
-    targetFlag,
-    targetName,
-    "--publish",
-    "never",
-    `-c.directories.output=${distDir}`,
-    `-c.extraMetadata.version=${manifest.release.version}`
-  ]);
+  runCommand(process.execPath, [path.join(rootDir, "scripts", "build-native.js")], {
+    env: { LILTO_NATIVE_BUILD_REQUIRED: "1" }
+  });
+  runCommand(process.execPath, [path.join(rootDir, "scripts", "sync-skill-creator.js")]);
+  runCommand(process.execPath, [path.join(rootDir, "node_modules", "typescript", "bin", "tsc"), "-p", "tsconfig.json"]);
+  runCommand(process.execPath, [path.join(rootDir, "node_modules", "vite", "bin", "vite.js"), "build"]);
+  runCommand(
+    npxCommand(),
+    [
+      "electron-builder",
+      targetFlag,
+      targetName,
+      "--publish",
+      "never",
+      `-c.directories.output=${distDir}`,
+      `-c.extraMetadata.version=${manifest.release.version}`
+    ],
+    {
+      env: {
+        npm_config_loglevel: "error",
+        NODE_NO_WARNINGS: "1",
+        NODE_OPTIONS: "--no-deprecation"
+      }
+    }
+  );
 
   for (const artifact of collectArtifacts(distDir)) {
     upsertArtifact(manifest, {
