@@ -152,6 +152,40 @@ test("Gemini CLI OAuth 選択時は provider 情報を保持して実行され�
   assert.equal(receivedOptions.oauthProvider, "google-gemini-cli");
 });
 
+test("AgentRuntime は bashPolicy 設定を session 作成へ渡す", async () => {
+  let receivedOptions;
+  const runtime = new AgentRuntime({
+    authService: createAuthService("authenticated"),
+    bashPolicy: {
+      policyPath: "/tmp/policy.yaml",
+      auditLogPath: "/tmp/policy.jsonl",
+      loadErrorMode: "confirm"
+    },
+    createSession: async (options) => {
+      receivedOptions = options;
+      return {
+        subscribe(listener) {
+          listener({
+            type: "message_update",
+            assistantMessageEvent: { type: "text_delta", delta: "ok" }
+          });
+          return () => {};
+        },
+        async prompt() {}
+      };
+    },
+    logger: { info() {}, error() {} }
+  });
+
+  const result = await runtime.submitPrompt("test", createProviderSettings());
+  assert.equal(result.ok, true);
+  assert.deepEqual(receivedOptions.bashPolicy, {
+    policyPath: "/tmp/policy.yaml",
+    auditLogPath: "/tmp/policy.jsonl",
+    loadErrorMode: "confirm"
+  });
+});
+
 test("Custom Provider 未設定なら PROVIDER_CONFIG_REQUIRED を返す", async () => {
   const runtime = new AgentRuntime({
     authService: createAuthService("authenticated"),

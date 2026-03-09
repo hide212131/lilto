@@ -1,6 +1,8 @@
 import http from "node:http";
 import { createLogger, type Logger } from "./logger";
 import type { ClaudeAuthService } from "./auth-service";
+import type { BashPolicyAppConfig } from "./config";
+import { createBashPolicyGateExtension } from "./bash-policy";
 import type { ProviderSettings } from "./provider-settings";
 import { isCustomProviderReady } from "./provider-settings";
 import { shouldPrioritizeAgentBrowser, shouldPrioritizeSkillCreator } from "./skill-runtime";
@@ -120,9 +122,11 @@ export async function createPiSessionFromSdk(options: {
   cwd?: string;
   customTools?: unknown[];
   sessionManager?: unknown;
+  bashPolicy?: BashPolicyAppConfig;
+  logger?: Logger;
 }): Promise<PiSession> {
   const sessionCwd = options.cwd ?? process.cwd();
-  const { AuthStorage, createAgentSession, ModelRegistry, SessionManager } = (await importEsm(
+  const { AuthStorage, createAgentSession, DefaultResourceLoader, ModelRegistry, SessionManager } = (await importEsm(
     "@mariozechner/pi-coding-agent"
   )) as {
     AuthStorage: { create: () => unknown };
@@ -133,7 +137,12 @@ export async function createPiSessionFromSdk(options: {
       cwd: string;
       model?: PiModel;
       customTools?: unknown[];
+      resourceLoader?: unknown;
     }) => Promise<{ session: unknown }>;
+    DefaultResourceLoader: new (options: {
+      cwd?: string;
+      extensionFactories?: Array<(pi: unknown) => void>;
+    }) => { reload: () => Promise<void> };
     ModelRegistry: new (authStorage: unknown) => unknown;
     SessionManager: {
       inMemory: (cwd?: string) => unknown;
@@ -153,13 +162,28 @@ export async function createPiSessionFromSdk(options: {
   const sessionManager = options.sessionManager ??
     (typeof SessionManager.create === "function" ? SessionManager.create(sessionCwd) : SessionManager.inMemory(sessionCwd));
 
+  let resourceLoader: unknown;
+  if (options.bashPolicy) {
+    resourceLoader = new DefaultResourceLoader({
+      cwd: sessionCwd,
+      extensionFactories: [
+        createBashPolicyGateExtension({
+          config: options.bashPolicy,
+          logger: options.logger ?? createLogger("agent")
+        })
+      ]
+    });
+    await (resourceLoader as { reload: () => Promise<void> }).reload();
+  }
+
   const { session } = await createAgentSession({
     sessionManager,
     authStorage,
     modelRegistry,
     cwd: sessionCwd,
     model: selectedModel,
-    customTools: options.customTools
+    customTools: options.customTools,
+    resourceLoader
   });
 
   return session as PiSession;
@@ -486,10 +510,12 @@ export class AgentRuntime {
     oauthProvider?: OAuthProviderId;
     customTools?: unknown[];
     sessionManager?: unknown;
+    bashPolicy?: BashPolicyAppConfig;
   }) => Promise<PiSession>;
   private readonly authService: Pick<ClaudeAuthService, "getState" | "getApiKey">;
   private readonly logger: Logger;
   private readonly workspaceDir?: string;
+  private readonly bashPolicy?: BashPolicyAppConfig;
   private readonly availableSkillNames: Set<string>;
   private readonly scheduler?: SchedulerClient;
   private readonly sessionCache = new Map<string, PiSession>();
@@ -499,6 +525,7 @@ export class AgentRuntime {
     createSession = createPiSessionFromSdk,
     authService,
     workspaceDir,
+    bashPolicy,
     scheduler,
     availableSkills = [],
     logger = createLogger("agent")
@@ -510,9 +537,11 @@ export class AgentRuntime {
       oauthProvider?: OAuthProviderId;
       customTools?: unknown[];
       sessionManager?: unknown;
+      bashPolicy?: BashPolicyAppConfig;
     }) => Promise<PiSession>;
     authService: Pick<ClaudeAuthService, "getState" | "getApiKey">;
     workspaceDir?: string;
+    bashPolicy?: BashPolicyAppConfig;
     scheduler?: SchedulerClient;
     availableSkills?: Array<{ name: string }>;
     logger?: Logger;
@@ -521,6 +550,7 @@ export class AgentRuntime {
     this.authService = authService;
     this.logger = logger;
     this.workspaceDir = workspaceDir;
+    this.bashPolicy = bashPolicy;
     this.scheduler = scheduler;
     this.availableSkillNames = new Set(availableSkills.map((skill) => skill.name));
   }
@@ -565,7 +595,8 @@ export class AgentRuntime {
       model: options.model?.id ?? "default",
       baseUrl: options.model?.baseUrl ?? "",
       oauthProvider: options.oauthProvider ?? "anthropic",
-      cwd: options.cwd ?? process.cwd()
+      cwd: options.cwd ?? process.cwd(),
+      policyPath: this.bashPolicy?.policyPath ?? ""
     });
 
     const existing = this.sessionCache.get(signature);
@@ -587,7 +618,7 @@ export class AgentRuntime {
     const customTools = this.scheduler
       ? [await createCronTool({ scheduler: this.scheduler, logger: this.logger })]
       : [];
-    const session = await this.createSession({ ...options, customTools });
+    const session = await this.createSession({ ...options, customTools, bashPolicy: this.bashPolicy });
     this.sessionCache.set(signature, session);
     return session;
   }

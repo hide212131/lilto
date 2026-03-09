@@ -1539,9 +1539,9 @@ export function shouldPrioritizeAgentBrowser(text: string): boolean {
     lowered.includes("browser") ||
     lowered.includes("web") ||
     lowered.includes("site") ||
-    text.includes("繝悶Λ繧ｦ繧ｶ") ||
-    text.includes("繧ｵ繧､繝・") ||
-    text.includes("繧ｦ繧ｧ繝・")
+    text.includes("ブラウザ") ||
+    text.includes("サイト") ||
+    text.includes("ウェブ")
   );
 }
 
@@ -1552,8 +1552,8 @@ export function shouldPrioritizeSkillCreator(text: string): boolean {
     lowered.includes("create a skill") ||
     lowered.includes("turn this into a skill") ||
     lowered.includes("skillize") ||
-    text.includes("繧ｹ繧ｭ繝ｫ縺ｫ縺励※") ||
-    text.includes("繧ｹ繧ｭ繝ｫ蛹悶＠縺ｦ") ||
-    text.includes("蜀咲樟縺ｧ縺阪ｋ繧医≧縺ｫ繧ｹ繧ｭ繝ｫ")
+    text.includes("スキルにして") ||
+    text.includes("スキル化して") ||
+    text.includes("再現できるようにスキル")
   );
 }

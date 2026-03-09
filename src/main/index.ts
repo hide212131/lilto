@@ -3,7 +3,7 @@ import { app, BrowserWindow } from "electron";
 
 import { AgentRuntime } from "./agent-sdk";
 import { ClaudeAuthService } from "./auth-service";
-import { readConfig } from "./config";
+import { readConfig, resolveBashPolicyConfig } from "./config";
 import { registerAppShortcut, unregisterAppShortcut } from "./global-shortcut";
 import { HeartbeatScheduler } from "./heartbeat";
 import { SCHEDULER_NOTIFICATION_CHANNEL } from "./ipc-contract";
@@ -137,6 +137,7 @@ void app.whenReady().then(() => {
     logger: createLogger("agent"),
     authService,
     workspaceDir: skillRuntime.workspaceDir,
+    bashPolicy: resolveBashPolicyConfig({ appDataDir: app.getPath("userData") }),
     scheduler,
     availableSkills: skillRuntime.availableSkills
   });
