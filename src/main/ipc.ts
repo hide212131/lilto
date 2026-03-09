@@ -215,6 +215,6 @@ export function registerAgentIpcHandlers({
   });
 
   ipcMain.handle("skills:checkUpdates", async () => {
-    return checkSkillUpdates({ userSkillsDir });
+    return checkSkillUpdates({ userSkillsDir, bundledSkillsDir });
   });
 }

@@ -1,4 +1,4 @@
-import fs from "node:fs";
+﻿import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -27,6 +27,10 @@ const BUNDLED_SKILL_NAMES = ["agent-browser", "skill-creator"] as const;
 const DEFAULT_PI_USER_SKILLS_DIR = path.join(os.homedir(), ".pi", "agent", "skills");
 const ANSI_ESCAPE_REGEX = /\x1B\[[0-9;]*m/g;
 const SKILL_INSTALL_TIMEOUT_MS = 60_000;
+const BUNDLED_SKILL_SOURCES: Record<string, string> = {
+  "agent-browser": "https://github.com/vercel-labs/agent-browser",
+  "skill-creator": "https://github.com/anthropics/skills"
+};
 
 function isDefaultUserSkillsDir(userSkillsDir: string): boolean {
   return path.resolve(userSkillsDir) === path.resolve(DEFAULT_PI_USER_SKILLS_DIR);
@@ -39,7 +43,7 @@ function resolveSkillsCliPath(projectRoot: string): string {
   } catch {
     const fallbackPath = path.join(projectRoot, "node_modules", "skills", "bin", "cli.mjs");
     if (!fs.existsSync(fallbackPath)) {
-      throw new Error(`skills ライブラリが見つかりません: ${fallbackPath}`);
+      throw new Error(`skills 繝ｩ繧､繝悶Λ繝ｪ縺瑚ｦ九▽縺九ｊ縺ｾ縺帙ｓ: ${fallbackPath}`);
     }
     return fallbackPath;
   }
@@ -397,6 +401,37 @@ function resolveBundledSkillSource(options: {
   return null;
 }
 
+function readBundledSkillVersion(skillDir: string): string | null {
+  return readMetadataVersionFromSkillMarkdown(path.join(skillDir, "SKILL.md"));
+}
+
+function upsertBundledSkillSourceRecord(skillDir: string, sourceUrl: string): void {
+  const sourceFile = path.join(skillDir, SKILL_SOURCE_FILE);
+  let existing: SkillSourceRecord | null = null;
+
+  try {
+    if (fs.existsSync(sourceFile)) {
+      existing = JSON.parse(fs.readFileSync(sourceFile, "utf8")) as SkillSourceRecord;
+    }
+  } catch {
+    existing = null;
+  }
+
+  const nextRecord: SkillSourceRecord = {
+    url: sourceUrl,
+    installedAt: existing?.installedAt ?? Date.now(),
+    installedVersion: readBundledSkillVersion(skillDir),
+    contentHash: existing?.contentHash ?? null,
+    etag: existing?.etag ?? null,
+    lastModified: existing?.lastModified ?? null,
+    commitSha: existing?.commitSha ?? null,
+    sourceSkillMtime: existing?.sourceSkillMtime ?? null,
+    sourceSkillPath: existing?.sourceSkillPath ?? null
+  };
+
+  fs.writeFileSync(sourceFile, `${JSON.stringify(nextRecord, null, 2)}\n`, "utf8");
+}
+
 export function ensureBundledSkills(options: {
   bundledSkillsDir: string;
   projectRoot?: string;
@@ -412,6 +447,10 @@ export function ensureBundledSkills(options: {
     }
     const targetDir = path.join(options.bundledSkillsDir, skillName);
     fs.cpSync(sourceDir, targetDir, { recursive: true, force: true });
+    const sourceUrl = BUNDLED_SKILL_SOURCES[skillName];
+    if (sourceUrl) {
+      upsertBundledSkillSourceRecord(targetDir, sourceUrl);
+    }
     installed.push(path.join(targetDir, "SKILL.md"));
   }
 
@@ -1122,11 +1161,6 @@ function collectLocalSourceSkillInfo(source: string): Map<string, { skillPath: s
 }
 
 function resolveSkillSourceMtime(record: SkillSourceRecord, skillName: string): number | null {
-  const localSourcePath = resolveLocalSourcePath(record.url);
-  if (!localSourcePath) {
-    return null;
-  }
-
   if (record.sourceSkillPath) {
     try {
       return fs.statSync(record.sourceSkillPath).mtimeMs;
@@ -1135,21 +1169,26 @@ function resolveSkillSourceMtime(record: SkillSourceRecord, skillName: string): 
     }
   }
 
-  const sourceInfo = collectLocalSourceSkillInfo(localSourcePath).get(skillName);
-  return sourceInfo?.mtimeMs ?? null;
-}
-
-function resolveSkillSourceVersion(record: SkillSourceRecord, skillName: string): string | null {
   const localSourcePath = resolveLocalSourcePath(record.url);
   if (!localSourcePath) {
     return null;
   }
 
+  const sourceInfo = collectLocalSourceSkillInfo(localSourcePath).get(skillName);
+  return sourceInfo?.mtimeMs ?? null;
+}
+
+function resolveSkillSourceVersion(record: SkillSourceRecord, skillName: string): string | null {
   if (record.sourceSkillPath) {
     const version = readMetadataVersionFromSkillMarkdown(record.sourceSkillPath);
     if (version) {
       return version;
     }
+  }
+
+  const localSourcePath = resolveLocalSourcePath(record.url);
+  if (!localSourcePath) {
+    return null;
   }
 
   const sourceInfo = collectLocalSourceSkillInfo(localSourcePath).get(skillName);
@@ -1164,6 +1203,7 @@ export type SkillUpdateInfo = {
   skillName: string;
   skillFilePath: string;
   sourceUrl: string;
+  source: SkillSource;
   installedVersion: string | null;
   latestVersion: string | null;
   updateAvailable: boolean;
@@ -1171,116 +1211,136 @@ export type SkillUpdateInfo = {
   updateCheckMethod: "release-tag" | "commit-sha" | "etag" | "last-modified" | "content-hash" | "local-skill-mtime" | "none";
 };
 
-export async function checkSkillUpdates(options: { userSkillsDir: string }): Promise<SkillUpdateInfo[]> {
+export async function checkSkillUpdates(options: { userSkillsDir: string; bundledSkillsDir?: string }): Promise<SkillUpdateInfo[]> {
   const results: SkillUpdateInfo[] = [];
-  if (!fs.existsSync(options.userSkillsDir)) return results;
+  const sources: Array<{ dir: string; source: SkillSource }> = [
+    { dir: options.userSkillsDir, source: "user" },
+    ...(options.bundledSkillsDir ? [{ dir: options.bundledSkillsDir, source: "bundled" as const }] : [])
+  ];
+  const seenSkillNames = new Set<string>();
 
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(options.userSkillsDir, { withFileTypes: true });
-  } catch {
-    return results;
-  }
+  for (const source of sources) {
+    if (!fs.existsSync(source.dir)) continue;
 
-  for (const entry of entries) {
-    if (!entry.isDirectory()) {
-      if (!entry.isSymbolicLink()) continue;
-      const linkedPath = path.join(options.userSkillsDir, entry.name);
-      try {
-        const linkedStats = fs.statSync(linkedPath);
-        if (!linkedStats.isDirectory()) {
-          continue;
-        }
-      } catch {
-        continue;
-      }
-    }
-    const skillDir = path.join(options.userSkillsDir, entry.name);
-    const sourceFile = path.join(skillDir, SKILL_SOURCE_FILE);
-    const skillMd = path.join(skillDir, "SKILL.md");
-
-    if (!fs.existsSync(sourceFile) || !fs.existsSync(skillMd)) continue;
-
-    let record: SkillSourceRecord;
+    let entries: fs.Dirent[];
     try {
-      record = JSON.parse(fs.readFileSync(sourceFile, "utf8")) as SkillSourceRecord;
+      entries = fs.readdirSync(source.dir, { withFileTypes: true });
     } catch {
       continue;
     }
 
-    const releaseInfo = parseReleaseUrl(record.url);
-    const installedVersion = readInstalledVersionFromSkillDir(skillDir);
-    let latestVersion: string | null = null;
-    let updateAvailable = false;
-    let updateCheckMethod: SkillUpdateInfo["updateCheckMethod"] = "none";
+    for (const entry of entries) {
+      if (seenSkillNames.has(entry.name)) {
+        continue;
+      }
 
-    if (record.sourceSkillMtime !== null && record.sourceSkillMtime !== undefined) {
-      const currentSourceMtime = resolveSkillSourceMtime(record, entry.name);
-      if (currentSourceMtime !== null) {
-        latestVersion = resolveSkillSourceVersion(record, entry.name);
-        updateAvailable = currentSourceMtime !== record.sourceSkillMtime;
-        updateCheckMethod = "local-skill-mtime";
-      }
-    }
-
-    if (updateCheckMethod === "none" && releaseInfo && releaseInfo.version !== null) {
-      // GitHub/GitLab release tag comparison
-      latestVersion = await fetchLatestReleaseTag(releaseInfo);
-      updateAvailable = latestVersion !== null && latestVersion !== record.installedVersion;
-      updateCheckMethod = "release-tag";
-    } else if (updateCheckMethod === "none" && releaseInfo && releaseInfo.ref !== null) {
-      // GitHub/GitLab branch: compare latest commit SHA
-      const latestSha = await fetchLatestCommitSha(releaseInfo, releaseInfo.ref);
-      if (latestSha !== null && record.commitSha !== null && record.commitSha !== undefined) {
-        updateAvailable = latestSha !== record.commitSha;
-        latestVersion = await fetchLatestSkillVersionFromRemoteSource(record.url, entry.name);
-        updateCheckMethod = "commit-sha";
-      }
-    } else if (updateCheckMethod === "none" && record.commitSha !== null && record.commitSha !== undefined) {
-      const latestSha = await fetchLatestRepositoryCommitSha(record.url);
-      if (latestSha !== null) {
-        updateAvailable = latestSha !== record.commitSha;
-        latestVersion = await fetchLatestSkillVersionFromRemoteSource(record.url, entry.name);
-        updateCheckMethod = "commit-sha";
-      }
-    }
-
-    if (updateCheckMethod === "none") {
-      // Plain HTTP source: use ETag / Last-Modified / content hash
-      const meta = await fetchHttpUpdateMetadata(record.url);
-      if (meta) {
-        if (record.etag !== null && record.etag !== undefined && meta.etag !== null) {
-          updateAvailable = record.etag !== meta.etag;
-          updateCheckMethod = "etag";
-        } else if (record.lastModified !== null && record.lastModified !== undefined && meta.lastModified !== null) {
-          updateAvailable = record.lastModified !== meta.lastModified;
-          updateCheckMethod = "last-modified";
-        }
-      }
-      // Fallback: re-download and compare content hash
-      if (updateCheckMethod === "none" && record.contentHash !== null && record.contentHash !== undefined) {
+      if (!entry.isDirectory()) {
+        if (!entry.isSymbolicLink()) continue;
+        const linkedPath = path.join(source.dir, entry.name);
         try {
-          const res = await fetch(record.url);
-          if (res.ok) {
-            const freshHash = computeContentHash(Buffer.from(await res.arrayBuffer()));
-            updateAvailable = freshHash !== record.contentHash;
-            updateCheckMethod = "content-hash";
+          const linkedStats = fs.statSync(linkedPath);
+          if (!linkedStats.isDirectory()) {
+            continue;
           }
         } catch {
-          // network error – leave updateAvailable = false
+          continue;
         }
       }
-    }
 
-    results.push({
-      skillName: entry.name,
-      skillFilePath: skillMd,
-      sourceUrl: record.url,
-      installedVersion,
-      latestVersion,
-      updateAvailable,
-      updateCheckMethod
-    });
+      const skillDir = path.join(source.dir, entry.name);
+      const sourceFile = path.join(skillDir, SKILL_SOURCE_FILE);
+      const skillMd = path.join(skillDir, "SKILL.md");
+
+      if (!fs.existsSync(sourceFile) || !fs.existsSync(skillMd)) continue;
+
+      let record: SkillSourceRecord;
+      try {
+        record = JSON.parse(fs.readFileSync(sourceFile, "utf8")) as SkillSourceRecord;
+      } catch {
+        continue;
+      }
+
+      const releaseInfo = parseReleaseUrl(record.url);
+      const installedVersion = readInstalledVersionFromSkillDir(skillDir);
+      let latestVersion: string | null = null;
+      let updateAvailable = false;
+      let updateCheckMethod: SkillUpdateInfo["updateCheckMethod"] = "none";
+
+      if (record.sourceSkillMtime !== null && record.sourceSkillMtime !== undefined) {
+        const currentSourceMtime = resolveSkillSourceMtime(record, entry.name);
+        if (currentSourceMtime !== null) {
+          latestVersion = resolveSkillSourceVersion(record, entry.name);
+          updateAvailable = currentSourceMtime !== record.sourceSkillMtime;
+          updateCheckMethod = "local-skill-mtime";
+        }
+      }
+
+      if (updateCheckMethod === "none" && releaseInfo && releaseInfo.version !== null) {
+        // GitHub/GitLab release tag comparison
+        latestVersion = await fetchLatestReleaseTag(releaseInfo);
+        updateAvailable = latestVersion !== null && latestVersion !== record.installedVersion;
+        updateCheckMethod = "release-tag";
+      } else if (updateCheckMethod === "none" && releaseInfo && releaseInfo.ref !== null) {
+        // GitHub/GitLab branch: compare latest commit SHA
+        const latestSha = await fetchLatestCommitSha(releaseInfo, releaseInfo.ref);
+        if (latestSha !== null && record.commitSha !== null && record.commitSha !== undefined) {
+          updateAvailable = latestSha !== record.commitSha;
+          latestVersion = await fetchLatestSkillVersionFromRemoteSource(record.url, entry.name);
+          updateCheckMethod = "commit-sha";
+        } else if (latestSha !== null && installedVersion !== null) {
+          // Fallback for records without commit SHA: compare SKILL.md version.
+          latestVersion = await fetchLatestSkillVersionFromRemoteSource(record.url, entry.name);
+          updateAvailable = latestVersion !== null && latestVersion !== installedVersion;
+          updateCheckMethod = "commit-sha";
+        }
+      } else if (updateCheckMethod === "none" && record.commitSha !== null && record.commitSha !== undefined) {
+        const latestSha = await fetchLatestRepositoryCommitSha(record.url);
+        if (latestSha !== null) {
+          updateAvailable = latestSha !== record.commitSha;
+          latestVersion = await fetchLatestSkillVersionFromRemoteSource(record.url, entry.name);
+          updateCheckMethod = "commit-sha";
+        }
+      }
+
+      if (updateCheckMethod === "none") {
+        // Plain HTTP source: use ETag / Last-Modified / content hash
+        const meta = await fetchHttpUpdateMetadata(record.url);
+        if (meta) {
+          if (record.etag !== null && record.etag !== undefined && meta.etag !== null) {
+            updateAvailable = record.etag !== meta.etag;
+            updateCheckMethod = "etag";
+          } else if (record.lastModified !== null && record.lastModified !== undefined && meta.lastModified !== null) {
+            updateAvailable = record.lastModified !== meta.lastModified;
+            updateCheckMethod = "last-modified";
+          }
+        }
+        // Fallback: re-download and compare content hash
+        if (updateCheckMethod === "none" && record.contentHash !== null && record.contentHash !== undefined) {
+          try {
+            const res = await fetch(record.url);
+            if (res.ok) {
+              const freshHash = computeContentHash(Buffer.from(await res.arrayBuffer()));
+              updateAvailable = freshHash !== record.contentHash;
+              updateCheckMethod = "content-hash";
+            }
+          } catch {
+            // network error - leave updateAvailable = false
+          }
+        }
+      }
+
+      results.push({
+        skillName: entry.name,
+        skillFilePath: skillMd,
+        sourceUrl: record.url,
+        source: source.source,
+        installedVersion,
+        latestVersion,
+        updateAvailable,
+        updateCheckMethod
+      });
+      seenSkillNames.add(entry.name);
+    }
   }
 
   return results;
@@ -1293,7 +1353,7 @@ export async function installSkillFromSource(options: {
 }): Promise<{ ok: true; output: string } | { ok: false; error: string }> {
   const source = options.source.trim();
   if (!source) {
-    return { ok: false, error: "source は必須です" };
+    return { ok: false, error: "source is required" };
   }
 
   const { execFile } = await import("node:child_process");
@@ -1385,7 +1445,7 @@ export async function installSkillFromSource(options: {
       }
     }
 
-    return { ok: true, output: stdout.trim() || "インストール完了" };
+    return { ok: true, output: stdout.trim() || "Skill installed" };
   } catch (e) {
     const err = e as { stdout?: string; stderr?: string; message?: string };
     const msg = (err.stderr || err.stdout || err.message || String(e)).trim();
@@ -1479,9 +1539,9 @@ export function shouldPrioritizeAgentBrowser(text: string): boolean {
     lowered.includes("browser") ||
     lowered.includes("web") ||
     lowered.includes("site") ||
-    text.includes("ブラウザ") ||
-    text.includes("サイト") ||
-    text.includes("ウェブ")
+    text.includes("繝悶Λ繧ｦ繧ｶ") ||
+    text.includes("繧ｵ繧､繝・") ||
+    text.includes("繧ｦ繧ｧ繝・")
   );
 }
 
@@ -1492,8 +1552,8 @@ export function shouldPrioritizeSkillCreator(text: string): boolean {
     lowered.includes("create a skill") ||
     lowered.includes("turn this into a skill") ||
     lowered.includes("skillize") ||
-    text.includes("スキルにして") ||
-    text.includes("スキル化して") ||
-    text.includes("再現できるようにスキル")
+    text.includes("繧ｹ繧ｭ繝ｫ縺ｫ縺励※") ||
+    text.includes("繧ｹ繧ｭ繝ｫ蛹悶＠縺ｦ") ||
+    text.includes("蜀咲樟縺ｧ縺阪ｋ繧医≧縺ｫ繧ｹ繧ｭ繝ｫ")
   );
 }

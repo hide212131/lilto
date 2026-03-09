@@ -12,6 +12,7 @@ const {
   listSkillsWithSource,
   uninstallUserSkill,
   ensureSkillDirInPiSettings,
+  ensureBundledSkills,
   setupSkillRuntime,
   resolveWorkspaceDir,
   cleanupOldWorkspaces,
@@ -752,6 +753,92 @@ test("checkSkillUpdates: content-hash フォールバックで更新なし を�
     assert.equal(results.length, 1);
     assert.equal(results[0].updateAvailable, false);
     assert.equal(results[0].updateCheckMethod, "content-hash");
+  } finally {
+    fetchMock.mock.restore();
+  }
+});
+
+test("ensureBundledSkills writes .skill-source.json for bundled skills", () => {
+  const root = tempDir("ensure-bundled-source");
+  const projectRoot = path.join(root, "project");
+  const bundledSkillsDir = path.join(root, "app-data", "skills", "bundled");
+
+  fs.mkdirSync(path.join(projectRoot, "node_modules", "agent-browser", "skills", "agent-browser"), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectRoot, "node_modules", "agent-browser", "skills", "agent-browser", "SKILL.md"),
+    `---\nname: agent-browser\ndescription: bundled browser\nmetadata:\n  version: "0.13.0"\n---\n`
+  );
+
+  fs.mkdirSync(path.join(projectRoot, "skills", "bundled", "skill-creator"), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectRoot, "skills", "bundled", "skill-creator", "SKILL.md"),
+    `---\nname: skill-creator\ndescription: bundled skill creator\nmetadata:\n  version: "1.0.0"\n---\n`
+  );
+
+  ensureBundledSkills({ bundledSkillsDir, projectRoot });
+
+  const agentBrowserSource = JSON.parse(
+    fs.readFileSync(path.join(bundledSkillsDir, "agent-browser", ".skill-source.json"), "utf8")
+  );
+  const skillCreatorSource = JSON.parse(
+    fs.readFileSync(path.join(bundledSkillsDir, "skill-creator", ".skill-source.json"), "utf8")
+  );
+
+  assert.equal(agentBrowserSource.url, "https://github.com/vercel-labs/agent-browser");
+  assert.equal(agentBrowserSource.installedVersion, "0.13.0");
+  assert.equal(skillCreatorSource.url, "https://github.com/anthropics/skills");
+  assert.equal(skillCreatorSource.installedVersion, "1.0.0");
+});
+
+test("checkSkillUpdates includes bundled skills when source metadata exists", async () => {
+  const root = tempDir("update-check-bundled");
+  const userSkillsDir = path.join(root, "user");
+  const bundledSkillsDir = path.join(root, "bundled");
+
+  makeSkillDir(userSkillsDir, "user-skill", {
+    url: "https://example.com/user-skill.zip",
+    installedAt: Date.now(),
+    installedVersion: null,
+    etag: "\"old-user\""
+  });
+
+  fs.mkdirSync(path.join(bundledSkillsDir, "agent-browser"), { recursive: true });
+  fs.writeFileSync(
+    path.join(bundledSkillsDir, "agent-browser", "SKILL.md"),
+    `---\nname: agent-browser\ndescription: bundled browser\nmetadata:\n  version: "0.13.0"\n---\n`
+  );
+  fs.writeFileSync(
+    path.join(bundledSkillsDir, "agent-browser", ".skill-source.json"),
+    JSON.stringify({
+      url: "https://example.com/agent-browser.zip",
+      installedAt: Date.now(),
+      installedVersion: "0.13.0",
+      etag: "\"old-bundled\""
+    }, null, 2)
+  );
+
+  const fetchMock = mock.method(global, "fetch", async (url) => ({
+    ok: true,
+    headers: {
+      get: (name) => {
+        if (name === "etag") {
+          return String(url).includes("agent-browser") ? "\"new-bundled\"" : "\"new-user\"";
+        }
+        return null;
+      }
+    }
+  }));
+
+  try {
+    const results = await checkSkillUpdates({ userSkillsDir, bundledSkillsDir });
+    const summary = results
+      .map((item) => ({ name: item.skillName, source: item.source, update: item.updateAvailable }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    assert.deepEqual(summary, [
+      { name: "agent-browser", source: "bundled", update: true },
+      { name: "user-skill", source: "user", update: true }
+    ]);
   } finally {
     fetchMock.mock.restore();
   }

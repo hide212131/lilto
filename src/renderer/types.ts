@@ -17,6 +17,7 @@ export type SkillUpdateInfo = {
   skillName: string;
   skillFilePath: string;
   sourceUrl: string;
+  source: SkillSource;
   installedVersion: string | null;
   latestVersion: string | null;
   updateAvailable: boolean;
