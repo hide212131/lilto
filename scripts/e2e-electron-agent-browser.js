@@ -9,11 +9,45 @@ const sessionName = "lilto-electron-e2e";
 const cdpPort = "9222";
 const screenshotPath = path.join(rootDir, "test", "artifacts", "electron-e2e.png");
 
+function shouldUseShellForCommand(commandPath) {
+  if (process.platform !== "win32") return false;
+  const lower = String(commandPath || "").toLowerCase();
+  return lower.endsWith(".cmd") || lower.endsWith(".bat");
+}
+
+function resolveAgentBrowserCommand() {
+  if (process.platform === "win32") {
+    const binDir = path.join(rootDir, "node_modules", "agent-browser", "bin");
+    const arch = process.arch === "arm64" ? "arm64" : "x64";
+    const candidates = [
+      path.join(binDir, `agent-browser-win32-${arch}.exe`),
+      path.join(binDir, "agent-browser-win32-x64.exe"),
+      path.join(binDir, "agent-browser-win32-arm64.exe")
+    ];
+
+    for (const candidate of candidates) {
+      try {
+        const stat = fs.statSync(candidate);
+        if (stat.isFile() && stat.size > 0) {
+          return { cmd: candidate, prefixArgs: [] };
+        }
+      } catch {
+        // try next candidate
+      }
+    }
+  }
+
+  return { cmd: resolveCliCommand("npx"), prefixArgs: ["agent-browser"] };
+}
+
+const agentBrowserCommand = resolveAgentBrowserCommand();
+
 function run(cmd, args, options = {}) {
   const resolvedCmd = resolveCliCommand(cmd);
   const resolvedArgs = normalizeCommandArgs(args);
   const result = spawnSync(resolvedCmd, resolvedArgs, {
     cwd: normalizeWorkingDirectory(rootDir),
+    shell: shouldUseShellForCommand(resolvedCmd),
     encoding: "utf8",
     ...options
   });
@@ -49,8 +83,7 @@ async function waitForCdpReady(timeoutMs = 30000) {
 }
 
 function agentBrowser(args) {
-  const shell = resolveCliCommand("npx");
-  return run(shell, ["agent-browser", "--session", sessionName, ...args]);
+  return run(agentBrowserCommand.cmd, [...agentBrowserCommand.prefixArgs, "--session", sessionName, ...args]);
 }
 
 function evalJs(js) {
@@ -308,6 +341,7 @@ async function main() {
 
   const electron = spawn(electronBin, [".", `--remote-debugging-port=${cdpPort}`], {
     cwd: rootDir,
+    shell: shouldUseShellForCommand(electronBin),
     env: {
       ...process.env,
       LILTO_E2E_MOCK: "1",
