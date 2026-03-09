@@ -91,9 +91,12 @@ export class LiltApp extends LitElement {
     .stage {
       width: min(980px, calc(100% - 24px));
       height: 100%;
+      display: flex;
       flex-direction: column;
+      flex: 1;
       min-height: 0;
       margin: 0;
+      overflow: hidden;
     }
     @media (max-width: 720px) {
       .stage {
