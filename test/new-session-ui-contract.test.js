@@ -17,3 +17,9 @@ test("lilt-app が new-session で会話状態を初期化する", () => {
   assert.match(content, /_pendingAssistantIndex = null/);
   assert.match(content, /_statusLines = \[\]/);
 });
+
+test("lilt-app が user 送信前と retry 巻き戻し直後に session snapshot を保存する", () => {
+  const content = fs.readFileSync("src/renderer/app.ts", "utf8");
+  assert.match(content, /this\._addMessage\("user", text\);\s*this\._saveCurrentSession\(\);\s*await this\._doSend\(text\);/s);
+  assert.match(content, /this\.messages = this\.messages\.slice\(0, idx \+ 1\);\s*this\._saveCurrentSession\(\);\s*await this\._doSend\(text\);/s);
+});

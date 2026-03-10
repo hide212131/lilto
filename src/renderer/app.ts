@@ -390,12 +390,14 @@ export class LiltApp extends LitElement {
       const error = result.error ?? { code: "UNKNOWN", message: "不明なエラー" };
       this._removePendingMessage(pendingIdx);
       this._addMessage("error", `${error.code}: ${error.message}`);
+      this._saveCurrentSession();
       if (error.code === "AUTH_REQUIRED" || error.code === "PROVIDER_CONFIG_REQUIRED") {
         this.settingsOpen = true;
       }
     } catch (err) {
       this._removePendingMessage(pendingIdx);
       this._addMessage("error", `UNEXPECTED: ${String(err)}`);
+      this._saveCurrentSession();
     } finally {
       this.isSending = false;
       this._pendingAssistantIndex = null;
@@ -422,6 +424,7 @@ export class LiltApp extends LitElement {
     }
 
     this._addMessage("user", text);
+    this._saveCurrentSession();
     await this._doSend(text);
   }
 
@@ -432,6 +435,7 @@ export class LiltApp extends LitElement {
     if (idx === -1) return;
     // Remove all messages from idx+1 onwards (clears the assistant response and any subsequent messages)
     this.messages = this.messages.slice(0, idx + 1);
+    this._saveCurrentSession();
     await this._doSend(text);
   }
 
