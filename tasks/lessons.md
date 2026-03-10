@@ -1,9 +1,18 @@
 # Lessons
 
+## 2026-03-09
+
+| 変更内容 | ミス/課題 | 再発防止ルール |
+|---|---|---|
+| Windows 配布物生成で `scripts/package-release.js` の `spawnSync("npm.cmd", ...)` が `EINVAL` を返して停止する問題を修正し、`.cmd` 起動が `EINVAL` のときは `cmd.exe /d /s /c` 経由で再試行するフォールバックを追加した。 | PowerShell からは `npm.cmd` が実行できても、Node の `spawnSync` 直呼びでは環境依存で `EINVAL`（status null）になるケースがあり、`status` だけ見たエラーメッセージでは根因が見えにくかった。 | Windows の release 自動化で `.cmd` を子プロセス起動する箇所は、`result.error` を必ず診断に含める。加えて `.cmd` 直実行が `EINVAL` の場合に `cmd.exe` 経由の再試行フォールバックを標準実装にして、CLI 実行成功と Node 子プロセス成功を同一視しない。 |
+| Windows で `electron-builder` が `No JSON content found in output` で停止する問題を修正し、`ComSpec` と `System32` を subprocess 環境へ明示注入した。 | `electron-builder` の依存収集は内部で `cmd.exe` 経由の `npm list` を実行するため、親プロセスの `PATH` から `System32` が落ちると `cmd.exe` 自体が見つからず JSON 取得が空になって失敗する。 | Windows の build/publish 自動化でサブプロセスを起動する共通関数では、`PATH` に `%SystemRoot%\System32` を必ず含め、`ComSpec` を `cmd.exe` へ明示する。特に `electron-builder` のようなネストした subprocess を呼ぶツールでは、親で通るコマンドだけを前提にしない。 |
+
 ## 2026-03-08
 
 | 変更内容 | ミス/課題 | 再発防止ルール |
 |---|---|---|
+| release 自動化の実装中、`src/renderer/app.ts` に未解消 merge conflict が残っていて `npm run build` が release 検証ではじめて落ちたため、class 定義と送信経路を復元してから packaging を再試行した。 | release script 追加だけに集中すると、既存 build がすでに壊れているケースを「新規変更の失敗」と誤認しやすい。特に packaging 検証は通常 build より後段なので、根本原因の切り分けが遅れる。 | build/package 系 change では、依存追加や script 実装後すぐに通常 `npm run build` を先に回し、release/package 実行前に既存 build 健全性を確認する。未解消 conflict marker や既存構文崩れを見つけたら、release 問題と混同せず先に除去する。 |
+| `add-cross-platform-release-automation` の OpenSpec proposal/design/specs/tasks を新規作成し、release build・dual publish・Windows 段階検証を capability 単位で分離した。 | 配布自動化の要件を 1 つの「ビルド改善」に雑にまとめると、artifact 生成、公開、Windows 実機確認のどこが未完了か見えなくなる。 | 配布・公開まわりの change では、少なくとも「artifact 生成」「公開」「OS 固有検証」を別 requirement / task に分け、特に未手元 OS の確認は段階ステータスを仕様へ明記する。 |
 | `npm start` だけでは scheduler binary 解決が `process.resourcesPath/bin` 側に寄ってしまい、開発中に `scheduler binary not found` で cron 機能が使えなかったため、開発用 binary を優先解決し、`start` で native build を先に実行するよう修正。 | Electron 開発起動では `process.resourcesPath !== process.cwd()` が常に成り立ちやすく、これをそのまま「配布環境」と見なすと、開発用 native binary が存在していても誤った場所を参照してしまう。さらに `npm start` が native build を含まないと、新規環境で binary 自体が未生成のまま起動して壊れる。 | Electron で native companion binary を使う機能は、環境判定を `resourcesPath` 差分だけに頼らず「開発用出力が存在するか」を先に見る。加えて、日常導線の起動コマンド（`npm start` など）には必要な native build を含め、追加の環境変数なしで最小動作する状態を標準にする。 |
 | `add-cron-scheduler-tool` の OpenSpec proposal/design/specs/tasks を新規作成し、Rust 製 scheduler daemon・Pi custom tool・session 通知配送の責務分割を artifacts に明文化した。 | 「新しい機能」と「既存 runtime への組み込み」を1つの capability に混ぜると、spec が肥大化し、どこが新規要件でどこが既存変更か曖昧になりやすい。 | 非同期機能や外部 daemon を伴う change では、まず「ユーザー向け capability」と「既存基盤への delta requirement」を分離して proposal に書く。specs でも新規 capability spec と既存 capability delta spec を分け、tool責務と runtime責務を混同しない。 |
 | `cron` tool 実装で、Renderer の会話 ID と Pi session ID を `session_bound` イベントで対応付け、scheduler 通知を `backendSessionId` 基準で会話へ戻すようにした。 | UI 独自 session ID と SDK の session ID を同一視すると、バックグラウンド通知の配送先が決まらず、別会話へ誤配信または不達になりやすい。 | バックグラウンドイベントや外部 daemon が session を参照する機能では、「UI の会話ID」と「runtime の sessionID」を最初に分離して考える。必要なら bind イベントやマッピングを追加し、保存層と実行層の識別子を混同しない。 |

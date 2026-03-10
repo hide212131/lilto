@@ -44,6 +44,14 @@
 4. 指定時刻後に対象会話へ scheduler 通知メッセージが追加されることを確認する
 5. アプリ非フォーカス時は OS 通知と未読バッジも更新されることを確認する
 
+## release 自動化
+1. `package.json` の `version` を対象 release version に合わせる
+2. `npm run prepare:release -- --version <version>` を実行する
+3. `npm run package:release:mac -- --version <version>` を実行し、`release/<version>/dist/` に zip / blockmap / yml が生成されることを確認する
+4. `npm run package:release:win:prepare -- --version <version>` を実行し、`release/<version>/WINDOWS_HANDOFF.md` が生成されることを確認する
+5. `npm run publish:release -- --version <version> --dry-run` を実行し、`release/<version>/manifest.json` の `publishTargets.github/gitlab.status` が `dry-run` になることを確認する
+6. Windows 環境では `WINDOWS_HANDOFF.md` に従い `npm.cmd run package:release:win -- --version <version>` を実行し、portable 実行ファイルの起動確認を行う
+
 ## GUI 変更時の必須チェック
 1. `npm run e2e:electron` を実行する
 2. コマンドが成功終了することを確認する
