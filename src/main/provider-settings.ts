@@ -95,10 +95,12 @@ function normalizeSettings(value: unknown): ProviderSettings {
       : {};
   const defaultUseProxy = hasProxyEnvironment();
   const useProxy = typeof proxy.useProxy === "boolean" ? proxy.useProxy : defaultUseProxy;
-  const useWindowsSandboxForTools =
-    typeof toolExecution.useWindowsSandboxForTools === "boolean"
-      ? toolExecution.useWindowsSandboxForTools
-      : DEFAULT_TOOL_EXECUTION_SETTINGS.useWindowsSandboxForTools;
+  const useWindowsIsolatedToolExecution =
+    typeof toolExecution.useWindowsIsolatedToolExecution === "boolean"
+      ? toolExecution.useWindowsIsolatedToolExecution
+      : typeof toolExecution.useWindowsSandboxForTools === "boolean"
+        ? toolExecution.useWindowsSandboxForTools
+        : DEFAULT_TOOL_EXECUTION_SETTINGS.useWindowsIsolatedToolExecution;
 
   return {
     activeProvider: normalizeActiveProvider(record.activeProvider),
@@ -113,7 +115,7 @@ function normalizeSettings(value: unknown): ProviderSettings {
       useProxy
     },
     toolExecution: {
-      useWindowsSandboxForTools
+      useWindowsIsolatedToolExecution
     },
     chatSettings: normalizeChatSettings(record.chatSettings),
     updatedAt: typeof record.updatedAt === "number" ? record.updatedAt : Date.now()
@@ -125,7 +127,7 @@ function isValidSavePayload(payload: unknown): payload is {
   oauthProvider?: OAuthProviderId;
   customProvider: CustomProviderSettings;
   networkProxy?: NetworkProxySettings;
-  toolExecution?: ToolExecutionSettings;
+  toolExecution?: ToolExecutionSettings | { useWindowsSandboxForTools: boolean };
   chatSettings?: ChatSettings;
 } {
   if (!payload || typeof payload !== "object") return false;
@@ -160,7 +162,12 @@ function isValidSavePayload(payload: unknown): payload is {
   if (record.toolExecution !== undefined) {
     if (!record.toolExecution || typeof record.toolExecution !== "object") return false;
     const toolExecution = record.toolExecution as Record<string, unknown>;
-    if (typeof toolExecution.useWindowsSandboxForTools !== "boolean") return false;
+    if (
+      typeof toolExecution.useWindowsIsolatedToolExecution !== "boolean" &&
+      typeof toolExecution.useWindowsSandboxForTools !== "boolean"
+    ) {
+      return false;
+    }
   }
 
   if (record.chatSettings !== undefined) {
@@ -235,6 +242,19 @@ export class ProviderSettingsService {
     this.persist();
 
     return { ok: true, state: this.getState() };
+  }
+
+  setWindowsIsolatedToolExecutionEnabled(enabled: boolean): ProviderSettings {
+    this.state = {
+      ...this.state,
+      toolExecution: {
+        ...this.state.toolExecution,
+        useWindowsIsolatedToolExecution: enabled
+      },
+      updatedAt: Date.now()
+    };
+    this.persist();
+    return this.getState();
   }
 }
 

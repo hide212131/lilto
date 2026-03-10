@@ -20,7 +20,7 @@ export type NetworkProxySettings = {
 };
 
 export type ToolExecutionSettings = {
-  useWindowsSandboxForTools: boolean;
+  useWindowsIsolatedToolExecution: boolean;
 };
 
 export type ChatSettings = {
@@ -48,5 +48,5 @@ export const DEFAULT_NETWORK_PROXY_SETTINGS: NetworkProxySettings = {
 };
 
 export const DEFAULT_TOOL_EXECUTION_SETTINGS: ToolExecutionSettings = {
-  useWindowsSandboxForTools: false
+  useWindowsIsolatedToolExecution: false
 };

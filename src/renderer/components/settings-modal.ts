@@ -20,7 +20,7 @@ export class LiltSettingsModal extends LitElement {
       useProxy: false
     },
     toolExecution: {
-      useWindowsSandboxForTools: false
+      useWindowsIsolatedToolExecution: false
     },
     chatSettings: {
       enterToSend: false
@@ -34,7 +34,7 @@ export class LiltSettingsModal extends LitElement {
   @state() private _customApiKey = "";
   @state() private _customModelId = "";
   @state() private _useProxy = false;
-  @state() private _useWindowsSandboxForTools = false;
+  @state() private _useWindowsIsolatedToolExecution = false;
   @state() private _authCodeValue = "";
   @state() private _saveStatus = "";
   @state() private _providerSelStatus = "";
@@ -89,7 +89,8 @@ export class LiltSettingsModal extends LitElement {
       this._customApiKey = cp.apiKey;
       this._customModelId = cp.modelId;
       this._useProxy = np.useProxy;
-      this._useWindowsSandboxForTools = this.providerSettings.toolExecution?.useWindowsSandboxForTools ?? false;
+      this._useWindowsIsolatedToolExecution =
+        this.providerSettings.toolExecution?.useWindowsIsolatedToolExecution ?? false;
       this._oauthProvider = this.providerSettings.oauthProvider;
       this._enterToSend = cs?.enterToSend ?? false;
       this._globalShortcut = cs?.globalShortcut ?? "";
@@ -653,12 +654,12 @@ export class LiltSettingsModal extends LitElement {
                   <input
                     id="use-windows-sandbox-tools"
                     type="checkbox"
-                    .checked=${this._useWindowsSandboxForTools}
+                    .checked=${this._useWindowsIsolatedToolExecution}
                     @change=${(e: InputEvent) => {
-                      this._useWindowsSandboxForTools = (e.target as HTMLInputElement).checked;
+                      this._useWindowsIsolatedToolExecution = (e.target as HTMLInputElement).checked;
                     }}
                   />
-                  Windows Sandbox で Bash / Write ツールを実行する
+                  Windows 分離実行で Bash / Write ツールを実行する
                 </label>
               </div>
             `
@@ -1048,12 +1049,12 @@ export class LiltSettingsModal extends LitElement {
                   <input
                     id="use-windows-sandbox-tools"
                     type="checkbox"
-                    .checked=${this._useWindowsSandboxForTools}
+                    .checked=${this._useWindowsIsolatedToolExecution}
                     @change=${(e: InputEvent) => {
-                      this._useWindowsSandboxForTools = (e.target as HTMLInputElement).checked;
+                      this._useWindowsIsolatedToolExecution = (e.target as HTMLInputElement).checked;
                     }}
                   />
-                  Windows Sandbox で Bash / Write ツールを実行する
+                  Windows 分離実行で Bash / Write ツールを実行する
                 </label>
               </div>
             `
@@ -1169,7 +1170,7 @@ export class LiltSettingsModal extends LitElement {
         useProxy: this._useProxy
       },
       toolExecution: {
-        useWindowsSandboxForTools: this._useWindowsSandboxForTools
+        useWindowsIsolatedToolExecution: this._useWindowsIsolatedToolExecution
       }
     };
     const result = await window.lilto.saveProviderSettings(next);

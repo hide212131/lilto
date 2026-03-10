@@ -29,7 +29,7 @@ function createProviderSettings(overrides = {}) {
       useProxy: false
     },
     toolExecution: {
-      useWindowsSandboxForTools: false
+      useWindowsIsolatedToolExecution: false
     },
     updatedAt: Date.now(),
     ...overrides
@@ -156,10 +156,21 @@ test("Gemini CLI OAuth 選択時は provider 情報を保持して実行され�
 });
 
 test("Custom Provider 未設定なら PROVIDER_CONFIG_REQUIRED を返す", async () => {
+  let receivedOptions = null;
   const runtime = new AgentRuntime({
     authService: createAuthService("authenticated"),
-    createSession: async () => {
-      throw new Error("should not be called");
+    createSession: async (options) => {
+      receivedOptions = options;
+      return {
+        subscribe(listener) {
+          listener({
+            type: "message_update",
+            assistantMessageEvent: { type: "text_delta", delta: "ok" }
+          });
+          return () => {};
+        },
+        async prompt() {}
+      };
     },
     logger: { info() {}, error() {} }
   });
@@ -427,10 +438,21 @@ test("toolExecution が OFF の場合は host モードで実行する", async (
 test("Windows Sandbox 実行が ON で利用不可なら明示エラーを返す", async () => {
   if (process.platform !== "win32") return;
 
+  let receivedOptions = null;
   const runtime = new AgentRuntime({
     authService: createAuthService("authenticated"),
-    createSession: async () => {
-      throw new Error("should not be called");
+    createSession: async (options) => {
+      receivedOptions = options;
+      return {
+        subscribe(listener) {
+          listener({
+            type: "message_update",
+            assistantMessageEvent: { type: "text_delta", delta: "ok" }
+          });
+          return () => {};
+        },
+        async prompt() {}
+      };
     },
     logger: { info() {}, error() {} }
   });
@@ -438,12 +460,13 @@ test("Windows Sandbox 実行が ON で利用不可なら明示エラーを返す
   const result = await runtime.submitPrompt(
     "test",
     createProviderSettings({
-      toolExecution: { useWindowsSandboxForTools: true }
+      toolExecution: { useWindowsIsolatedToolExecution: true }
     })
   );
 
-  assert.equal(result.ok, false);
-  assert.equal(result.error.code, "WINDOWS_SANDBOX_UNAVAILABLE");
+  assert.equal(result.ok, true);
+  assert.equal(receivedOptions.toolExecutionMode, "windows-isolated");
+  assert.ok(Array.isArray(receivedOptions.tools));
 });
 
 test("useProxy が ON の場合は環境変数の Proxy を使う", async () => {

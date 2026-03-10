@@ -5,18 +5,16 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import type { Logger } from "./logger";
 
-const SANDBOX_EXE_PATH = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsSandbox.exe");
-const SANDBOX_WORKSPACE_PATH = "C:\\lilto\\workspace";
-const SANDBOX_CONTROL_PATH = "C:\\lilto\\control";
 const DEFAULT_TIMEOUT_MS = 120_000;
+const WINDOWS_ISOLATION_BASE_DIR = path.join(os.tmpdir(), "lilto-windows-isolated-runs");
 
-type SandboxOperation =
+type IsolationOperation =
   | { type: "bash"; command: string; cwd: string; timeoutMs: number; env?: NodeJS.ProcessEnv }
   | { type: "write"; path: string; content: string }
   | { type: "read"; path: string }
   | { type: "access"; path: string };
 
-type SandboxOperationResult =
+type IsolationOperationResult =
   | { ok: true; exitCode?: number; output?: string; base64?: string }
   | { ok: false; stage?: string; error: string };
 
@@ -44,19 +42,19 @@ type EditOperations = {
   access: (absolutePath: string) => Promise<void>;
 };
 
-export class WindowsSandboxError extends Error {
+export class WindowsIsolationError extends Error {
   readonly code: string;
   readonly stage: string;
 
   constructor(message: string, options?: { code?: string; stage?: string }) {
     super(message);
-    this.name = "WindowsSandboxError";
-    this.code = options?.code ?? "WINDOWS_SANDBOX_EXECUTION_FAILED";
+    this.name = "WindowsIsolationError";
+    this.code = options?.code ?? "WINDOWS_ISOLATION_EXECUTION_FAILED";
     this.stage = options?.stage ?? "execute";
   }
 }
 
-export class WindowsSandboxExecutor {
+export class WindowsIsolatedExecutor {
   constructor(
     private readonly options: {
       workspaceDir: string;
@@ -66,40 +64,30 @@ export class WindowsSandboxExecutor {
 
   ensureAvailable(): void {
     if (process.platform !== "win32") {
-      throw new WindowsSandboxError("Windows Sandbox は Windows でのみ利用できます。", {
-        code: "WINDOWS_SANDBOX_UNAVAILABLE",
+      throw new WindowsIsolationError("Windows 分離実行は Windows でのみ利用できます。", {
+        code: "WINDOWS_ISOLATION_UNAVAILABLE",
         stage: "start"
       });
-    }
-    if (!fs.existsSync(SANDBOX_EXE_PATH)) {
-      throw new WindowsSandboxError(
-        "Windows Sandbox が見つかりません。Windows の機能で Windows Sandbox を有効化してください。",
-        {
-          code: "WINDOWS_SANDBOX_UNAVAILABLE",
-          stage: "start"
-        }
-      );
     }
   }
 
   createBashOperations(): BashOperations {
     return {
       exec: async (command, cwd, options) => {
-        const sandboxCwd = this.toSandboxPath(path.resolve(cwd));
         const result = await this.executeOperation({
           type: "bash",
           command,
-          cwd: sandboxCwd,
+          cwd: path.resolve(cwd),
           timeoutMs: options.timeout ?? DEFAULT_TIMEOUT_MS,
-          env: options.env
+          env: buildIsolatedEnvironment(options.env)
         });
         if (!result.ok) {
-          throw new WindowsSandboxError(result.error, {
-            code: "WINDOWS_SANDBOX_EXECUTION_FAILED",
+          throw new WindowsIsolationError(result.error, {
+            code: "WINDOWS_ISOLATION_EXECUTION_FAILED",
             stage: result.stage ?? "execute"
           });
         }
-        if (result.output && result.output.length > 0) {
+        if (result.output) {
           options.onData(Buffer.from(result.output, "utf8"));
         }
         return { exitCode: typeof result.exitCode === "number" ? result.exitCode : 1 };
@@ -110,14 +98,17 @@ export class WindowsSandboxExecutor {
   createWriteOperations(): WriteOperations {
     return {
       mkdir: async () => {
-        // write 側で親ディレクトリを作成するため no-op で十分
+        // write tool creates parent directories during writeFile
       },
       writeFile: async (absolutePath, content) => {
-        const sandboxPath = this.toSandboxPath(path.resolve(absolutePath));
-        const result = await this.executeOperation({ type: "write", path: sandboxPath, content });
+        const result = await this.executeOperation({
+          type: "write",
+          path: this.toWorkspacePath(absolutePath),
+          content
+        });
         if (!result.ok) {
-          throw new WindowsSandboxError(result.error, {
-            code: "WINDOWS_SANDBOX_EXECUTION_FAILED",
+          throw new WindowsIsolationError(result.error, {
+            code: "WINDOWS_ISOLATION_EXECUTION_FAILED",
             stage: result.stage ?? "execute"
           });
         }
@@ -128,32 +119,39 @@ export class WindowsSandboxExecutor {
   createEditOperations(): EditOperations {
     return {
       access: async (absolutePath) => {
-        const sandboxPath = this.toSandboxPath(path.resolve(absolutePath));
-        const result = await this.executeOperation({ type: "access", path: sandboxPath });
+        const result = await this.executeOperation({
+          type: "access",
+          path: this.toWorkspacePath(absolutePath)
+        });
         if (!result.ok) {
-          throw new WindowsSandboxError(result.error, {
-            code: "WINDOWS_SANDBOX_EXECUTION_FAILED",
+          throw new WindowsIsolationError(result.error, {
+            code: "WINDOWS_ISOLATION_EXECUTION_FAILED",
             stage: result.stage ?? "execute"
           });
         }
       },
       readFile: async (absolutePath) => {
-        const sandboxPath = this.toSandboxPath(path.resolve(absolutePath));
-        const result = await this.executeOperation({ type: "read", path: sandboxPath });
+        const result = await this.executeOperation({
+          type: "read",
+          path: this.toWorkspacePath(absolutePath)
+        });
         if (!result.ok) {
-          throw new WindowsSandboxError(result.error, {
-            code: "WINDOWS_SANDBOX_EXECUTION_FAILED",
+          throw new WindowsIsolationError(result.error, {
+            code: "WINDOWS_ISOLATION_EXECUTION_FAILED",
             stage: result.stage ?? "execute"
           });
         }
         return Buffer.from(result.base64 ?? "", "base64");
       },
       writeFile: async (absolutePath, content) => {
-        const sandboxPath = this.toSandboxPath(path.resolve(absolutePath));
-        const result = await this.executeOperation({ type: "write", path: sandboxPath, content });
+        const result = await this.executeOperation({
+          type: "write",
+          path: this.toWorkspacePath(absolutePath),
+          content
+        });
         if (!result.ok) {
-          throw new WindowsSandboxError(result.error, {
-            code: "WINDOWS_SANDBOX_EXECUTION_FAILED",
+          throw new WindowsIsolationError(result.error, {
+            code: "WINDOWS_ISOLATION_EXECUTION_FAILED",
             stage: result.stage ?? "execute"
           });
         }
@@ -161,169 +159,202 @@ export class WindowsSandboxExecutor {
     };
   }
 
-  private toSandboxPath(absolutePath: string): string {
+  private toWorkspacePath(absolutePath: string): string {
+    const resolvedPath = path.resolve(absolutePath);
     const workspaceRoot = path.resolve(this.options.workspaceDir);
-    const relative = path.relative(workspaceRoot, absolutePath);
-    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-      if (absolutePath === workspaceRoot) {
-        return SANDBOX_WORKSPACE_PATH;
-      }
-      throw new WindowsSandboxError(
-        `Sandbox 実行では workspace 外のパスは扱えません: ${absolutePath}`,
-        { code: "WINDOWS_SANDBOX_INVALID_PATH", stage: "setup" }
-      );
+    const relative = path.relative(workspaceRoot, resolvedPath);
+    if (relative.startsWith("..") || path.isAbsolute(relative)) {
+      throw new WindowsIsolationError(`分離実行では workspace 外のパスは扱えません: ${resolvedPath}`, {
+        code: "WINDOWS_ISOLATION_INVALID_PATH",
+        stage: "setup"
+      });
     }
-    return path.win32.join(SANDBOX_WORKSPACE_PATH, relative.replace(/\//g, "\\"));
+    return resolvedPath;
   }
 
-  private async executeOperation(operation: SandboxOperation): Promise<SandboxOperationResult> {
+  private async executeOperation(operation: IsolationOperation): Promise<IsolationOperationResult> {
     this.ensureAvailable();
+
     const runId = `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
-    const runDir = path.join(os.tmpdir(), "lilto-sandbox-runs", runId);
+    const runDir = path.join(WINDOWS_ISOLATION_BASE_DIR, runId);
+    const operationPath = path.join(runDir, "operation.json");
     const runnerPath = path.join(runDir, "runner.ps1");
-    const opPath = path.join(runDir, "operation.json");
     const resultPath = path.join(runDir, "result.json");
-    const configPath = path.join(runDir, "run.wsb");
+    const scratchDir = path.join(runDir, "scratch");
 
     await fsp.mkdir(runDir, { recursive: true });
     await Promise.all([
-      fsp.writeFile(runnerPath, SANDBOX_RUNNER_PS1, "utf8"),
-      fsp.writeFile(opPath, `${JSON.stringify(operation, null, 2)}\n`, "utf8"),
-      fsp.writeFile(configPath, this.buildWsb(runDir), "utf8")
+      fsp.writeFile(operationPath, `${JSON.stringify(operation, null, 2)}\n`, "utf8"),
+      fsp.writeFile(runnerPath, ISOLATED_RUNNER_PS1, "utf8"),
+      fsp.mkdir(scratchDir, { recursive: true })
     ]);
 
-    this.options.logger.info("windows_sandbox_run_start", {
+    this.options.logger.info("windows_isolation_run_start", {
       operation: operation.type,
       runDir
     });
 
-    const sandboxProcess = spawn(SANDBOX_EXE_PATH, [configPath], {
-      windowsHide: true,
-      stdio: "ignore",
-      detached: false
-    });
-
-    const startError = await new Promise<Error | null>((resolve) => {
-      const timer = setTimeout(() => {
-        sandboxProcess.removeAllListeners("error");
-        resolve(null);
-      }, 1500);
-      sandboxProcess.once("error", (error) => {
-        clearTimeout(timer);
-        resolve(error);
-      });
-    });
-
-    if (startError) {
-      await this.cleanupRunDir(runDir);
-      throw new WindowsSandboxError(`Windows Sandbox 起動に失敗しました: ${startError.message}`, {
-        code: "WINDOWS_SANDBOX_UNAVAILABLE",
-        stage: "start"
-      });
-    }
-
     try {
-      const timeoutMs = operation.type === "bash" ? operation.timeoutMs + 30_000 : DEFAULT_TIMEOUT_MS;
-      const result = await this.waitForResult(resultPath, timeoutMs);
-      this.options.logger.info("windows_sandbox_run_end", {
+      const commandResult = await runCommand("powershell.exe", [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        runnerPath,
+        "-OperationPath",
+        operationPath,
+        "-ResultPath",
+        resultPath,
+        "-ScratchDir",
+        scratchDir
+      ], operation.type === "bash" ? operation.timeoutMs + 30_000 : DEFAULT_TIMEOUT_MS);
+
+      if (!fs.existsSync(resultPath)) {
+        return {
+          ok: false,
+          stage: "retrieve",
+          error: commandResult.stderr.trim() || "分離実行結果を取得できませんでした。"
+        };
+      }
+
+      const result = JSON.parse(await fsp.readFile(resultPath, "utf8")) as IsolationOperationResult;
+      this.options.logger.info("windows_isolation_run_end", {
         operation: operation.type,
         ok: result.ok
       });
       return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, stage: "execute", error: message };
     } finally {
-      if (!sandboxProcess.killed) {
-        sandboxProcess.kill();
+      await cleanupRunDir(runDir);
+    }
+  }
+}
+
+type CommandResult = {
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+};
+
+async function runCommand(filePath: string, args: string[], timeoutMs: number): Promise<CommandResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(filePath, args, {
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error(`分離実行がタイムアウトしました (${timeoutMs}ms)`));
+    }, timeoutMs);
+
+    child.stdout?.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
+    child.stderr?.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once("close", (exitCode) => {
+      clearTimeout(timer);
+      resolve({
+        exitCode,
+        stdout: Buffer.concat(stdoutChunks).toString("utf8"),
+        stderr: Buffer.concat(stderrChunks).toString("utf8")
+      });
+    });
+  });
+}
+
+function buildIsolatedEnvironment(env: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
+  const preservedKeys = [
+    "ComSpec",
+    "PATHEXT",
+    "PATH",
+    "Path",
+    "SystemDrive",
+    "SystemRoot",
+    "TEMP",
+    "TMP",
+    "WINDIR",
+    "windir"
+  ];
+  const nextEnv: NodeJS.ProcessEnv = {};
+  for (const key of preservedKeys) {
+    const value = process.env[key];
+    if (typeof value === "string" && value.length > 0) {
+      nextEnv[key] = value;
+    }
+  }
+
+  for (const blockedKey of ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "no_proxy", "all_proxy"]) {
+    nextEnv[blockedKey] = "";
+  }
+
+  if (env) {
+    for (const [key, value] of Object.entries(env)) {
+      if (typeof value === "string") {
+        nextEnv[key] = value;
       }
-      await this.cleanupRunDir(runDir);
     }
   }
 
-  private buildWsb(controlHostDir: string): string {
-    const workspaceHostDir = path.resolve(this.options.workspaceDir);
-    const escapedWorkspace = xmlEscape(workspaceHostDir);
-    const escapedControl = xmlEscape(path.resolve(controlHostDir));
-    return `<?xml version="1.0" encoding="utf-8"?>
-<Configuration>
-  <MappedFolders>
-    <MappedFolder>
-      <HostFolder>${escapedWorkspace}</HostFolder>
-      <SandboxFolder>${SANDBOX_WORKSPACE_PATH}</SandboxFolder>
-      <ReadOnly>false</ReadOnly>
-    </MappedFolder>
-    <MappedFolder>
-      <HostFolder>${escapedControl}</HostFolder>
-      <SandboxFolder>${SANDBOX_CONTROL_PATH}</SandboxFolder>
-      <ReadOnly>false</ReadOnly>
-    </MappedFolder>
-  </MappedFolders>
-  <LogonCommand>
-    <Command>powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;${SANDBOX_CONTROL_PATH}\\runner.ps1&quot;</Command>
-  </LogonCommand>
-</Configuration>
-`;
-  }
+  return nextEnv;
+}
 
-  private async waitForResult(resultPath: string, timeoutMs: number): Promise<SandboxOperationResult> {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      if (fs.existsSync(resultPath)) {
-        try {
-          const raw = await fsp.readFile(resultPath, "utf8");
-          return JSON.parse(raw) as SandboxOperationResult;
-        } catch (error) {
-          return {
-            ok: false,
-            stage: "retrieve",
-            error: `Sandbox 実行結果の読み取りに失敗しました: ${String(error)}`
-          };
-        }
-      }
-      await sleep(500);
-    }
-    return {
-      ok: false,
-      stage: "retrieve",
-      error: "Sandbox 実行のタイムアウト待機に失敗しました。"
-    };
-  }
-
-  private async cleanupRunDir(runDir: string): Promise<void> {
-    try {
-      await fsp.rm(runDir, { recursive: true, force: true });
-    } catch {
-      // Cleanup failure is non-fatal.
-    }
+async function cleanupRunDir(runDir: string): Promise<void> {
+  try {
+    await fsp.rm(runDir, { recursive: true, force: true });
+  } catch {
+    // cleanup is best-effort
   }
 }
 
-function xmlEscape(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&apos;");
+export function isWindowsIsolatedExecutionAvailable(): boolean {
+  return process.platform === "win32";
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+export { WindowsIsolationError as WindowsSandboxError };
+export { WindowsIsolatedExecutor as WindowsSandboxExecutor };
+export const isWindowsSandboxAvailable = isWindowsIsolatedExecutionAvailable;
+
+export async function enableWindowsSandboxFeature(): Promise<{ ok: false; error: string }> {
+  return {
+    ok: false,
+    error: "Windows Sandbox 依存の有効化フローは廃止されました。設定の『Windows 分離実行でツールを実行する』を利用してください。"
+  };
 }
 
-const SANDBOX_RUNNER_PS1 = `
+const ISOLATED_RUNNER_PS1 = `
+param(
+  [Parameter(Mandatory = $true)][string]$OperationPath,
+  [Parameter(Mandatory = $true)][string]$ResultPath,
+  [Parameter(Mandatory = $true)][string]$ScratchDir
+)
+
 $ErrorActionPreference = "Stop"
-$controlPath = "C:\\lilto\\control"
-$opPath = Join-Path $controlPath "operation.json"
-$resultPath = Join-Path $controlPath "result.json"
 
 function Write-Result {
   param([hashtable]$Payload)
-  ($Payload | ConvertTo-Json -Depth 10) | Set-Content -LiteralPath $resultPath -Encoding UTF8
+  ($Payload | ConvertTo-Json -Depth 10) | Set-Content -LiteralPath $ResultPath -Encoding UTF8
 }
 
 try {
-  $operation = Get-Content -LiteralPath $opPath -Raw | ConvertFrom-Json
+  $operation = Get-Content -LiteralPath $OperationPath -Raw | ConvertFrom-Json
+  if (-not (Test-Path -LiteralPath $ScratchDir)) {
+    New-Item -ItemType Directory -Path $ScratchDir -Force | Out-Null
+  }
 
-  if ($operation.env -and $operation.type -eq "bash") {
+  [Environment]::SetEnvironmentVariable("HOME", $ScratchDir, "Process")
+  [Environment]::SetEnvironmentVariable("USERPROFILE", $ScratchDir, "Process")
+  [Environment]::SetEnvironmentVariable("TMP", $ScratchDir, "Process")
+  [Environment]::SetEnvironmentVariable("TEMP", $ScratchDir, "Process")
+
+  if ($operation.env) {
     $operation.env.PSObject.Properties | ForEach-Object {
       if ($_.Value -ne $null) {
         [Environment]::SetEnvironmentVariable([string]$_.Name, [string]$_.Value, "Process")
@@ -334,20 +365,20 @@ try {
   switch ($operation.type) {
     "bash" {
       if (-not (Test-Path -LiteralPath $operation.cwd)) {
-        throw "bash 実行 cwd が存在しません: $($operation.cwd)"
+        throw "cwd not found: $($operation.cwd)"
       }
-      $commandText = [string]$operation.command
-      $stdoutPath = Join-Path $env:TEMP "lilto-sandbox-stdout.txt"
-      $stderrPath = Join-Path $env:TEMP "lilto-sandbox-stderr.txt"
+
+      $stdoutPath = Join-Path $ScratchDir "stdout.txt"
+      $stderrPath = Join-Path $ScratchDir "stderr.txt"
       if (Test-Path -LiteralPath $stdoutPath) { Remove-Item -LiteralPath $stdoutPath -Force }
       if (Test-Path -LiteralPath $stderrPath) { Remove-Item -LiteralPath $stderrPath -Force }
 
       if (Get-Command bash -ErrorAction SilentlyContinue) {
         $filePath = "bash"
-        $args = @("-lc", $commandText)
+        $args = @("-lc", [string]$operation.command)
       } else {
         $filePath = "powershell.exe"
-        $args = @("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", $commandText)
+        $args = @("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", [string]$operation.command)
       }
 
       $proc = Start-Process -FilePath $filePath -ArgumentList $args -WorkingDirectory $operation.cwd -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
@@ -356,7 +387,7 @@ try {
       $finished = Wait-Process -Id $proc.Id -Timeout $waitSeconds -ErrorAction SilentlyContinue
       if (-not $finished) {
         Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-        throw "bash 実行がタイムアウトしました。"
+        throw "command timed out"
       }
 
       $stdout = if (Test-Path -LiteralPath $stdoutPath) { Get-Content -LiteralPath $stdoutPath -Raw } else { "" }
@@ -377,14 +408,13 @@ try {
     "read" {
       $target = [string]$operation.path
       $bytes = [System.IO.File]::ReadAllBytes($target)
-      $base64 = [Convert]::ToBase64String($bytes)
-      Write-Result @{ ok = $true; base64 = $base64 }
+      Write-Result @{ ok = $true; base64 = [Convert]::ToBase64String($bytes) }
       exit 0
     }
     "access" {
       $target = [string]$operation.path
       if (-not (Test-Path -LiteralPath $target)) {
-        throw "対象ファイルが存在しません: $target"
+        throw "file not found: $target"
       }
       $stream = [System.IO.File]::Open($target, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite)
       $stream.Close()
@@ -392,7 +422,7 @@ try {
       exit 0
     }
     default {
-      throw "未対応の Sandbox operation: $($operation.type)"
+      throw "unsupported operation: $($operation.type)"
     }
   }
 } catch {

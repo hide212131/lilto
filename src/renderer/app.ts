@@ -30,7 +30,7 @@ export class LiltApp extends LitElement {
       useProxy: false
     },
     toolExecution: {
-      useWindowsSandboxForTools: false
+      useWindowsIsolatedToolExecution: false
     },
     chatSettings: {
       enterToSend: false

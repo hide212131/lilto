@@ -6,7 +6,7 @@ import { isCustomProviderReady } from "./provider-settings";
 import { shouldPrioritizeAgentBrowser, shouldPrioritizeSkillCreator } from "./skill-runtime";
 import { createCliCompatibilityMap, isWindowsExecutionPolicyError } from "./command-compat";
 import { createCronTool } from "./cron-tool";
-import { WindowsSandboxError, WindowsSandboxExecutor } from "./windows-sandbox-executor";
+import { WindowsIsolationError, WindowsIsolatedExecutor } from "./windows-sandbox-executor";
 import type { SchedulerClient } from "./scheduler";
 import type { AgentLoopEvent } from "../shared/agent-loop";
 import type { OAuthProviderId } from "../shared/provider-settings";
@@ -52,7 +52,7 @@ type PiSession = {
 };
 
 type PiTool = unknown;
-type ToolExecutionMode = "host" | "windows-sandbox";
+type ToolExecutionMode = "host" | "windows-isolated";
 
 type PiModel = {
   id: string;
@@ -105,7 +105,7 @@ export function standardizeError(
 }
 
 function standardizeAgentRuntimeError(error: unknown): AgentError {
-  if (error instanceof WindowsSandboxError) {
+  if (error instanceof WindowsIsolationError) {
     return {
       code: error.code,
       message: error.message,
@@ -258,7 +258,7 @@ function resolveToolExecutionMode(settings: ProviderSettings): ToolExecutionMode
   if (process.platform !== "win32") {
     return "host";
   }
-  return settings.toolExecution?.useWindowsSandboxForTools ? "windows-sandbox" : "host";
+  return settings.toolExecution?.useWindowsIsolatedToolExecution ? "windows-isolated" : "host";
 }
 
 async function createToolsForMode(
@@ -266,28 +266,28 @@ async function createToolsForMode(
   workspaceDir: string,
   logger: Logger
 ): Promise<PiTool[] | undefined> {
-  if (mode !== "windows-sandbox") {
+  if (mode !== "windows-isolated") {
     return undefined;
   }
 
-  const sandboxExecutor = new WindowsSandboxExecutor({ workspaceDir, logger });
-  sandboxExecutor.ensureAvailable();
+  const isolatedExecutor = new WindowsIsolatedExecutor({ workspaceDir, logger });
+  isolatedExecutor.ensureAvailable();
 
   const { createReadTool, createBashTool, createEditTool, createWriteTool } = (await importEsm(
     "@mariozechner/pi-coding-agent"
   )) as {
     createReadTool: (cwd: string) => PiTool;
-    createBashTool: (cwd: string, options: { operations: ReturnType<WindowsSandboxExecutor["createBashOperations"]> }) => PiTool;
-    createEditTool: (cwd: string, options: { operations: ReturnType<WindowsSandboxExecutor["createEditOperations"]> }) => PiTool;
-    createWriteTool: (cwd: string, options: { operations: ReturnType<WindowsSandboxExecutor["createWriteOperations"]> }) => PiTool;
+    createBashTool: (cwd: string, options: { operations: ReturnType<WindowsIsolatedExecutor["createBashOperations"]> }) => PiTool;
+    createEditTool: (cwd: string, options: { operations: ReturnType<WindowsIsolatedExecutor["createEditOperations"]> }) => PiTool;
+    createWriteTool: (cwd: string, options: { operations: ReturnType<WindowsIsolatedExecutor["createWriteOperations"]> }) => PiTool;
   };
 
-  logger.info("tool_execution_mode_sandbox_enabled", { workspaceDir });
+  logger.info("tool_execution_mode_windows_isolated_enabled", { workspaceDir });
   return [
     createReadTool(workspaceDir),
-    createBashTool(workspaceDir, { operations: sandboxExecutor.createBashOperations() }),
-    createEditTool(workspaceDir, { operations: sandboxExecutor.createEditOperations() }),
-    createWriteTool(workspaceDir, { operations: sandboxExecutor.createWriteOperations() })
+    createBashTool(workspaceDir, { operations: isolatedExecutor.createBashOperations() }),
+    createEditTool(workspaceDir, { operations: isolatedExecutor.createEditOperations() }),
+    createWriteTool(workspaceDir, { operations: isolatedExecutor.createWriteOperations() })
   ];
 }
 
@@ -923,7 +923,7 @@ export class AgentRuntime {
       try {
         tools = await createToolsForMode(toolExecutionMode, runtimeCwd, this.logger);
       } catch (error) {
-        if (error instanceof WindowsSandboxError) {
+        if (error instanceof WindowsIsolationError) {
           this.logger.error("tool_execution_mode_prepare_failed", {
             mode: toolExecutionMode,
             stage: error.stage,
@@ -944,7 +944,7 @@ export class AgentRuntime {
 
       this.logger.info("tool_execution_mode_resolved", {
         mode: toolExecutionMode,
-        useWindowsSandboxForTools: providerSettings.toolExecution?.useWindowsSandboxForTools ?? false
+        useWindowsIsolatedToolExecution: providerSettings.toolExecution?.useWindowsIsolatedToolExecution ?? false
       });
 
       const runOptionsBase = { cwd: this.workspaceDir, tools, toolExecutionMode };

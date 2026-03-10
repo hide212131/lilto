@@ -68,7 +68,6 @@ function createWindow(): void {
     mainWindow?.hide();
   });
 
-  // ウインドウがフォーカスされたら未読バッジをクリアする
   mainWindow.on("focus", () => {
     notificationService.clearBadge();
   });
@@ -156,7 +155,6 @@ void app.whenReady().then(() => {
   notificationService.setupTray(() => mainWindow);
   heartbeat.start();
 
-  // グローバルショートカットを設定
   const initialShortcut = providerSettingsService.getState().chatSettings.globalShortcut;
   registerAppShortcut(initialShortcut, () => mainWindow);
 
