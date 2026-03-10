@@ -132,6 +132,7 @@ export async function createPiSessionFromSdk(options: {
   cwd?: string;
   customTools?: unknown[];
   tools?: PiTool[];
+  resourceLoader?: unknown;
   sessionManager?: unknown;
 }): Promise<PiSession> {
   const sessionCwd = options.cwd ?? process.cwd();
@@ -147,6 +148,7 @@ export async function createPiSessionFromSdk(options: {
       model?: PiModel;
       tools?: PiTool[];
       customTools?: unknown[];
+      resourceLoader?: unknown;
     }) => Promise<{ session: unknown }>;
     ModelRegistry: new (authStorage: unknown) => unknown;
     SessionManager: {
@@ -174,7 +176,8 @@ export async function createPiSessionFromSdk(options: {
     cwd: sessionCwd,
     model: selectedModel,
     tools: options.tools,
-    customTools: options.customTools
+    customTools: options.customTools,
+    resourceLoader: options.resourceLoader
   });
 
   return session as PiSession;
@@ -261,11 +264,11 @@ function resolveToolExecutionMode(settings: ProviderSettings): ToolExecutionMode
   return settings.toolExecution?.useWindowsIsolatedToolExecution ? "windows-isolated" : "host";
 }
 
-async function createToolsForMode(
+async function createResourceLoaderForMode(
   mode: ToolExecutionMode,
   workspaceDir: string,
   logger: Logger
-): Promise<PiTool[] | undefined> {
+): Promise<unknown | undefined> {
   if (mode !== "windows-isolated") {
     return undefined;
   }
@@ -273,22 +276,52 @@ async function createToolsForMode(
   const isolatedExecutor = new WindowsIsolatedExecutor({ workspaceDir, logger });
   isolatedExecutor.ensureAvailable();
 
-  const { createReadTool, createBashTool, createEditTool, createWriteTool } = (await importEsm(
+  const { DefaultResourceLoader, createBashTool, createEditTool, createWriteTool } = (await importEsm(
     "@mariozechner/pi-coding-agent"
   )) as {
-    createReadTool: (cwd: string) => PiTool;
+    DefaultResourceLoader: new (options: {
+      cwd: string;
+      extensionFactories?: Array<(pi: { registerTool: (tool: PiTool) => void }) => void>;
+    }) => {
+      reload: () => Promise<void>;
+    };
     createBashTool: (cwd: string, options: { operations: ReturnType<WindowsIsolatedExecutor["createBashOperations"]> }) => PiTool;
     createEditTool: (cwd: string, options: { operations: ReturnType<WindowsIsolatedExecutor["createEditOperations"]> }) => PiTool;
     createWriteTool: (cwd: string, options: { operations: ReturnType<WindowsIsolatedExecutor["createWriteOperations"]> }) => PiTool;
   };
 
+  const resourceLoader = new DefaultResourceLoader({
+    cwd: workspaceDir,
+    extensionFactories: [
+      (pi) => {
+        const bashTool = createBashTool(workspaceDir, {
+          operations: isolatedExecutor.createBashOperations()
+        }) as Record<string, unknown>;
+        const editTool = createEditTool(workspaceDir, {
+          operations: isolatedExecutor.createEditOperations()
+        }) as Record<string, unknown>;
+        const writeTool = createWriteTool(workspaceDir, {
+          operations: isolatedExecutor.createWriteOperations()
+        }) as Record<string, unknown>;
+        pi.registerTool({
+          ...bashTool,
+          label: "bash (windows-isolated)"
+        });
+        pi.registerTool({
+          ...editTool,
+          label: "edit (windows-isolated)"
+        });
+        pi.registerTool({
+          ...writeTool,
+          label: "write (windows-isolated)"
+        });
+      }
+    ]
+  });
+  await resourceLoader.reload();
+
   logger.info("tool_execution_mode_windows_isolated_enabled", { workspaceDir });
-  return [
-    createReadTool(workspaceDir),
-    createBashTool(workspaceDir, { operations: isolatedExecutor.createBashOperations() }),
-    createEditTool(workspaceDir, { operations: isolatedExecutor.createEditOperations() }),
-    createWriteTool(workspaceDir, { operations: isolatedExecutor.createWriteOperations() })
-  ];
+  return resourceLoader;
 }
 
 function extractTextFromContent(content: unknown): string {
@@ -537,6 +570,7 @@ export class AgentRuntime {
     cwd?: string;
     oauthProvider?: OAuthProviderId;
     tools?: PiTool[];
+    resourceLoader?: unknown;
     customTools?: unknown[];
     sessionManager?: unknown;
   }) => Promise<PiSession>;
@@ -562,6 +596,7 @@ export class AgentRuntime {
       cwd?: string;
       oauthProvider?: OAuthProviderId;
       tools?: PiTool[];
+      resourceLoader?: unknown;
       customTools?: unknown[];
       sessionManager?: unknown;
     }) => Promise<PiSession>;
@@ -612,6 +647,7 @@ export class AgentRuntime {
     cwd?: string;
     conversationId?: string;
     tools?: PiTool[];
+    resourceLoader?: unknown;
     toolExecutionMode?: ToolExecutionMode;
   }): Promise<PiSession> {
     const signature = JSON.stringify({
@@ -659,6 +695,7 @@ export class AgentRuntime {
       cwd?: string;
       conversationId?: string;
       tools?: PiTool[];
+      resourceLoader?: unknown;
       toolExecutionMode?: ToolExecutionMode;
     },
     providerSettings: ProviderSettings,
@@ -919,9 +956,9 @@ export class AgentRuntime {
       const promptText = this.buildPromptWithSkillHint(text);
       const runtimeCwd = this.workspaceDir ?? process.cwd();
       const toolExecutionMode = resolveToolExecutionMode(providerSettings);
-      let tools: PiTool[] | undefined;
+      let resourceLoader: unknown | undefined;
       try {
-        tools = await createToolsForMode(toolExecutionMode, runtimeCwd, this.logger);
+        resourceLoader = await createResourceLoaderForMode(toolExecutionMode, runtimeCwd, this.logger);
       } catch (error) {
         if (error instanceof WindowsIsolationError) {
           this.logger.error("tool_execution_mode_prepare_failed", {
@@ -947,7 +984,7 @@ export class AgentRuntime {
         useWindowsIsolatedToolExecution: providerSettings.toolExecution?.useWindowsIsolatedToolExecution ?? false
       });
 
-      const runOptionsBase = { cwd: this.workspaceDir, tools, toolExecutionMode };
+      const runOptionsBase = { cwd: this.workspaceDir, resourceLoader, toolExecutionMode };
 
       if (providerSettings.activeProvider === "custom-openai-completions") {
         if (!isCustomProviderReady(providerSettings)) {

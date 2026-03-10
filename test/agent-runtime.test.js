@@ -433,6 +433,7 @@ test("toolExecution が OFF の場合は host モードで実行する", async (
   assert.equal(result.ok, true);
   assert.equal(receivedOptions.toolExecutionMode, "host");
   assert.equal(receivedOptions.tools, undefined);
+  assert.equal(receivedOptions.resourceLoader, undefined);
 });
 
 test("Windows Sandbox 実行が ON で利用不可なら明示エラーを返す", async () => {
@@ -466,7 +467,8 @@ test("Windows Sandbox 実行が ON で利用不可なら明示エラーを返す
 
   assert.equal(result.ok, true);
   assert.equal(receivedOptions.toolExecutionMode, "windows-isolated");
-  assert.ok(Array.isArray(receivedOptions.tools));
+  assert.equal(receivedOptions.tools, undefined);
+  assert.ok(receivedOptions.resourceLoader);
 });
 
 test("useProxy が ON の場合は環境変数の Proxy を使う", async () => {
