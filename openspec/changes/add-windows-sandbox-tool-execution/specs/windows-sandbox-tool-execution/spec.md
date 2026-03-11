@@ -1,34 +1,43 @@
 ## ADDED Requirements
 
-### Requirement: 設定画面で Windows 分離実行を切り替えできる
-システムは、Windows 環境においてツール実行先を Windows 分離実行に切り替える設定を UI から ON/OFF 可能にしなければならない（MUST）。既存ユーザーの初期値は OFF とし、明示的に ON にした場合のみ分離実行を有効化しなければならない（MUST）。
+### Requirement: Windows 分離実行を設定で切り替えられる
+
+システムは、Windows 環境において Bash / Edit / Write 系ツールの実行経路を設定で切り替えられなければならない（MUST）。既定値は OFF とし、ON の場合のみ分離実行経路を利用しなければならない（MUST）。
 
 #### Scenario: ユーザーが設定を ON にする
-- **WHEN** Windows の設定画面で「Windows 分離実行でツールを実行する」を ON にして保存する
-- **THEN** システムは設定を永続化し、次回以降のツール実行で分離実行経路を選択する
 
-#### Scenario: 既存ユーザーの初期挙動
-- **WHEN** 既存ユーザーが更新後初めてアプリを起動する
-- **THEN** システムは分離実行設定を OFF として扱い、従来どおりホスト実行を継続する
+- **WHEN** Windows の設定画面で Windows 分離実行を ON にして保存する
+- **THEN** システムは設定を永続化し、次回以降のツール実行で `windows-isolated` モードを選択する
 
-### Requirement: 分離実行経路で最小限の環境構築を行う
-システムは、Windows 分離実行が ON の場合、コマンド実行前に最小限の実行環境構築を実施しなければならない（MUST）。この実行経路は `windows-sandbox-rs` の責務分離（準備・実行・結果回収）を参考にしつつ、最小機能に限定しなければならない（MUST）。
+#### Scenario: 既定値または OFF のまま使う
 
-#### Scenario: ON 時の実行
-- **WHEN** ツール実行設定が ON の状態で Bash または Write ツールを実行する
-- **THEN** システムはホストの通常経路ではなく分離 executor を通してコマンドを実行し、結果を返す
+- **WHEN** 分離実行設定が未設定または OFF のままアプリを使う
+- **THEN** システムはホスト実行を継続する
 
-#### Scenario: OFF 時の実行
-- **WHEN** ツール実行設定が OFF の状態で Bash または Write ツールを実行する
-- **THEN** システムは既存のホスト実行フローをそのまま使用する
+### Requirement: 分離実行時は Pi Extensions で built-in tool を override する
 
-### Requirement: 分離実行利用不可時の失敗を明示する
-システムは、分離実行が ON でも executor の準備または実行に失敗した場合、実行を安全に中止し、原因が分かるエラーを返さなければならない（MUST）。安全性を優先し、失敗時にホスト実行へ暗黙フォールバックしてはならない（MUST NOT）。
+システムは、Windows 分離実行が ON の場合、Pi SDK の Extensions 機構を通じて `bash` / `edit` / `write` の built-in tool を override しなければならない（MUST）。Main プロセスが `tools` 配列を直接差し替えるだけの構成に依存してはならない（MUST NOT）。
 
-#### Scenario: executor 準備失敗
-- **WHEN** 設定は ON だが分離 executor の準備に失敗する
-- **THEN** システムは実行を中止し、準備失敗であることが分かるエラーを返す
+#### Scenario: ON 時の tool override
 
-#### Scenario: executor 実行失敗
-- **WHEN** 設定は ON だが分離 executor 内の実行または結果回収に失敗する
-- **THEN** システムは失敗ステップ（setup/execute/retrieve）を識別できるエラー情報を返す
+- **WHEN** Windows 分離実行が ON の状態で Bash / Edit / Write を実行する
+- **THEN** システムは inline extension を含む `resourceLoader` を Pi SDK セッションへ渡し、その override 済みツールを使って実行する
+
+#### Scenario: OFF 時の通常実行
+
+- **WHEN** Windows 分離実行が OFF の状態で Bash / Edit / Write を実行する
+- **THEN** システムは Pi の通常の built-in tool 実装を使う
+
+### Requirement: 分離実行アダプタは最小責務で結果を返す
+
+システムは、Windows 分離実行 ON 時の実処理を最小アダプタへ集約しなければならない（MUST）。このアダプタは `windows-sandbox-rs` の責務分離を参考にしつつ、少なくとも setup / execute / retrieve / cleanup を扱えなければならない（MUST）。
+
+#### Scenario: executor が正常終了する
+
+- **WHEN** override された tool が `WindowsIsolatedExecutor` を通じて処理を完了する
+- **THEN** システムは実行結果をツール結果として返す
+
+#### Scenario: executor の準備または実行に失敗する
+
+- **WHEN** 分離実行アダプタの setup / execute / retrieve のいずれかが失敗する
+- **THEN** システムは失敗ステージを含む明示エラーを返し、ホスト実行へ暗黙フォールバックしない

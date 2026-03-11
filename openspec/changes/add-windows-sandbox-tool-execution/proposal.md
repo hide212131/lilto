@@ -1,25 +1,30 @@
 ## Why
 
-Windows 上で Bash/Write などのツールをそのまま実行すると、ホスト環境への影響範囲が広くなりやすく、安全性の担保が難しい。VM ベースの Windows Sandbox に依存するのではなく、`codex-rs/windows-sandbox-rs` の Restricted Token / ACL / ネットワーク遮断に寄せた「Windows 分離実行」を選べるようにし、必要時のみ隔離寄りの実行経路を使えるようにする。
+Windows 上で Bash / Write などのツールをそのままホスト実行すると、ローカル環境への副作用が大きくなりやすい。既存の変更では Windows 分離実行を導入したが、実装責務が Electron Main に寄りすぎており、Pi の built-in tool override / Extensions という拡張ポイントを十分に活用できていなかった。
+
+今回の変更では、`codex-rs/windows-sandbox-rs` の責務分離を参考にしつつ、Windows 分離実行の適用点を Pi Extensions ベースへ寄せる。これにより、ツール差し替えの責務を Pi SDK 側の標準的な仕組みに合わせ、今後の拡張や差し替えをしやすくする。
 
 ## What Changes
 
-- Windows 向けに、ツール実行先として Windows 分離実行を選択できる設定を追加する。
-- 設定が ON の場合のみ、分離実行用の最小環境を都度構築してからツールを実行する。
-- 設定が OFF の場合は、既存のホスト実行フローを維持する。
-- 実行フローは `codex-rs/windows-sandbox-rs` の責務分離を参考にしつつ、VM 起動ではなく executor 抽象と最小限の環境隔離に限定する。
+- Windows 向け設定 `useWindowsIsolatedToolExecution` で ON/OFF できることは維持する
+- OFF 時は従来どおりホスト実行を使う
+- ON 時は `WindowsIsolatedExecutor` を使った `bash` / `edit` / `write` の override を Pi Extension として注入する
+- Electron Main は「モード判定」と「適切な resourceLoader を Pi SDK に渡す」責務に絞る
+- 分離実行アダプタ自体は `windows-sandbox-rs` を参考にした最小構成のまま維持する
 
 ## Capabilities
 
 ### New Capabilities
-- `windows-sandbox-tool-execution`: Windows でのツール実行を設定で切り替え可能にし、ON 時のみ分離実行経路で実行する機能を定義する。
+
+- `windows-sandbox-tool-execution`: Windows で Bash / Edit / Write 系ツールを設定に応じてホスト実行または分離実行へ切り替える
 
 ### Modified Capabilities
+
 - なし
 
 ## Impact
 
-- 設定 UI（Windows 分離実行 ON/OFF トグルの追加）
-- 設定永続化と Main プロセスへの反映
-- ツール実行オーケストレーション（ホスト実行と分離実行の分岐）
-- Windows 向け executor モジュール追加（実行・結果回収・後片付け）
+- 設定 UI と設定モデル
+- Main の Pi SDK セッション生成経路
+- Windows 分離実行アダプタ
+- Windows 向け回帰テスト / E2E / manual verification

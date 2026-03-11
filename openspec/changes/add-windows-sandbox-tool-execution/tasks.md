@@ -7,12 +7,12 @@
 ## 2. 実行モード分岐の実装
 
 - [x] 2.1 Main 側にツール実行モード判定（`host` / `windows-isolated`）を実装する
-- [x] 2.2 Bash/Write 実行入口をモード判定経由に変更し、OFF 時は既存ホスト実行を維持する
+- [x] 2.2 Pi SDK の resourceLoader / Extensions 注入経由で Bash/Edit/Write を切り替え、OFF 時は既存ホスト実行を維持する
 - [x] 2.3 実行ログにモード・設定値・失敗ステップを出力し、トラブルシュート可能にする
 
 ## 3. Windows 分離実行アダプタ
 
-- [x] 3.1 `windows-sandbox-rs` を参考にした最小アダプタ（実行・結果回収・後片付け）を追加する
+- [x] 3.1 `windows-sandbox-rs` を参考にした最小アダプタ（実行・結果回収・後片付け）を追加し、Pi Extension override から利用できるようにする
 - [x] 3.2 ON 時にのみ Sandbox の最小環境構築を実行する処理を実装する
 - [x] 3.3 Sandbox 利用不可/起動失敗時に、原因を明示したエラーを返し暗黙フォールバックしない
 
