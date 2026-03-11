@@ -5,7 +5,8 @@ const { execFileSync } = require("node:child_process");
 
 const repoUrl = "https://github.com/anthropics/skills.git";
 const skillCreatorPath = path.join("skills", "skill-creator");
-const outputDir = path.resolve(__dirname, "..", "skills", "bundled", "skill-creator");
+const rootDir = path.resolve(__dirname, "..");
+const outputDir = path.join(rootDir, "skills", "bundled", "skill-creator");
 
 function runGit(args, cwd) {
   execFileSync("git", args, {
@@ -13,6 +14,27 @@ function runGit(args, cwd) {
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8"
   });
+}
+
+function copySkillCreator(sourceDir) {
+  const sourceSkillFile = path.join(sourceDir, "SKILL.md");
+  if (!fs.existsSync(sourceSkillFile)) {
+    throw new Error(`Missing SKILL.md in source directory: ${sourceDir}`);
+  }
+
+  fs.rmSync(outputDir, { recursive: true, force: true });
+  fs.mkdirSync(path.dirname(outputDir), { recursive: true });
+  fs.cpSync(sourceDir, outputDir, { recursive: true, force: true });
+}
+
+function resolveFallbackSourceDir() {
+  const candidates = [
+    process.env.CODEX_HOME && path.join(process.env.CODEX_HOME, "skills", ".system", "skill-creator"),
+    path.join(os.homedir(), ".codex", "skills", ".system", "skill-creator"),
+    path.join(rootDir, ".codex", "skills", "skill-creator")
+  ].filter(Boolean);
+
+  return candidates.find((candidate) => fs.existsSync(path.join(candidate, "SKILL.md"))) ?? null;
 }
 
 function syncWithSparseClone() {
@@ -28,23 +50,33 @@ function syncWithSparseClone() {
       throw new Error(`Missing source directory after clone: ${sourceDir}`);
     }
 
-    fs.cpSync(sourceDir, outputDir, { recursive: true, force: true });
+    copySkillCreator(sourceDir);
+    return "git";
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 }
 
 function main() {
-  fs.rmSync(outputDir, { recursive: true, force: true });
-  fs.mkdirSync(outputDir, { recursive: true });
+  try {
+    syncWithSparseClone();
+    console.log(`Synced latest skill-creator to ${outputDir}`);
+    return;
+  } catch (error) {
+    const fallbackSourceDir = resolveFallbackSourceDir();
+    if (!fallbackSourceDir) {
+      throw error;
+    }
 
-  syncWithSparseClone();
-  console.log(`Synced latest skill-creator to ${outputDir}`);
+    copySkillCreator(fallbackSourceDir);
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`Git sync failed (${message}). Reused local skill-creator from ${fallbackSourceDir}.`);
+  }
 }
 
 Promise.resolve()
   .then(() => main())
   .catch((error) => {
-  console.error(error instanceof Error ? error.stack : String(error));
-  process.exit(1);
+    console.error(error instanceof Error ? error.stack : String(error));
+    process.exit(1);
   });

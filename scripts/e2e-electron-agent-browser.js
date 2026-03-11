@@ -1,4 +1,5 @@
 const { spawn, spawnSync } = require("node:child_process");
+const net = require("node:net");
 const fs = require("node:fs");
 const path = require("node:path");
 const { normalizeCommandArgs, normalizeWorkingDirectory, resolveCliCommand } = require("./command-compat");
@@ -6,8 +7,30 @@ const { createProxyFixture } = require("./e2e-proxy-fixture");
 
 const rootDir = path.resolve(__dirname, "..");
 const sessionName = "lilto-electron-e2e";
-const cdpPort = "9222";
+let cdpPort = "9222";
 const screenshotPath = path.join(rootDir, "test", "artifacts", "electron-e2e.png");
+
+function getFreePort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? String(address.port) : null;
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        if (!port) {
+          reject(new Error("Failed to resolve a free TCP port"));
+          return;
+        }
+        resolve(port);
+      });
+    });
+    server.on("error", reject);
+  });
+}
 
 function shouldUseShellForCommand(commandPath) {
   if (process.platform !== "win32") return false;
@@ -16,6 +39,8 @@ function shouldUseShellForCommand(commandPath) {
 }
 
 function resolveAgentBrowserCommand() {
+  return { cmd: resolveCliCommand("npx"), prefixArgs: ["agent-browser"] };
+
   if (process.platform === "win32") {
     const binDir = path.join(rootDir, "node_modules", "agent-browser", "bin");
     const arch = process.arch === "arm64" ? "arm64" : "x64";
@@ -83,7 +108,7 @@ async function waitForCdpReady(timeoutMs = 30000) {
 }
 
 function agentBrowser(args) {
-  return run(agentBrowserCommand.cmd, [...agentBrowserCommand.prefixArgs, "--session", sessionName, ...args]);
+  return run(process.execPath, [path.join(__dirname, "e2e-cdp-command.js"), cdpPort, ...args]);
 }
 
 function evalJs(js) {
@@ -332,11 +357,12 @@ async function waitForMessagesContaining(expectedTexts, timeoutMs = 15000) {
 
 async function main() {
   fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
+  cdpPort = await getFreePort();
   const proxyFixture = await createProxyFixture();
 
   const electronBin =
     process.platform === "win32"
-      ? path.join(rootDir, "node_modules", ".bin", "electron.cmd")
+      ? path.join(rootDir, "node_modules", "electron", "dist", "electron.exe")
       : path.join(rootDir, "node_modules", ".bin", "electron");
 
   const electron = spawn(electronBin, [".", `--remote-debugging-port=${cdpPort}`], {
@@ -360,8 +386,7 @@ async function main() {
   try {
     console.log("Waiting for CDP...");
     await waitForCdpReady();
-    agentBrowser(["connect", cdpPort]);
-    console.log("Connected to CDP");
+    console.log("CDP endpoint ready");
 
     // 1. タイトル確認
     const title = agentBrowser(["get", "title"]);
@@ -491,7 +516,6 @@ async function main() {
     console.log("Conversation:");
     messages.split("\n").forEach((m) => { if (m) console.log(`  - ${m}`); });
   } finally {
-    try { agentBrowser(["close"]); } catch (_error) { /* ignore */ }
     electron.kill("SIGTERM");
     await new Promise((resolve) => {
       electron.once("exit", () => resolve());
