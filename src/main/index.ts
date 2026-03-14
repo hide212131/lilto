@@ -21,6 +21,7 @@ import type { SchedulerNotificationEvent } from "../shared/scheduler";
 
 const config = readConfig();
 const logger = createLogger("main");
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
 let mainWindow: BrowserWindow | null = null;
 let isQuitting = false;
@@ -71,127 +72,158 @@ function createWindow(): void {
     mainWindow?.hide();
   });
 
+  mainWindow.on("closed", () => {
+    mainWindow = null;
+  });
+
   // ウインドウがフォーカスされたら未読バッジをクリアする
   mainWindow.on("focus", () => {
     notificationService.clearBadge();
   });
 }
 
-void app.whenReady().then(async () => {
-  if (process.platform === "darwin") {
-    const dockIcon = resolveAppIcon(512);
-    if (!dockIcon.isEmpty()) {
-      app.dock.setIcon(dockIcon);
+function showAndFocusMainWindow(): void {
+  if (!mainWindow) {
+    if (app.isReady()) {
+      createWindow();
     }
+    return;
   }
 
-  logger.info("cli_compatibility_resolved", {
-    platform: process.platform,
-    commands: createCliCompatibilityMap()
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  } else if (!mainWindow.isVisible()) {
+    mainWindow.show();
+  }
+
+  mainWindow.focus();
+}
+
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    showAndFocusMainWindow();
   });
+}
 
-  let skillRuntime;
-  try {
-    skillRuntime = setupSkillRuntime({
-      appDataDir: app.getPath("userData"),
-      projectName: path.basename(process.cwd()),
-      workspaceTtlHours: Number(process.env.LILTO_PI_WORKSPACE_TTL_HOURS || 24 * 7)
-    });
-    logger.info("skill_runtime_initialized", {
-      appSkillsDir: skillRuntime.appSkillsDir,
-      bundledSkillsDir: skillRuntime.bundledSkillsDir,
-      userSkillsDir: skillRuntime.userSkillsDir,
-      workspaceDir: skillRuntime.workspaceDir,
-      skills: skillRuntime.availableSkills.map((skill) => skill.name),
-      updatedSettings: skillRuntime.updatedSettings,
-      removedWorkspaces: skillRuntime.removedWorkspaces
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    logger.error("skill_runtime_init_failed", { message });
-    skillRuntime = {
-      codexHomeDir: process.env.CODEX_HOME || path.join(app.getPath("userData"), "codex"),
-      appSkillsDir: "",
-      bundledSkillsDir: "",
-      userSkillsDir: "",
-      workspaceDir: process.cwd(),
-      availableSkills: [],
-      updatedSettings: [],
-      removedWorkspaces: []
-    };
-  }
-
-  const scheduler = new SchedulerService({
-    logger: createLogger("scheduler"),
-    userDataDir: app.getPath("userData"),
-    onNotification: (event) => {
-      broadcastSchedulerNotification(event);
-      if (BrowserWindow.getFocusedWindow() === null) {
-        notificationService.notify("lilto - スケジュール通知", event.message);
-        notificationService.incrementBadge();
+if (hasSingleInstanceLock) {
+  void app.whenReady().then(async () => {
+    if (process.platform === "darwin") {
+      const dockIcon = resolveAppIcon(512);
+      if (!dockIcon.isEmpty()) {
+        app.dock.setIcon(dockIcon);
       }
     }
-  });
-  void scheduler.start().catch((error) => {
-    const message = error instanceof Error ? error.message : String(error);
-    logger.error("scheduler_start_failed", { message });
-  });
 
-  schedulerBridge = new SchedulerBridgeServer({
-    logger: createLogger("scheduler-bridge"),
-    scheduler
-  });
-  await schedulerBridge.start().catch((error) => {
-    const message = error instanceof Error ? error.message : String(error);
-    logger.error("scheduler_bridge_start_failed", { message });
-  });
+    logger.info("cli_compatibility_resolved", {
+      platform: process.platform,
+      commands: createCliCompatibilityMap()
+    });
 
-  authService = new ClaudeAuthService({
-    logger: createLogger("auth"),
-    codexHome: skillRuntime.codexHomeDir
-  });
-  const modelCatalogService = new ModelCatalogService({
-    logger: createLogger("models"),
-    codexHomeDir: skillRuntime.codexHomeDir
-  });
-
-  const agentRuntime = new AgentRuntime({
-    logger: createLogger("agent"),
-    authService,
-    workspaceDir: skillRuntime.workspaceDir,
-    codexHomeDir: skillRuntime.codexHomeDir,
-    schedulerBridge,
-    availableSkills: skillRuntime.availableSkills
-  });
-
-  registerAgentIpcHandlers({
-    agentRuntime,
-    authService,
-    providerSettingsService,
-    notificationService,
-    modelCatalogService,
-    bundledSkillsDir: skillRuntime.bundledSkillsDir,
-    userSkillsDir: skillRuntime.userSkillsDir,
-    onSettingsSaved: (settings) => {
-      registerAppShortcut(settings.chatSettings.globalShortcut, () => mainWindow);
+    let skillRuntime;
+    try {
+      skillRuntime = setupSkillRuntime({
+        appDataDir: app.getPath("userData"),
+        projectName: path.basename(process.cwd()),
+        workspaceTtlHours: Number(process.env.LILTO_PI_WORKSPACE_TTL_HOURS || 24 * 7)
+      });
+      logger.info("skill_runtime_initialized", {
+        appSkillsDir: skillRuntime.appSkillsDir,
+        bundledSkillsDir: skillRuntime.bundledSkillsDir,
+        userSkillsDir: skillRuntime.userSkillsDir,
+        workspaceDir: skillRuntime.workspaceDir,
+        skills: skillRuntime.availableSkills.map((skill) => skill.name),
+        updatedSettings: skillRuntime.updatedSettings,
+        removedWorkspaces: skillRuntime.removedWorkspaces
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error("skill_runtime_init_failed", { message });
+      skillRuntime = {
+        codexHomeDir: process.env.CODEX_HOME || path.join(app.getPath("userData"), "codex"),
+        appSkillsDir: "",
+        bundledSkillsDir: "",
+        userSkillsDir: "",
+        workspaceDir: process.cwd(),
+        availableSkills: [],
+        updatedSettings: [],
+        removedWorkspaces: []
+      };
     }
-  });
-  createWindow();
-  notificationService.setupTray(() => mainWindow);
-  heartbeat.start();
 
-  // グローバルショートカットを設定
-  const initialShortcut = providerSettingsService.getState().chatSettings.globalShortcut;
-  registerAppShortcut(initialShortcut, () => mainWindow);
+    const scheduler = new SchedulerService({
+      logger: createLogger("scheduler"),
+      userDataDir: app.getPath("userData"),
+      onNotification: (event) => {
+        broadcastSchedulerNotification(event);
+        if (BrowserWindow.getFocusedWindow() === null) {
+          notificationService.notify("lilto - スケジュール通知", event.message);
+          notificationService.incrementBadge();
+        }
+      }
+    });
+    void scheduler.start().catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error("scheduler_start_failed", { message });
+    });
 
-  app.on("activate", () => {
-    if (!mainWindow) {
-      createWindow();
-      return;
-    }
-    mainWindow.show();
+    schedulerBridge = new SchedulerBridgeServer({
+      logger: createLogger("scheduler-bridge"),
+      scheduler
+    });
+    await schedulerBridge.start().catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error("scheduler_bridge_start_failed", { message });
+    });
+
+    authService = new ClaudeAuthService({
+      logger: createLogger("auth"),
+      codexHome: skillRuntime.codexHomeDir
+    });
+    const modelCatalogService = new ModelCatalogService({
+      logger: createLogger("models"),
+      codexHomeDir: skillRuntime.codexHomeDir
+    });
+
+    const agentRuntime = new AgentRuntime({
+      logger: createLogger("agent"),
+      authService,
+      workspaceDir: skillRuntime.workspaceDir,
+      codexHomeDir: skillRuntime.codexHomeDir,
+      schedulerBridge,
+      availableSkills: skillRuntime.availableSkills
+    });
+
+    registerAgentIpcHandlers({
+      agentRuntime,
+      authService,
+      providerSettingsService,
+      notificationService,
+      modelCatalogService,
+      bundledSkillsDir: skillRuntime.bundledSkillsDir,
+      userSkillsDir: skillRuntime.userSkillsDir,
+      onSettingsSaved: (settings) => {
+        registerAppShortcut(settings.chatSettings.globalShortcut, () => mainWindow);
+      }
+    });
+    createWindow();
+    notificationService.setupTray(() => mainWindow);
+    heartbeat.start();
+
+    // グローバルショートカットを設定
+    const initialShortcut = providerSettingsService.getState().chatSettings.globalShortcut;
+    registerAppShortcut(initialShortcut, () => mainWindow);
+
+    app.on("activate", () => {
+      if (!mainWindow) {
+        createWindow();
+        return;
+      }
+      showAndFocusMainWindow();
+    });
   });
-});
+}
 
 app.on("before-quit", () => {
   isQuitting = true;
