@@ -23,6 +23,29 @@
 - Workspace root: `~/.pi/workspaces`
 - Project workspace: `~/.pi/workspaces/<project>`
 
+## Execution Model
+
+- Skill directory と実行時 working directory は別物として扱う
+- Skill discovery は Codex home 配下の skill directory を対象に行う
+- Skill 実行時の working directory は `Project workspace` を使う
+- 相対パスの生成物は `SKILL.md` の場所ではなく、実行中の working directory 基準で解決される前提にする
+- Skill directory は instruction / template / helper script を置く参照資産として扱い、生成物の保存先としては使わない
+
+## Generated Files Policy
+
+- ユーザーに残す成果物は `Project workspace` 配下へ作成する
+- 即席の scratch file や中間生成物は OS の temp directory へ作成する
+- `SKILL.md` と同じディレクトリ、bundled skill directory、user skill install directory には一時ファイルや生成物を書き込まない
+- helper script や template は、出力先を引数で受け取るか、未指定時は `working directory` または temp を使う前提で設計する
+- relative path を使う手順を書く場合も、「skill directory 基準」ではなく「current working directory 基準」であることを明示する
+
+## Authoring Guidance
+
+- Skill からファイルを生成する場合は、どこへ出力するかを instruction に明記する
+- 永続成果物は workspace 内の明示パスを使う
+- 一時 HTML / JSON / log / archive は temp directory を使い、処理後に削除可能なものとして扱う
+- Skill package 自体を自己書き換えする設計は避ける
+
 ## Cleanup Policy
 
 - Cleanup runs on app startup.
