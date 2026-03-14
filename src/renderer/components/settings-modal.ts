@@ -1,4 +1,5 @@
 import { LitElement, html, css } from "lit";
+import { live } from "lit/directives/live.js";
 import { customElement, property, state } from "lit/decorators.js";
 import type { AuthState, ActiveProvider, ProviderSettings, SkillInfo, SkillUpdateInfo } from "../types.js";
 import type { OAuthProviderId } from "../../shared/provider-settings.js";
@@ -7,6 +8,19 @@ type ListedModel = {
   id: string;
   displayName: string;
 };
+
+function buildModelOptions(models: ListedModel[], selectedId: string, emptyLabel: string): ListedModel[] {
+  const trimmedSelectedId = selectedId.trim();
+  if (models.length === 0) {
+    return trimmedSelectedId
+      ? [{ id: trimmedSelectedId, displayName: trimmedSelectedId }]
+      : [{ id: "", displayName: emptyLabel }];
+  }
+  if (!trimmedSelectedId || models.some((model) => model.id === trimmedSelectedId)) {
+    return models;
+  }
+  return [{ id: trimmedSelectedId, displayName: trimmedSelectedId }, ...models];
+}
 
 @customElement("lilt-settings-modal")
 export class LiltSettingsModal extends LitElement {
@@ -200,18 +214,39 @@ export class LiltSettingsModal extends LitElement {
     .oauth-provider-row {
       margin-top: 10px;
       display: grid;
-      gap: 4px;
-      max-width: 360px;
+      gap: 6px;
       color: #374151;
       font-size: 14px;
     }
-    .oauth-provider-row select {
+    .field-label {
+      display: grid;
+      gap: 6px;
+      font-size: 14px;
+      color: #374151;
+    }
+    .select-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+    }
+    .field-select {
+      width: 100%;
+      min-width: 0;
       border: 1px solid var(--line, #dddddf);
-      border-radius: 9px;
-      padding: 9px 10px;
+      border-radius: 12px;
+      padding: 11px 14px;
       background: #fff;
       font-family: "Hiragino Sans", "Yu Gothic", sans-serif;
-      font-size: 14px;
+      font-size: 15px;
+      color: #111827;
+      line-height: 1.4;
+      box-sizing: border-box;
+      appearance: none;
+    }
+    .field-select:disabled {
+      background: #f9fafb;
+      color: #9ca3af;
     }
     .provider-section.active {
       border-color: #111827;
@@ -234,7 +269,7 @@ export class LiltSettingsModal extends LitElement {
     }
     .input-grid label {
       display: grid;
-      gap: 4px;
+      gap: 6px;
       font-size: 14px;
       color: #374151;
     }
@@ -246,6 +281,37 @@ export class LiltSettingsModal extends LitElement {
       background: #fff;
       font-family: "Hiragino Sans", "Yu Gothic", sans-serif;
       font-size: 14px;
+    }
+    .checkbox-card {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      border: 1px solid #dddddf;
+      border-radius: 12px;
+      background: #fff;
+      padding: 12px 14px;
+      color: #111827;
+      cursor: pointer;
+      box-sizing: border-box;
+    }
+    .checkbox-card input {
+      width: 18px;
+      height: 18px;
+      margin-top: 2px;
+      flex: 0 0 auto;
+    }
+    .checkbox-copy {
+      display: grid;
+      gap: 4px;
+    }
+    .checkbox-title {
+      font-size: 15px;
+      font-weight: 600;
+    }
+    .checkbox-help {
+      font-size: 13px;
+      color: #6b7280;
+      line-height: 1.5;
     }
     .auth-code-row input {
       flex: 1;
@@ -577,18 +643,17 @@ export class LiltSettingsModal extends LitElement {
         </div>
         <label class="oauth-provider-row">
           Model
-          <div class="auth-row">
+          <div class="select-row">
             <select
+              class="field-select"
               id="oauth-model"
-              .disabled=${this._oauthModelsLoading || this._oauthModels.length === 0}
-              .value=${this._oauthModelId || ""}
+              .disabled=${this._oauthModelsLoading || this._oauthModelOptions.length === 0}
+              .value=${live(this._oauthModelId || "")}
               @change=${(e: Event) => {
                 this._oauthModelId = (e.target as HTMLSelectElement).value || "gpt-5.3-codex";
               }}
             >
-              ${this._oauthModels.length === 0
-                ? html`<option value="">モデル一覧を取得してください</option>`
-                : this._oauthModels.map((model) => html`<option value=${model.id}>${model.displayName}</option>`)}
+              ${this._oauthModelOptions.map((model) => html`<option value=${model.id}>${model.displayName}</option>`)}
             </select>
             <button .disabled=${this._oauthModelsLoading} @click=${this._loadOauthModels}>
               ${this._oauthModelsLoading ? "取得中..." : "モデル一覧を取得"}
@@ -643,18 +708,17 @@ export class LiltSettingsModal extends LitElement {
           </label>
           <label>
             Model
-            <div class="auth-row">
+            <div class="select-row">
               <select
+                class="field-select"
                 id="custom-model-id"
-                .disabled=${this._customModelsLoading || this._customModels.length === 0}
-                .value=${this._customModelId || ""}
+                .disabled=${this._customModelsLoading || this._customModelOptions.length === 0}
+                .value=${live(this._customModelId || "")}
                 @change=${(e: Event) => {
                   this._customModelId = (e.target as HTMLSelectElement).value || "";
                 }}
               >
-                ${this._customModels.length === 0
-                  ? html`<option value="">API key / Base URL を入力して一覧取得</option>`
-                  : this._customModels.map((model) => html`<option value=${model.id}>${model.displayName}</option>`)}
+                ${this._customModelOptions.map((model) => html`<option value=${model.id}>${model.displayName}</option>`)}
               </select>
               <button .disabled=${this._customModelsLoading} @click=${this._loadCustomModels}>
                 ${this._customModelsLoading ? "取得中..." : "モデル一覧を取得"}
@@ -665,7 +729,7 @@ export class LiltSettingsModal extends LitElement {
         ${this._customModelsStatus ? html`<div class="status">${this._customModelsStatus}</div>` : ""}
         <h4>Network Proxy</h4>
         <div class="input-grid">
-          <label>
+          <label class="checkbox-card">
             <input
               id="use-proxy"
               type="checkbox"
@@ -674,7 +738,10 @@ export class LiltSettingsModal extends LitElement {
                 this._useProxy = (e.target as HTMLInputElement).checked;
               }}
             />
-            Proxy を使う（HTTP_PROXY / HTTPS_PROXY / NO_PROXY を利用）
+            <span class="checkbox-copy">
+              <span class="checkbox-title">Proxy を使う</span>
+              <span class="checkbox-help">HTTP_PROXY / HTTPS_PROXY / NO_PROXY を利用します。</span>
+            </span>
           </label>
         </div>
         <div class="provider-actions">
@@ -683,6 +750,14 @@ export class LiltSettingsModal extends LitElement {
         </div>
       </section>
     `;
+  }
+
+  private get _oauthModelOptions(): ListedModel[] {
+    return buildModelOptions(this._oauthModels, this._oauthModelId, "モデル一覧を取得してください");
+  }
+
+  private get _customModelOptions(): ListedModel[] {
+    return buildModelOptions(this._customModels, this._customModelId, "API key / Base URL を入力して一覧取得");
   }
 
   private _renderAuthDebug() {
@@ -1133,7 +1208,7 @@ export class LiltSettingsModal extends LitElement {
         return;
       }
       this._oauthModels = result.models;
-      if (!this._oauthModels.some((model) => model.id === this._oauthModelId) && result.models[0]) {
+      if (!this._oauthModelId.trim() && result.models[0]) {
         this._oauthModelId = result.models[0].id;
       }
       this._oauthModelsStatus = result.models.length > 0 ? `${result.models.length} 件取得しました。` : "利用可能なモデルがありません。";
@@ -1162,7 +1237,7 @@ export class LiltSettingsModal extends LitElement {
         return;
       }
       this._customModels = result.models;
-      if (!this._customModels.some((model) => model.id === this._customModelId) && result.models[0]) {
+      if (!this._customModelId.trim() && result.models[0]) {
         this._customModelId = result.models[0].id;
       }
       this._customModelsStatus = result.models.length > 0 ? `${result.models.length} 件取得しました。` : "利用可能なモデルがありません。";
