@@ -26,7 +26,7 @@
 - 禁止依存:
   - `fs` などファイル I/O を伴う Node API
   - Electron Main 専用 API（`BrowserWindow`、`ipcMain` など）
-  - Pi 実行本体（`pi-coding-agent` SDK セッション実行）
+  - Codex 実行本体（`@openai/codex-sdk` による session / stream 実行）
 - 移管基準:
   - 機密情報（トークン/APIキー）にアクセスする処理は Main 側
   - OS 依存機能や外部プロセス制御を伴う処理は Main 側
@@ -46,7 +46,7 @@
 ## Main 側へ移すもの（Renderer 非対応依存）
 - 認証・トークン管理・機密情報の保持
 - ファイル I/O や OS 依存 API を必要とする処理
-- Pi SDK 実行とエージェント本体のライフサイクル管理
+- Codex runtime 実行とエージェント本体のライフサイクル管理
 
 ## 運用ルール
 - 方針変更時は、この文書に「ポーティングするもの / しないもの / Main 側移管」の3区分で追記する。
