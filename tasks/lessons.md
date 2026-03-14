@@ -4,6 +4,7 @@
 
 | 変更内容 | ミス/課題 | 再発防止ルール |
 |---|---|---|
+| `origin/main` 取り込み時に `oauth-provider-ui-contract` が競合したため、ChatGPT model select の回帰検知と Windows Sandbox UI の回帰検知を両方残す形で統合した。 | 契約テストの競合を片側採用で解消すると、別ブランチで増えた UI 要件の回帰ガードを静かに落としてしまう。特に「同じテスト名の assertion 追加」は diff 上で片方が不要に見えやすい。 | 契約テストの merge conflict では、まず `ours/theirs` の assertion を並べて「どちらが新しい要件か」ではなく「どちらも現行要件か」を判定する。UI 契約テストは片側採用を避け、必要なら同一テスト内で assertion を併合してから対象テストを単体実行する。 |
 | 設定画面の ChatGPT / API Key モデル select が初期起動時に保存済み値を表示せず先頭 option に見えていた不具合を修正し、API Key / Proxy のフォーム見た目も拡張した。 | `Lit` の `<select .value=...>` は内部 state が正しくても、option 群の再描画順や初期 option 不一致のタイミング次第で DOM 側が先頭 option を選び直すことがある。保存済み値を state に戻すだけでは不十分で、実機では「state は正しいのに表示だけ違う」が起きた。 | `select` を async option 読み込みと組み合わせる UI では、1) 保存済み値を option 群へ補完する、2) 取得結果で空のときだけ先頭採用する、3) DOM 反映は `live()` などで state と強制同期する、の3点をセットで入れる。修正後は実機で `state` と `select.value` の両方を確認する。 |
 | Mock E2E が実運用の `.lilto-provider-settings.json` を直接上書きして、live E2E 用の本物 API 設定を壊していたため、provider settings 保存先を環境変数で差し替え可能にし、mock E2E だけ専用ファイルへ隔離した。 | テストが「同じ cwd で起動するからそのままでよい」と考えて保存ファイルを共有すると、mock 用のダミー保存が実運用設定を汚染する。特に API key のような手入力コストが高い設定では、テスト成功より設定破壊の方が痛い。 | E2E が永続設定を書き換える場合は、起動時に保存先 override を持たせて mock/live/通常起動を分離する。mock 系テストは本番相当ファイルを絶対に触らず、前後で対象実ファイルのハッシュ不変まで確認する。 |
 

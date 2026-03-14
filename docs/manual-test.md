@@ -58,3 +58,14 @@
    - 「再現できるようにスキル化」指示で `lilto-e2e-example-title` を生成（`[[LILTO_SKILL_E2E_MAGIC]]` 埋め込み）
    - 生成スキル呼び出しで同じ成果を再取得
 5. コマンドが成功終了し、`test/artifacts/electron-e2e-agent-skills-live.png` が生成されることを確認する
+
+## Windows Sandbox (Live)
+1. Windows で `npm run test:windows-sandbox-live` を実行する
+2. 初回または setup 未完了時に UAC/権限昇格確認が出た場合は許可する
+3. テストが setup 完了後に以下を確認することをログで確認する
+   - workspace 内ファイル書き込みは成功する
+   - workspace 外ファイル書き込みは `cmd` 経由で拒否される
+   - named pipe 作成が拒否される
+   - raw device access が拒否される
+4. `unelevated` を試す場合は PowerShell で `$env:LILTO_WINDOWS_SANDBOX_MODE='unelevated'` を設定してから同じコマンドを実行する
+5. PowerShell の絶対パス書き込みや ADS のような追加ケースは、この live test の成功条件には含めない。現在の保証範囲は [docs/windows-sandbox-security-policy.md](c:\Users\hide\lilto\docs\windows-sandbox-security-policy.md) を基準に確認する

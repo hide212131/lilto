@@ -6,9 +6,12 @@ import {
   type ChatSettings,
   type CustomProviderSettings,
   DEFAULT_CHAT_SETTINGS,
+  DEFAULT_WINDOWS_SANDBOX_SETTINGS,
   type NetworkProxySettings,
   OAUTH_PROVIDER_IDS,
   type OAuthProviderId,
+  type WindowsSandboxMode,
+  type WindowsSandboxSettings,
   type ProviderSettings
 } from "../shared/provider-settings";
 
@@ -18,6 +21,8 @@ export type {
   CustomProviderSettings,
   NetworkProxySettings,
   OAuthProviderId,
+  WindowsSandboxMode,
+  WindowsSandboxSettings,
   ProviderSettings
 } from "../shared/provider-settings";
 
@@ -57,6 +62,7 @@ function createDefaultSettings(): ProviderSettings {
       modelId: "gpt-5.3-codex"
     },
     networkProxy: { useProxy: hasProxyEnvironment() },
+    windowsSandbox: { ...DEFAULT_WINDOWS_SANDBOX_SETTINGS },
     chatSettings: { ...DEFAULT_CHAT_SETTINGS, globalShortcut: defaultGlobalShortcut() },
     updatedAt: Date.now()
   };
@@ -82,6 +88,24 @@ function normalizeChatSettings(value: unknown): ChatSettings {
   return {
     enterToSend: typeof record.enterToSend === "boolean" ? record.enterToSend : DEFAULT_CHAT_SETTINGS.enterToSend,
     globalShortcut: typeof record.globalShortcut === "string" ? record.globalShortcut : defaultGlobalShortcut()
+  };
+}
+
+function normalizeWindowsSandboxMode(value: unknown): WindowsSandboxMode {
+  if (value === "elevated" || value === "unelevated") {
+    return value;
+  }
+  return "off";
+}
+
+function normalizeWindowsSandboxSettings(value: unknown): WindowsSandboxSettings {
+  const record = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  return {
+    mode: normalizeWindowsSandboxMode(record.mode),
+    privateDesktop:
+      typeof record.privateDesktop === "boolean"
+        ? record.privateDesktop
+        : DEFAULT_WINDOWS_SANDBOX_SETTINGS.privateDesktop
   };
 }
 
@@ -115,6 +139,7 @@ function normalizeSettings(value: unknown): ProviderSettings {
     networkProxy: {
       useProxy
     },
+    windowsSandbox: normalizeWindowsSandboxSettings(record.windowsSandbox),
     chatSettings: normalizeChatSettings(record.chatSettings),
     updatedAt: typeof record.updatedAt === "number" ? record.updatedAt : Date.now()
   };
@@ -126,6 +151,7 @@ function isValidSavePayload(payload: unknown): payload is {
   oauthModelId?: string;
   customProvider: CustomProviderSettings;
   networkProxy?: NetworkProxySettings;
+  windowsSandbox?: WindowsSandboxSettings;
   chatSettings?: ChatSettings;
 } {
   if (!payload || typeof payload !== "object") return false;
@@ -158,6 +184,17 @@ function isValidSavePayload(payload: unknown): payload is {
     if (!record.networkProxy || typeof record.networkProxy !== "object") return false;
     const proxy = record.networkProxy as Record<string, unknown>;
     if (typeof proxy.useProxy !== "boolean") return false;
+  }
+
+  if (record.windowsSandbox !== undefined) {
+    if (!record.windowsSandbox || typeof record.windowsSandbox !== "object") return false;
+    const sandbox = record.windowsSandbox as Record<string, unknown>;
+    if (sandbox.mode !== undefined && sandbox.mode !== "off" && sandbox.mode !== "unelevated" && sandbox.mode !== "elevated") {
+      return false;
+    }
+    if (sandbox.privateDesktop !== undefined && typeof sandbox.privateDesktop !== "boolean") {
+      return false;
+    }
   }
 
   if (record.chatSettings !== undefined) {
@@ -209,6 +246,7 @@ export class ProviderSettingsService {
       ...this.state,
       customProvider: { ...this.state.customProvider },
       networkProxy: { ...this.state.networkProxy },
+      windowsSandbox: { ...this.state.windowsSandbox },
       chatSettings: { ...this.state.chatSettings }
     };
   }

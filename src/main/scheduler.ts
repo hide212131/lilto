@@ -75,7 +75,7 @@ export class SchedulerService implements SchedulerClient {
     const binary = this.resolveBinaryPath();
     if (!existsSync(binary)) {
       this.startError = new SchedulerUnavailableError(`scheduler binary not found: ${binary}`);
-      this.logger.error("scheduler_binary_missing", { binary });
+      this.logger.info("scheduler_unavailable", { reason: "binary_missing", binary });
       throw this.startError;
     }
 

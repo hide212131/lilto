@@ -30,6 +30,10 @@ export class LiltApp extends LitElement {
     networkProxy: {
       useProxy: false
     },
+    windowsSandbox: {
+      mode: "off",
+      privateDesktop: true
+    },
     chatSettings: {
       enterToSend: false
     },
@@ -384,7 +388,13 @@ export class LiltApp extends LitElement {
       this._removePendingMessage(pendingIdx);
       this._addMessage("error", `${error.code}: ${error.message}`);
       this._saveCurrentSession();
-      if (error.code === "AUTH_REQUIRED" || error.code === "PROVIDER_CONFIG_REQUIRED") {
+      if (
+        error.code === "AUTH_REQUIRED" ||
+        error.code === "PROVIDER_CONFIG_REQUIRED" ||
+        error.code === "WINDOWS_SANDBOX_SETUP_REQUIRED" ||
+        error.code === "WINDOWS_SANDBOX_SETUP_FAILED" ||
+        error.code === "WINDOWS_SANDBOX_UNSUPPORTED_MODE"
+      ) {
         this.settingsOpen = true;
       }
     } catch (err) {

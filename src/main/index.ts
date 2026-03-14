@@ -13,8 +13,10 @@ import { NotificationService } from "./notifications";
 import { ProviderSettingsService } from "./provider-settings";
 import { ModelCatalogService } from "./model-catalog";
 import { SchedulerService } from "./scheduler";
+import { SchedulerUnavailableError } from "./scheduler";
 import { SchedulerBridgeServer } from "./scheduler-bridge";
 import { setupSkillRuntime } from "./skill-runtime";
+import { WindowsSandboxSetupService } from "./windows-sandbox-setup";
 import { createCliCompatibilityMap } from "./command-compat";
 import { resolveAppIcon, resolveWindowIcon } from "./icon-assets";
 import type { SchedulerNotificationEvent } from "../shared/scheduler";
@@ -166,6 +168,10 @@ if (hasSingleInstanceLock) {
     });
     void scheduler.start().catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
+      if (error instanceof SchedulerUnavailableError) {
+        logger.info("scheduler_unavailable", { message });
+        return;
+      }
       logger.error("scheduler_start_failed", { message });
     });
 
@@ -186,6 +192,11 @@ if (hasSingleInstanceLock) {
       logger: createLogger("models"),
       codexHomeDir: skillRuntime.codexHomeDir
     });
+    const windowsSandboxSetupService = new WindowsSandboxSetupService({
+      logger: createLogger("windows-sandbox-setup"),
+      codexHomeDir: skillRuntime.codexHomeDir,
+      workspaceDir: skillRuntime.workspaceDir
+    });
 
     const agentRuntime = new AgentRuntime({
       logger: createLogger("agent"),
@@ -203,6 +214,7 @@ if (hasSingleInstanceLock) {
       providerSettingsService,
       notificationService,
       modelCatalogService,
+      windowsSandboxSetupService,
       bundledSkillsDir: skillRuntime.bundledSkillsDir,
       userSkillsDir: skillRuntime.userSkillsDir,
       homeDir: skillRuntime.homeDir,

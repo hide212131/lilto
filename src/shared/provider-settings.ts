@@ -15,6 +15,13 @@ export type NetworkProxySettings = {
   useProxy: boolean;
 };
 
+export type WindowsSandboxMode = "off" | "unelevated" | "elevated";
+
+export type WindowsSandboxSettings = {
+  mode: WindowsSandboxMode;
+  privateDesktop: boolean;
+};
+
 export type ChatSettings = {
   enterToSend: boolean;
   globalShortcut: string;
@@ -31,10 +38,16 @@ export type ProviderSettings = {
   oauthModelId: string;
   customProvider: CustomProviderSettings;
   networkProxy: NetworkProxySettings;
+  windowsSandbox: WindowsSandboxSettings;
   chatSettings: ChatSettings;
   updatedAt: number;
 };
 
 export const DEFAULT_NETWORK_PROXY_SETTINGS: NetworkProxySettings = {
   useProxy: false
+};
+
+export const DEFAULT_WINDOWS_SANDBOX_SETTINGS: WindowsSandboxSettings = {
+  mode: "off",
+  privateDesktop: true
 };

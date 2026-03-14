@@ -7,6 +7,13 @@ import { isCustomProviderReady } from "./provider-settings";
 import type { SchedulerBridgeServer } from "./scheduler-bridge";
 import type { AgentLoopEvent } from "../shared/agent-loop";
 
+type CodexConfig = Record<string, unknown>;
+
+type SessionThreadOptions = {
+  sandboxMode: "danger-full-access" | "workspace-write";
+  config?: CodexConfig;
+};
+
 type AgentError = {
   code: string;
   message: string;
@@ -79,6 +86,16 @@ function standardizeExecutionError(error: unknown): AgentError {
   if (message.includes("proxy precheck failed")) {
     return standardizeError(error, "PROXY_CONNECTION_FAILED", true);
   }
+  const lowered = message.toLowerCase();
+  if (lowered.includes("sandbox setup required") || lowered.includes("setup is missing or out of date")) {
+    return standardizeError(error, "WINDOWS_SANDBOX_SETUP_REQUIRED", true);
+  }
+  if (lowered.includes("restricted read-only access is not yet supported") || lowered.includes("only available on windows")) {
+    return standardizeError(error, "WINDOWS_SANDBOX_UNSUPPORTED_MODE", false);
+  }
+  if (lowered.includes("windows sandbox")) {
+    return standardizeError(error, "WINDOWS_SANDBOX_SETUP_FAILED", true);
+  }
   return standardizeError(error);
 }
 
@@ -135,6 +152,48 @@ function buildOauthModel(settings: ProviderSettings): RuntimeModel {
   const requestedModel = settings.oauthModelId.trim();
   return {
     id: OAUTH_MODEL_IDS.has(requestedModel) ? requestedModel : "gpt-5.3-codex"
+  };
+}
+
+function mergeCodexConfig(...configs: Array<CodexConfig | undefined>): CodexConfig | undefined {
+  const merged: CodexConfig = {};
+  for (const config of configs) {
+    if (!config) {
+      continue;
+    }
+    for (const [key, value] of Object.entries(config)) {
+      if (
+        value &&
+        typeof value === "object" &&
+        !Array.isArray(value) &&
+        merged[key] &&
+        typeof merged[key] === "object" &&
+        !Array.isArray(merged[key])
+      ) {
+        merged[key] = mergeCodexConfig(merged[key] as CodexConfig, value as CodexConfig) ?? {};
+        continue;
+      }
+      merged[key] = value;
+    }
+  }
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+function buildSessionThreadOptions(settings: ProviderSettings, platform: NodeJS.Platform): SessionThreadOptions {
+  if (platform === "win32" && settings.windowsSandbox.mode !== "off") {
+    return {
+      sandboxMode: "workspace-write",
+      config: {
+        windows: {
+          sandbox: settings.windowsSandbox.mode,
+          sandbox_private_desktop: settings.windowsSandbox.privateDesktop
+        }
+      }
+    };
+  }
+
+  return {
+    sandboxMode: "danger-full-access"
   };
 }
 
@@ -326,6 +385,8 @@ export async function createCodexThreadFromSdk(options: {
   homeDir?: string;
   schedulerBridge?: SchedulerBridgeServer;
   schedulerSessionId?: string;
+  sandboxMode?: "danger-full-access" | "workspace-write";
+  config?: CodexConfig;
 }): Promise<Thread> {
   const { Codex } = (await importEsm("@openai/codex-sdk")) as {
     Codex: new (options: {
@@ -364,13 +425,13 @@ export async function createCodexThreadFromSdk(options: {
     apiKey: options.apiKey ?? undefined,
     baseUrl: options.model?.baseUrl,
     env,
-    config: mcpConfig
+    config: mergeCodexConfig(mcpConfig, options.config)
   });
   const threadOptions = {
     model: options.model?.id,
     workingDirectory: options.cwd ?? process.cwd(),
     additionalDirectories: options.additionalDirectories ?? [],
-    sandboxMode: "danger-full-access" as const,
+    sandboxMode: options.sandboxMode ?? "danger-full-access",
     approvalPolicy: "never" as const,
     networkAccessEnabled: true,
     skipGitRepoCheck: true
@@ -389,6 +450,8 @@ export class AgentRuntime {
     homeDir?: string;
     schedulerBridge?: SchedulerBridgeServer;
     schedulerSessionId?: string;
+    sandboxMode?: "danger-full-access" | "workspace-write";
+    config?: CodexConfig;
   }) => Promise<Thread>;
   private readonly authService: Pick<ClaudeAuthService, "getState" | "getApiKey">;
   private readonly logger: Logger;
@@ -396,6 +459,7 @@ export class AgentRuntime {
   private readonly codexHomeDir?: string;
   private readonly homeDir?: string;
   private readonly schedulerBridge?: SchedulerBridgeServer;
+  private readonly platform: NodeJS.Platform;
   private readonly sessionCache = new Map<string, CodexSession>();
   private readonly conversationThreads = new Map<string, string>();
   private currentAbortController: AbortController | null = null;
@@ -407,6 +471,7 @@ export class AgentRuntime {
     codexHomeDir,
     homeDir,
     schedulerBridge,
+    platform = process.platform,
     logger = createLogger("agent")
   }: {
     createSession?: (options: {
@@ -419,6 +484,8 @@ export class AgentRuntime {
       homeDir?: string;
       schedulerBridge?: SchedulerBridgeServer;
       schedulerSessionId?: string;
+      sandboxMode?: "danger-full-access" | "workspace-write";
+      config?: CodexConfig;
     }) => Promise<Thread>;
     authService: Pick<ClaudeAuthService, "getState" | "getApiKey">;
     workspaceDir?: string;
@@ -426,6 +493,7 @@ export class AgentRuntime {
     homeDir?: string;
     availableSkills?: Array<{ name: string }>;
     schedulerBridge?: SchedulerBridgeServer;
+    platform?: NodeJS.Platform;
     logger?: Logger;
   }) {
     this.createSession = createSession;
@@ -435,6 +503,7 @@ export class AgentRuntime {
     this.codexHomeDir = codexHomeDir;
     this.homeDir = homeDir;
     this.schedulerBridge = schedulerBridge;
+    this.platform = platform;
   }
 
   abort(): void {
@@ -443,6 +512,10 @@ export class AgentRuntime {
   }
 
   refreshSkills(_skills?: Array<{ name: string }>): void {
+    this.invalidateSession();
+  }
+
+  refreshProviderSettings(): void {
     this.invalidateSession();
   }
 
@@ -464,6 +537,7 @@ export class AgentRuntime {
     model?: RuntimeModel;
     cwd?: string;
     conversationId?: string;
+    threadOptions: SessionThreadOptions;
   }): Promise<CodexSession> {
     const cwd = options.cwd ?? process.cwd();
     const threadId = options.conversationId ? this.conversationThreads.get(options.conversationId) : undefined;
@@ -472,6 +546,8 @@ export class AgentRuntime {
       apiKey: options.apiKey ?? "",
       modelId: options.model?.id ?? "",
       baseUrl: options.model?.baseUrl ?? "",
+      sandboxMode: options.threadOptions.sandboxMode,
+      config: options.threadOptions.config ?? null,
       cwd
     });
     const existing = this.sessionCache.get(signature);
@@ -488,7 +564,9 @@ export class AgentRuntime {
       codexHomeDir: this.codexHomeDir,
       homeDir: this.homeDir,
       schedulerBridge: this.schedulerBridge,
-      schedulerSessionId: threadId ?? options.conversationId ?? "default"
+      schedulerSessionId: threadId ?? options.conversationId ?? "default",
+      sandboxMode: options.threadOptions.sandboxMode,
+      config: options.threadOptions.config
     });
     const session = { signature, thread };
     this.sessionCache.set(signature, session);
@@ -621,7 +699,10 @@ export class AgentRuntime {
     const abortController = new AbortController();
     this.currentAbortController = abortController;
     try {
-      const session = await this.ensureSession(options);
+      const session = await this.ensureSession({
+        ...options,
+        threadOptions: buildSessionThreadOptions(providerSettings, this.platform)
+      });
       if (session.thread.id && hooks?.onLoopEvent) {
         hooks.onLoopEvent({
           type: "session_bound",
@@ -720,6 +801,18 @@ export class AgentRuntime {
       }
 
       const runOptionsBase = { cwd: this.workspaceDir };
+
+      if (this.platform !== "win32" && providerSettings.windowsSandbox.mode !== "off") {
+        return {
+          ok: false,
+          error: {
+            code: "WINDOWS_SANDBOX_UNSUPPORTED_MODE",
+            message: "Windows sandbox は Windows でのみ利用できます。",
+            details: null,
+            retryable: false
+          }
+        };
+      }
 
       if (providerSettings.activeProvider === "custom-openai-completions") {
         if (!isCustomProviderReady(providerSettings)) {

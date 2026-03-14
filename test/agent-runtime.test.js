@@ -18,6 +18,10 @@ function createProviderSettings(overrides = {}) {
     networkProxy: {
       useProxy: false
     },
+    windowsSandbox: {
+      mode: "off",
+      privateDesktop: true
+    },
     chatSettings: {
       enterToSend: false,
       globalShortcut: "CommandOrControl+L"
@@ -286,6 +290,109 @@ test("proxy precheck 失敗は PROXY_CONNECTION_FAILED に正規化する", asyn
     delete process.env.LILTO_PROXY_TEST_URL;
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+test("Windows sandbox 有効時は workspace-write と Codex config override を渡す", async () => {
+  let receivedOptions = null;
+  const runtime = new AgentRuntime({
+    authService: createAuthService("authenticated"),
+    platform: "win32",
+    createSession: async (options) => {
+      receivedOptions = options;
+      return {
+        id: "thread-windows-sandbox",
+        async runStreamed() {
+          async function* stream() {
+            yield { type: "item.completed", item: { id: "m1", type: "agent_message", text: "done" } };
+          }
+          return { events: stream() };
+        }
+      };
+    },
+    logger: { info() {}, error() {} }
+  });
+
+  const result = await runtime.submitPrompt(
+    "test",
+    createProviderSettings({
+      windowsSandbox: {
+        mode: "elevated",
+        privateDesktop: false
+      }
+    })
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(receivedOptions.sandboxMode, "workspace-write");
+  assert.deepEqual(receivedOptions.config, {
+    windows: {
+      sandbox: "elevated",
+      sandbox_private_desktop: false
+    }
+  });
+});
+
+test("Windows sandbox setup required エラーを標準化する", async () => {
+  const runtime = new AgentRuntime({
+    authService: createAuthService("authenticated"),
+    platform: "win32",
+    createSession: async () => ({
+      id: null,
+      async runStreamed() {
+        async function* stream() {
+          yield {
+            type: "item.completed",
+            item: {
+              id: "err-1",
+              type: "error",
+              error: { message: "sandbox setup required: rerun the sandbox setup" }
+            }
+          };
+        }
+        return { events: stream() };
+      }
+    }),
+    logger: { info() {}, error() {} }
+  });
+
+  const result = await runtime.submitPrompt(
+    "test",
+    createProviderSettings({
+      windowsSandbox: {
+        mode: "unelevated",
+        privateDesktop: true
+      }
+    })
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "WINDOWS_SANDBOX_SETUP_REQUIRED");
+});
+
+test("refreshProviderSettings は既存 session cache を破棄する", async () => {
+  const calls = [];
+  const runtime = new AgentRuntime({
+    authService: createAuthService("authenticated"),
+    createSession: async (options) => {
+      calls.push(options);
+      return {
+        id: null,
+        async runStreamed() {
+          async function* stream() {
+            yield { type: "item.completed", item: { id: "m1", type: "agent_message", text: "done" } };
+          }
+          return { events: stream() };
+        }
+      };
+    },
+    logger: { info() {}, error() {} }
+  });
+
+  await runtime.submitPrompt("first", createProviderSettings());
+  runtime.refreshProviderSettings();
+  await runtime.submitPrompt("second", createProviderSettings());
+
+  assert.equal(calls.length, 2);
 });
 
 test("item.completed の error item は失敗として返す", async () => {
