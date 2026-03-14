@@ -1,35 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { shell } from "electron";
+import { spawn } from "node:child_process";
 import { createLogger, type Logger } from "./logger";
-import { OAUTH_PROVIDER_IDS, type OAuthProviderId } from "../shared/provider-settings";
-
-export type OAuthCredentials = {
-  refresh: string;
-  access: string;
-  expires: number;
-  [key: string]: unknown;
-};
-
-type OAuthPrompt = {
-  message: string;
-  placeholder?: string;
-  allowEmpty?: boolean;
-};
-
-type OAuthAuthInfo = {
-  url: string;
-  instructions?: string;
-};
-
-type OAuthProvider = {
-  login: (callbacks: {
-    onAuth: (info: OAuthAuthInfo) => void;
-    onPrompt: (prompt: OAuthPrompt) => Promise<string>;
-    onProgress?: (message: string) => void;
-    signal?: AbortSignal;
-  }) => Promise<OAuthCredentials>;
-};
+import { shell } from "electron";
+import { type OAuthProviderId } from "../shared/provider-settings";
 
 export type AuthPhase =
   | "unauthenticated"
@@ -44,33 +18,54 @@ export type AuthState = {
   message: string;
   authUrl: string | null;
   updatedAt: number;
+  debug: AuthDebugInfo;
 };
 
 type AuthStoreShape = {
-  credentials?: Partial<Record<OAuthProviderId, OAuthCredentials>>;
-  lastProvider?: OAuthProviderId;
-  anthropic?: OAuthCredentials;
+  apiKey?: string;
+  lastChatGptLoginAt?: number;
 };
 
-const importEsm = new Function("specifier", "return import(specifier)") as (specifier: string) => Promise<unknown>;
+export type AuthDebugInfo = {
+  codexAuthPath: string;
+  codexAuthFileExists: boolean;
+  authSourcePath: string;
+  authMode: string | null;
+  hasAccessToken: boolean;
+  hasRefreshToken: boolean;
+  hasOpenAiApiKey: boolean;
+  hasStoredApiKey: boolean;
+  isChatGptAuthenticated: boolean;
+  lastCodexAuthReadError: string | null;
+};
 
-async function defaultProviderFactory(providerId: OAuthProviderId): Promise<OAuthProvider> {
-  const { getOAuthProvider } = (await importEsm("@mariozechner/pi-ai")) as {
-    getOAuthProvider: (id: string) => OAuthProvider | undefined;
-  };
-  const provider = getOAuthProvider(providerId);
-  if (!provider) {
-    throw new Error(`${providerId} OAuth provider が見つかりません`);
-  }
-  return provider as OAuthProvider;
-}
+type CodexAuthJson = {
+  auth_mode?: string | null;
+  OPENAI_API_KEY?: string | null;
+  tokens?: {
+    access_token?: string | null;
+    refresh_token?: string | null;
+  } | null;
+};
+
+type AuthInspectionResult = {
+  authPath: string;
+  fileExists: boolean;
+  authMode: string | null;
+  hasAccessToken: boolean;
+  hasRefreshToken: boolean;
+  hasOpenAiApiKey: boolean;
+  isChatGptAuthenticated: boolean;
+  readError: string | null;
+};
 
 function normalizeState(
   prev: Partial<AuthState>,
   phase: AuthPhase,
   message: string,
   authUrl: string | null,
-  provider: OAuthProviderId
+  provider: OAuthProviderId,
+  debug: AuthDebugInfo
 ): AuthState {
   return {
     ...prev,
@@ -78,109 +73,107 @@ function normalizeState(
     provider,
     message,
     authUrl,
-    updatedAt: Date.now()
+    updatedAt: Date.now(),
+    debug
   };
 }
 
 export class ClaudeAuthService {
   private readonly logger: Logger;
-  private readonly providerFactory: (providerId: OAuthProviderId) => Promise<OAuthProvider>;
   private readonly authPath: string;
   private readonly openExternal: (url: string) => Promise<void>;
-  private state: AuthState = normalizeState({}, "unauthenticated", "未認証です。認証を開始してください。", null, "anthropic");
-  private credentialsByProvider: Partial<Record<OAuthProviderId, OAuthCredentials>> = {};
+  private readonly codexHome: string;
+  private readonly codexAuthPath: string;
+  private readonly fallbackCodexAuthPath: string;
+  private readonly codexCommand: string;
+  private state: AuthState = normalizeState(
+    {},
+    "unauthenticated",
+    "未認証です。認証を開始してください。",
+    null,
+    "openai-codex",
+    {
+      codexAuthPath: "",
+      codexAuthFileExists: false,
+      authSourcePath: "",
+      authMode: null,
+      hasAccessToken: false,
+      hasRefreshToken: false,
+      hasOpenAiApiKey: false,
+      hasStoredApiKey: false,
+      isChatGptAuthenticated: false,
+      lastCodexAuthReadError: null
+    }
+  );
+  private apiKey: string | null = null;
   private listeners = new Set<(state: AuthState) => void>();
-  private pendingCodeResolver: ((code: string) => void) | null = null;
-  private loginAbortController: AbortController | null = null;
-  private loginPromise: Promise<void> | null = null;
+  private loginChild: ReturnType<typeof spawn> | null = null;
+  private loginPromise: Promise<AuthState> | null = null;
 
   constructor({
     logger = createLogger("auth"),
-    providerFactory = defaultProviderFactory,
     authPath = path.join(process.cwd(), ".lilto-auth.json"),
-    openExternal = (url: string) => shell.openExternal(url)
+    openExternal = (url: string) => shell.openExternal(url),
+    codexHome = process.env.CODEX_HOME || path.join(process.env.HOME || process.cwd(), ".codex"),
+    fallbackCodexHome = path.join(process.env.HOME || process.cwd(), ".codex"),
+    codexCommand = "codex"
   }: {
     logger?: Logger;
-    providerFactory?: (providerId: OAuthProviderId) => Promise<OAuthProvider>;
     authPath?: string;
     openExternal?: (url: string) => Promise<void>;
+    codexHome?: string;
+    fallbackCodexHome?: string;
+    codexCommand?: string;
   } = {}) {
     this.logger = logger;
-    this.providerFactory = providerFactory;
     this.authPath = authPath;
     this.openExternal = openExternal;
-    this.loadPersistedCredentials();
+    this.codexHome = codexHome;
+    this.codexAuthPath = path.join(codexHome, "auth.json");
+    this.fallbackCodexAuthPath = path.join(fallbackCodexHome, "auth.json");
+    this.codexCommand = codexCommand;
+    this.loadPersistedState();
+    this.migrateLegacyChatGptAuth();
 
     if (process.env.LILTO_E2E_MOCK === "1") {
-      this.setState("authenticated", "E2E モック認証済み", null, "anthropic");
+      this.setState("authenticated", "E2E モック認証済み", null, "openai-codex");
+    } else if (this.hasChatGptAuth()) {
+      this.setState("authenticated", "Codex ChatGPT 認証を読み込みました。", null, "openai-codex");
     } else {
-      const persistedProvider = this.getPersistedProvider();
-      if (persistedProvider) {
-        this.setState("authenticated", "認証情報を読み込みました。", null, persistedProvider);
-      } else {
-        this.setState("unauthenticated", "未認証です。認証を開始してください。", null, "anthropic");
-      }
+      this.setState("unauthenticated", "未認証です。認証を開始してください。", null, "openai-codex");
     }
   }
 
-  private getPersistedProvider(): OAuthProviderId | null {
-    if (this.credentialsByProvider[this.state.provider]) {
-      return this.state.provider;
-    }
-    for (const providerId of OAUTH_PROVIDER_IDS) {
-      if (this.credentialsByProvider[providerId]) {
-        return providerId;
-      }
-    }
-    return null;
-  }
-
-  private loadPersistedCredentials(): void {
+  private loadPersistedState(): void {
     if (!fs.existsSync(this.authPath)) return;
     try {
       const raw = fs.readFileSync(this.authPath, "utf8");
       const parsed = JSON.parse(raw) as AuthStoreShape;
-      const normalized: Partial<Record<OAuthProviderId, OAuthCredentials>> = {};
-      if (parsed.credentials && typeof parsed.credentials === "object") {
-        for (const providerId of OAUTH_PROVIDER_IDS) {
-          const credential = parsed.credentials[providerId];
-          if (credential && typeof credential === "object") {
-            normalized[providerId] = credential;
-          }
-        }
-      }
-      if (!normalized.anthropic && parsed.anthropic && typeof parsed.anthropic === "object") {
-        normalized.anthropic = parsed.anthropic;
-      }
-      this.credentialsByProvider = normalized;
-      if (parsed.lastProvider && OAUTH_PROVIDER_IDS.includes(parsed.lastProvider)) {
-        const last = parsed.lastProvider as OAuthProviderId;
-        if (this.credentialsByProvider[last]) {
-          this.state = normalizeState(this.state, this.state.phase, this.state.message, this.state.authUrl, last);
-        }
-      }
+      this.apiKey = typeof parsed.apiKey === "string" && parsed.apiKey.trim() ? parsed.apiKey : null;
     } catch (error) {
       this.logger.error("auth_load_failed", { error: String(error) });
-      this.credentialsByProvider = {};
+      this.apiKey = null;
     }
   }
 
-  private persistCredentials(providerId: OAuthProviderId, credentials: OAuthCredentials): void {
-    this.credentialsByProvider = { ...this.credentialsByProvider, [providerId]: credentials };
+  private persistState(): void {
     const payload: AuthStoreShape = {
-      credentials: this.credentialsByProvider,
-      lastProvider: providerId,
-      anthropic: this.credentialsByProvider.anthropic
+      apiKey: this.apiKey ?? undefined,
+      lastChatGptLoginAt: this.hasChatGptAuth() ? Date.now() : undefined
     };
     fs.writeFileSync(this.authPath, JSON.stringify(payload, null, 2), "utf8");
   }
 
-  private clearPendingCode(): void {
-    this.pendingCodeResolver = null;
+  setApiKey(apiKey: string | null): void {
+    this.apiKey = apiKey?.trim() ? apiKey.trim() : null;
+    this.persistState();
+    if (!this.hasChatGptAuth()) {
+      this.setState("unauthenticated", "未認証です。認証を開始してください。", null, "openai-codex");
+    }
   }
 
   private setState(phase: AuthPhase, message: string, authUrl: string | null, provider: OAuthProviderId): void {
-    this.state = normalizeState(this.state, phase, message, authUrl, provider);
+    this.state = normalizeState(this.state, phase, message, authUrl, provider, this.inspectAuthDebug());
     for (const listener of this.listeners) {
       listener(this.state);
     }
@@ -197,107 +190,166 @@ export class ClaudeAuthService {
     };
   }
 
-  async startOAuth(providerId: OAuthProviderId = "anthropic"): Promise<AuthState> {
-    if (this.loginPromise) {
-      return this.state;
+  private hasChatGptAuth(): boolean {
+    return this.inspectAuthDebug().isChatGptAuthenticated;
+  }
+
+  private inspectCodexAuthFile(authPath: string): AuthInspectionResult {
+    const fileExists = fs.existsSync(authPath);
+    let auth: CodexAuthJson | null = null;
+    let readError: string | null = null;
+
+    if (fileExists) {
+      try {
+        const raw = fs.readFileSync(authPath, "utf8");
+        const parsed = JSON.parse(raw) as unknown;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          auth = parsed as CodexAuthJson;
+        }
+      } catch (error) {
+        readError = String(error);
+        this.logger.error("codex_auth_read_failed", { authPath, error: readError });
+      }
     }
 
-    const controller = new AbortController();
-    this.loginAbortController = controller;
-    this.loginPromise = (async () => {
-      try {
-        this.setState("auth_in_progress", "認証ブラウザを起動しています...", null, providerId);
-        const provider = await this.providerFactory(providerId);
+    const accessToken = auth?.tokens?.access_token?.trim() ?? "";
+    const refreshToken = auth?.tokens?.refresh_token?.trim() ?? "";
+    const openAiApiKey = auth?.OPENAI_API_KEY?.trim() ?? "";
+    const authMode = typeof auth?.auth_mode === "string" && auth.auth_mode.trim() ? auth.auth_mode.trim() : null;
 
-        const credentials = await provider.login({
-          onAuth: (info) => {
-            this.setState("auth_in_progress", "外部ブラウザで認証を完了してください。", info.url, providerId);
-            void this.openExternal(info.url).catch((error) => {
-              this.logger.error("oauth_open_external_failed", { error: String(error) });
-            });
+    return {
+      authPath,
+      fileExists,
+      authMode,
+      hasAccessToken: Boolean(accessToken),
+      hasRefreshToken: Boolean(refreshToken),
+      hasOpenAiApiKey: Boolean(openAiApiKey),
+      isChatGptAuthenticated: authMode === "chatgpt" && Boolean(accessToken || refreshToken),
+      readError
+    };
+  }
+
+  private migrateLegacyChatGptAuth(): void {
+    const primary = this.inspectCodexAuthFile(this.codexAuthPath);
+    if (primary.isChatGptAuthenticated || this.codexAuthPath === this.fallbackCodexAuthPath) {
+      return;
+    }
+
+    const fallback = this.inspectCodexAuthFile(this.fallbackCodexAuthPath);
+    if (!fallback.isChatGptAuthenticated) {
+      return;
+    }
+
+    try {
+      fs.mkdirSync(path.dirname(this.codexAuthPath), { recursive: true });
+      fs.copyFileSync(this.fallbackCodexAuthPath, this.codexAuthPath);
+      this.logger.info("codex_auth_migrated", {
+        from: this.fallbackCodexAuthPath,
+        to: this.codexAuthPath
+      });
+    } catch (error) {
+      this.logger.error("codex_auth_migrate_failed", {
+        from: this.fallbackCodexAuthPath,
+        to: this.codexAuthPath,
+        error: String(error)
+      });
+    }
+  }
+
+  private inspectAuthDebug(): AuthDebugInfo {
+    const inspection = this.inspectCodexAuthFile(this.codexAuthPath);
+
+    return {
+      codexAuthPath: this.codexAuthPath,
+      codexAuthFileExists: inspection.fileExists,
+      authSourcePath: inspection.authPath,
+      authMode: inspection.authMode,
+      hasAccessToken: inspection.hasAccessToken,
+      hasRefreshToken: inspection.hasRefreshToken,
+      hasOpenAiApiKey: inspection.hasOpenAiApiKey,
+      hasStoredApiKey: Boolean(this.apiKey),
+      isChatGptAuthenticated: inspection.isChatGptAuthenticated,
+      lastCodexAuthReadError: inspection.readError
+    };
+  }
+
+  async startOAuth(providerId: OAuthProviderId = "openai-codex"): Promise<AuthState> {
+    if (this.loginPromise) {
+      return this.loginPromise;
+    }
+
+    this.loginPromise = (async () => {
+      this.setState("auth_in_progress", "Codex ChatGPT 認証を開始しています...", null, providerId);
+      try {
+        this.loginChild = spawn(this.codexCommand, ["login"], {
+          env: {
+            ...process.env,
+            CODEX_HOME: this.codexHome
           },
-          onProgress: (message) => {
-            this.setState("auth_in_progress", message, this.state.authUrl, providerId);
-          },
-          onPrompt: async (prompt) => {
-            this.setState("awaiting_code", prompt.message || "認証コードを入力してください。", this.state.authUrl, providerId);
-            return new Promise<string>((resolve) => {
-              this.pendingCodeResolver = resolve;
-            });
-          },
-          signal: controller.signal
+          stdio: "ignore"
+        });
+      } catch (error) {
+        this.setState("auth_failed", `認証に失敗しました: ${String(error)}`, null, providerId);
+        this.loginPromise = null;
+        return this.state;
+      }
+
+      const state = await new Promise<AuthState>((resolve) => {
+        this.loginChild?.once("error", async (error) => {
+          this.logger.error("codex_login_spawn_failed", { error: String(error) });
+          await this.openExternal("https://developers.openai.com/codex/auth").catch(() => {});
+          this.setState(
+            "auth_failed",
+            "Codex login の起動に失敗しました。`codex login` を実行してから再試行してください。",
+            "https://developers.openai.com/codex/auth",
+            providerId
+          );
+          resolve(this.state);
         });
 
-        this.persistCredentials(providerId, credentials);
-        this.setState("authenticated", "認証が完了しました。すぐにチャットできます。", null, providerId);
-      } catch (error) {
-        this.setState("auth_failed", `認証に失敗しました: ${String(error)}`, this.state.authUrl, providerId);
-      } finally {
-        this.clearPendingCode();
-        this.loginAbortController = null;
-        this.loginPromise = null;
-      }
+        this.loginChild?.once("close", async (code) => {
+          this.loginChild = null;
+          if (code === 0 && this.hasChatGptAuth()) {
+            this.persistState();
+            this.setState("authenticated", "Codex ChatGPT 認証が完了しました。", null, providerId);
+          } else {
+            await this.openExternal("https://developers.openai.com/codex/auth").catch(() => {});
+            this.setState(
+              "auth_failed",
+              "Codex ChatGPT 認証を完了できませんでした。`codex login` を実行してから再試行してください。",
+              "https://developers.openai.com/codex/auth",
+              providerId
+            );
+          }
+          resolve(this.state);
+        });
+      });
+
+      this.loginPromise = null;
+      return state;
     })();
 
-    await this.loginPromise;
-    return this.state;
+    return this.loginPromise;
   }
 
-  submitAuthorizationCode(code: string): AuthState {
-    const normalized = this.extractAuthorizationCode(code);
-    if (!normalized) {
-      throw new Error("認証コードが空です。");
-    }
-    if (!this.pendingCodeResolver) {
-      throw new Error("現在入力待ちの認証コードはありません。");
-    }
-    this.pendingCodeResolver(normalized);
-    this.clearPendingCode();
-    this.setState("auth_in_progress", "認証コードを確認中です...", this.state.authUrl, this.state.provider);
-    return this.state;
-  }
-
-  private extractAuthorizationCode(input: string): string {
-    const raw = input.trim();
-    if (!raw) return "";
-
-    if (/^\S+#\S+$/.test(raw)) {
-      return raw;
-    }
-
-    // Support pasted full instructions such as:
-    // "Authentication Code ... Paste this into Claude Code:"
-    const match = raw.match(/([^\s#]+#[^\s]+)/);
-    return match ? match[1] : raw;
+  submitAuthorizationCode(_code?: string): AuthState {
+    throw new Error("Codex ChatGPT 認証では認証コード入力は不要です。");
   }
 
   async getApiKey(providerId: OAuthProviderId): Promise<string | null> {
+    if (providerId !== "openai-codex") {
+      return null;
+    }
     if (process.env.LILTO_E2E_MOCK === "1") {
-      return `mock-${providerId}-access-token`;
+      return "mock-openai-codex-access-token";
     }
-
-    const credentials = this.credentialsByProvider[providerId];
-    if (!credentials) return null;
-
-    const { getOAuthApiKey } = (await importEsm("@mariozechner/pi-ai")) as {
-      getOAuthApiKey: (
-        providerId: string,
-        credentials: Record<string, OAuthCredentials>
-      ) => Promise<{ newCredentials: OAuthCredentials; apiKey: string } | null>;
-    };
-    const result = await getOAuthApiKey(providerId, { [providerId]: credentials });
-    if (!result) return null;
-
-    if (result.newCredentials.expires !== credentials.expires || result.newCredentials.access !== credentials.access) {
-      this.persistCredentials(providerId, result.newCredentials as OAuthCredentials);
-    }
-    return result.apiKey;
+    return this.apiKey;
   }
 
   dispose(): void {
-    this.loginAbortController?.abort();
-    this.loginAbortController = null;
-    this.loginPromise = null;
-    this.clearPendingCode();
+    if (this.loginChild && !this.loginChild.killed) {
+      this.loginChild.kill();
+      this.loginChild = null;
+    }
   }
 }

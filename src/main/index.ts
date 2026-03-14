@@ -11,7 +11,9 @@ import { registerAgentIpcHandlers } from "./ipc";
 import { createLogger } from "./logger";
 import { NotificationService } from "./notifications";
 import { ProviderSettingsService } from "./provider-settings";
+import { ModelCatalogService } from "./model-catalog";
 import { SchedulerService } from "./scheduler";
+import { SchedulerBridgeServer } from "./scheduler-bridge";
 import { setupSkillRuntime } from "./skill-runtime";
 import { createCliCompatibilityMap } from "./command-compat";
 import { resolveAppIcon, resolveWindowIcon } from "./icon-assets";
@@ -22,10 +24,11 @@ const logger = createLogger("main");
 
 let mainWindow: BrowserWindow | null = null;
 let isQuitting = false;
+let schedulerBridge: SchedulerBridgeServer | null = null;
 
 const notificationService = new NotificationService();
 
-const authService = new ClaudeAuthService({ logger: createLogger("auth") });
+let authService: ClaudeAuthService | null = null;
 const providerSettingsService = new ProviderSettingsService({ logger: createLogger("providers") });
 
 function broadcastSchedulerNotification(event: SchedulerNotificationEvent): void {
@@ -74,7 +77,7 @@ function createWindow(): void {
   });
 }
 
-void app.whenReady().then(() => {
+void app.whenReady().then(async () => {
   if (process.platform === "darwin") {
     const dockIcon = resolveAppIcon(512);
     if (!dockIcon.isEmpty()) {
@@ -107,6 +110,7 @@ void app.whenReady().then(() => {
     const message = error instanceof Error ? error.message : String(error);
     logger.error("skill_runtime_init_failed", { message });
     skillRuntime = {
+      codexHomeDir: process.env.CODEX_HOME || path.join(app.getPath("userData"), "codex"),
       appSkillsDir: "",
       bundledSkillsDir: "",
       userSkillsDir: "",
@@ -133,11 +137,30 @@ void app.whenReady().then(() => {
     logger.error("scheduler_start_failed", { message });
   });
 
+  schedulerBridge = new SchedulerBridgeServer({
+    logger: createLogger("scheduler-bridge"),
+    scheduler
+  });
+  await schedulerBridge.start().catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error("scheduler_bridge_start_failed", { message });
+  });
+
+  authService = new ClaudeAuthService({
+    logger: createLogger("auth"),
+    codexHome: skillRuntime.codexHomeDir
+  });
+  const modelCatalogService = new ModelCatalogService({
+    logger: createLogger("models"),
+    codexHomeDir: skillRuntime.codexHomeDir
+  });
+
   const agentRuntime = new AgentRuntime({
     logger: createLogger("agent"),
     authService,
     workspaceDir: skillRuntime.workspaceDir,
-    scheduler,
+    codexHomeDir: skillRuntime.codexHomeDir,
+    schedulerBridge,
     availableSkills: skillRuntime.availableSkills
   });
 
@@ -146,6 +169,7 @@ void app.whenReady().then(() => {
     authService,
     providerSettingsService,
     notificationService,
+    modelCatalogService,
     bundledSkillsDir: skillRuntime.bundledSkillsDir,
     userSkillsDir: skillRuntime.userSkillsDir,
     onSettingsSaved: (settings) => {
@@ -173,7 +197,10 @@ app.on("before-quit", () => {
   isQuitting = true;
   unregisterAppShortcut();
   heartbeat.stop();
-  authService.dispose();
+  schedulerBridge?.stop();
+  schedulerBridge = null;
+  authService?.dispose();
+  authService = null;
 });
 
 app.on("window-all-closed", () => {

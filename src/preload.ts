@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld("lilto", {
   startClaudeOauth: async () => ipcRenderer.invoke("auth:startClaudeOauth"),
   submitAuthCode: async (code: string) => ipcRenderer.invoke("auth:submitCode", { code }),
   getAuthState: async () => ipcRenderer.invoke("auth:getState"),
+  listModels: async (payload: unknown) => ipcRenderer.invoke("models:list", payload),
   getProviderSettings: async () => ipcRenderer.invoke("providers:getSettings"),
   saveProviderSettings: async (settings: unknown) => ipcRenderer.invoke("providers:saveSettings", settings),
   listSkills: async () => ipcRenderer.invoke("skills:list"),

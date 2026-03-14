@@ -7,10 +7,11 @@ test("preload は providers:getSettings / providers:saveSettings / auth:startCla
   assert.match(content, /getProviderSettings:\s*async \(\) => ipcRenderer\.invoke\("providers:getSettings"\)/);
   assert.match(content, /saveProviderSettings:\s*async \(settings: unknown\) => ipcRenderer\.invoke\("providers:saveSettings", settings\)/);
   assert.match(content, /startClaudeOauth:\s*async \(\) => ipcRenderer\.invoke\("auth:startClaudeOauth"\)/);
+  assert.match(content, /listModels:\s*async \(payload: unknown\) => ipcRenderer\.invoke\("models:list", payload\)/);
 });
 
-test("ipc は auth:startClaudeOauth 実行時に provider settings の oauthProvider を利用する", () => {
+test("ipc は auth:startClaudeOauth 実行時に openai-codex 固定で認証を開始する", () => {
   const content = fs.readFileSync("src/main/ipc.ts", "utf8");
-  assert.match(content, /const oauthProvider = providerSettingsService\.getState\(\)\.oauthProvider/);
-  assert.match(content, /authService\.startOAuth\(oauthProvider\)/);
+  assert.match(content, /authService\.startOAuth\("openai-codex"\)/);
+  assert.match(content, /ipcMain\.handle\("models:list"/);
 });

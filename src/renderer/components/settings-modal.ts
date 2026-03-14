@@ -1,7 +1,12 @@
 import { LitElement, html, css } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { AuthState, ActiveProvider, ProviderSettings, SkillInfo, SkillUpdateInfo } from "../types.js";
-import { OAUTH_PROVIDER_IDS, type OAuthProviderId } from "../../shared/provider-settings.js";
+import type { OAuthProviderId } from "../../shared/provider-settings.js";
+
+type ListedModel = {
+  id: string;
+  displayName: string;
+};
 
 @customElement("lilt-settings-modal")
 export class LiltSettingsModal extends LitElement {
@@ -9,12 +14,13 @@ export class LiltSettingsModal extends LitElement {
   @property({ type: Object }) authState: AuthState | null = null;
   @property({ type: Object }) providerSettings: ProviderSettings = {
     activeProvider: "oauth",
-    oauthProvider: "anthropic",
+    oauthProvider: "openai-codex",
+    oauthModelId: "gpt-5.3-codex",
     customProvider: {
-      name: "Ollama",
-      baseUrl: "http://127.0.0.1:11434/v1",
+      name: "OpenAI API Key",
+      baseUrl: "",
       apiKey: "",
-      modelId: "qwen2.5:0.5b"
+      modelId: "gpt-5.3-codex"
     },
     networkProxy: {
       useProxy: false
@@ -29,12 +35,19 @@ export class LiltSettingsModal extends LitElement {
   @state() private _customName = "";
   @state() private _customBaseUrl = "";
   @state() private _customApiKey = "";
+  @state() private _oauthModelId = "gpt-5.3-codex";
   @state() private _customModelId = "";
   @state() private _useProxy = false;
-  @state() private _authCodeValue = "";
   @state() private _saveStatus = "";
   @state() private _providerSelStatus = "";
-  @state() private _oauthProvider: OAuthProviderId = "anthropic";
+  @state() private _oauthProvider: OAuthProviderId = "openai-codex";
+  @state() private _oauthModels: ListedModel[] = [];
+  @state() private _customModels: ListedModel[] = [];
+  @state() private _oauthModelsLoading = false;
+  @state() private _customModelsLoading = false;
+  @state() private _oauthModelsStatus = "";
+  @state() private _customModelsStatus = "";
+  @state() private _oauthSaveStatus = "";
   @state() private _activeSection: "providers" | "chat" = "providers";
   @state() private _enterToSend = false;
   @state() private _globalShortcut = "";
@@ -82,23 +95,23 @@ export class LiltSettingsModal extends LitElement {
       this._customName = cp.name;
       this._customBaseUrl = cp.baseUrl;
       this._customApiKey = cp.apiKey;
+      this._oauthModelId = this.providerSettings.oauthModelId;
       this._customModelId = cp.modelId;
       this._useProxy = np.useProxy;
       this._oauthProvider = this.providerSettings.oauthProvider;
       this._enterToSend = cs?.enterToSend ?? false;
       this._globalShortcut = cs?.globalShortcut ?? "";
     }
+    if (changedProps.has("open") && this.open) {
+      void this._loadOauthModels();
+      if (this._customApiKey.trim() || this._customBaseUrl.trim()) {
+        void this._loadCustomModels();
+      }
+    }
     if (changedProps.has("authState")) {
       const as = this.authState;
-      // Auto-close on successful OAuth auth
-      if (as?.phase === "authenticated" && this.providerSettings.activeProvider === "oauth") {
-        this._close();
-      }
-      // Focus code input when awaiting code
-      if (as?.phase === "awaiting_code") {
-        this.updateComplete.then(() => {
-          this.renderRoot.querySelector<HTMLInputElement>("#auth-code")?.focus();
-        });
+      if (as?.phase === "authenticated") {
+        void this._loadOauthModels();
       }
     }
   }
@@ -247,6 +260,31 @@ export class LiltSettingsModal extends LitElement {
     .status {
       font-size: 14px;
       color: var(--muted, #6b7280);
+    }
+    .auth-debug {
+      margin-top: 12px;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      background: #f9fafb;
+      padding: 10px 12px;
+    }
+    .auth-debug summary {
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 700;
+      color: #374151;
+    }
+    .auth-debug-grid {
+      display: grid;
+      grid-template-columns: max-content 1fr;
+      gap: 6px 10px;
+      margin-top: 10px;
+      font-size: 13px;
+      color: #374151;
+      word-break: break-word;
+    }
+    .auth-debug-grid code {
+      font-size: 12px;
     }
     button {
       background: #f3f4f6;
@@ -498,12 +536,11 @@ export class LiltSettingsModal extends LitElement {
     const isCustomActive = ps.activeProvider === "custom-openai-completions";
     const authPhase = as?.phase ?? "unauthenticated";
     const authMessage = as?.message ?? "未認証です。認証を開始してください。";
-    const codeInputEnabled = authPhase === "awaiting_code";
-    const oauthBtnDisabled = authPhase === "auth_in_progress" || authPhase === "awaiting_code";
+    const oauthBtnDisabled = authPhase === "auth_in_progress";
 
     return html`
       <h3>Providers &amp; Models</h3>
-      <p>OAuth Provider と Custom Provider（OpenAI Completions Compatible）を設定できます。</p>
+      <p>Codex ChatGPT 認証と API key 実行を設定できます。</p>
 
       <div class="provider-choice">
         <label>
@@ -514,7 +551,7 @@ export class LiltSettingsModal extends LitElement {
             .checked=${isOAuthActive}
             @change=${() => this._changeProvider("oauth")}
           />
-          OAuth Provider
+          ChatGPT Login
         </label>
         <label>
           <input
@@ -524,66 +561,57 @@ export class LiltSettingsModal extends LitElement {
             .checked=${isCustomActive}
             @change=${() => this._changeProvider("custom-openai-completions")}
           />
-          Custom Provider
+          API Key
         </label>
         <span class="status">${this._providerSelStatus}</span>
       </div>
 
       <section class="provider-section ${isOAuthActive ? "active" : ""}">
-        <h4>OAuth Authorization</h4>
-        <p>OAuth 認証を開始して、表示された認証コードを入力してください。</p>
-        <label class="oauth-provider-row">
-          OAuth Provider
-          <select
-            id="oauth-provider"
-            .value=${this._oauthProvider}
-            @change=${(e: Event) => {
-              const value = (e.target as HTMLSelectElement).value as OAuthProviderId;
-              this._oauthProvider = OAUTH_PROVIDER_IDS.includes(value) ? value : "anthropic";
-            }}
-          >
-            ${OAUTH_PROVIDER_IDS.map((id) => html`<option value=${id}>${this._oauthProviderLabel(id)}</option>`)}
-          </select>
-        </label>
+        <h4>ChatGPT Authorization</h4>
+        <p><code>codex login</code> を使ったブラウザ認証を開始します。</p>
         <div class="auth-row">
           <button .disabled=${oauthBtnDisabled} @click=${this._startOauth}>
-            OAuth で認証
+            ChatGPT で認証
           </button>
           <span class="status">${authMessage}</span>
         </div>
-        <div class="auth-row auth-code-row">
-          <input
-            id="auth-code"
-            placeholder="Authentication Code（code#state）を貼り付け"
-            .value=${this._authCodeValue}
-            .disabled=${!codeInputEnabled}
-            @input=${(e: InputEvent) => {
-              this._authCodeValue = (e.target as HTMLInputElement).value;
-            }}
-            @keydown=${(e: KeyboardEvent) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                void this._submitCode();
-              }
-            }}
-          />
-          <button .disabled=${!codeInputEnabled} @click=${this._submitCode}>
-            コード送信
-          </button>
+        <label class="oauth-provider-row">
+          Model
+          <div class="auth-row">
+            <select
+              id="oauth-model"
+              .disabled=${this._oauthModelsLoading || this._oauthModels.length === 0}
+              .value=${this._oauthModelId || ""}
+              @change=${(e: Event) => {
+                this._oauthModelId = (e.target as HTMLSelectElement).value || "gpt-5.3-codex";
+              }}
+            >
+              ${this._oauthModels.length === 0
+                ? html`<option value="">モデル一覧を取得してください</option>`
+                : this._oauthModels.map((model) => html`<option value=${model.id}>${model.displayName}</option>`)}
+            </select>
+            <button .disabled=${this._oauthModelsLoading} @click=${this._loadOauthModels}>
+              ${this._oauthModelsLoading ? "取得中..." : "モデル一覧を取得"}
+            </button>
+          </div>
+        </label>
+        ${this._oauthModelsStatus ? html`<div class="status">${this._oauthModelsStatus}</div>` : ""}
+        <div class="status">ブラウザ認証が終わると Codex のローカル認証状態を再利用します。</div>
+        <div class="provider-actions">
+          <button @click=${this._saveOauthSettings}>Model 設定を保存</button>
+          <span class="status">${this._oauthSaveStatus}</span>
         </div>
-        <div class="status">
-          認証画面の「Authentication Code / Paste this into ...」で表示された値を貼り付けて送信してください。
-        </div>
+        ${this._renderAuthDebug()}
       </section>
 
       <section class="provider-section ${isCustomActive ? "active" : ""}">
-        <h4>Custom Provider (OpenAI Completions Compatible)</h4>
+        <h4>API Key</h4>
         <div class="input-grid">
           <label>
-            Provider Name (Required)
+            Label
             <input
               id="custom-provider-name"
-              placeholder="e.g., Ollama"
+              placeholder="OpenAI API Key"
               .value=${this._customName}
               @input=${(e: InputEvent) => {
                 this._customName = (e.target as HTMLInputElement).value;
@@ -591,10 +619,10 @@ export class LiltSettingsModal extends LitElement {
             />
           </label>
           <label>
-            Base URL (Required)
+            Base URL (Optional)
             <input
               id="custom-base-url"
-              placeholder="http://127.0.0.1:11434/v1"
+              placeholder="https://api.openai.com/v1"
               .value=${this._customBaseUrl}
               @input=${(e: InputEvent) => {
                 this._customBaseUrl = (e.target as HTMLInputElement).value;
@@ -602,11 +630,11 @@ export class LiltSettingsModal extends LitElement {
             />
           </label>
           <label>
-            API Key (Optional)
+            API Key (Required unless local runtime ignores it)
             <input
               id="custom-api-key"
               type="password"
-              placeholder="Leave empty if not required"
+              placeholder="sk-..."
               .value=${this._customApiKey}
               @input=${(e: InputEvent) => {
                 this._customApiKey = (e.target as HTMLInputElement).value;
@@ -614,17 +642,27 @@ export class LiltSettingsModal extends LitElement {
             />
           </label>
           <label>
-            Model ID
-            <input
-              id="custom-model-id"
-              placeholder="qwen2.5:0.5b"
-              .value=${this._customModelId}
-              @input=${(e: InputEvent) => {
-                this._customModelId = (e.target as HTMLInputElement).value;
-              }}
-            />
+            Model
+            <div class="auth-row">
+              <select
+                id="custom-model-id"
+                .disabled=${this._customModelsLoading || this._customModels.length === 0}
+                .value=${this._customModelId || ""}
+                @change=${(e: Event) => {
+                  this._customModelId = (e.target as HTMLSelectElement).value || "";
+                }}
+              >
+                ${this._customModels.length === 0
+                  ? html`<option value="">API key / Base URL を入力して一覧取得</option>`
+                  : this._customModels.map((model) => html`<option value=${model.id}>${model.displayName}</option>`)}
+              </select>
+              <button .disabled=${this._customModelsLoading} @click=${this._loadCustomModels}>
+                ${this._customModelsLoading ? "取得中..." : "モデル一覧を取得"}
+              </button>
+            </div>
           </label>
         </div>
+        ${this._customModelsStatus ? html`<div class="status">${this._customModelsStatus}</div>` : ""}
         <h4>Network Proxy</h4>
         <div class="input-grid">
           <label>
@@ -640,10 +678,43 @@ export class LiltSettingsModal extends LitElement {
           </label>
         </div>
         <div class="provider-actions">
-          <button @click=${this._saveProviderAndProxy}>Save Provider Settings</button>
+          <button @click=${this._saveProviderAndProxy}>Save Settings</button>
           <span class="status">${this._saveStatus}</span>
         </div>
       </section>
+    `;
+  }
+
+  private _renderAuthDebug() {
+    const debug = this.authState?.debug;
+    if (!debug) {
+      return "";
+    }
+
+    return html`
+      <details class="auth-debug">
+        <summary>ChatGPT auth debug</summary>
+        <div class="auth-debug-grid">
+          <strong>codex auth.json</strong>
+          <code>${debug.codexAuthPath}</code>
+          <strong>file exists</strong>
+          <span>${debug.codexAuthFileExists ? "yes" : "no"}</span>
+          <strong>auth_mode</strong>
+          <span>${debug.authMode ?? "(none)"}</span>
+          <strong>access token</strong>
+          <span>${debug.hasAccessToken ? "present" : "missing"}</span>
+          <strong>refresh token</strong>
+          <span>${debug.hasRefreshToken ? "present" : "missing"}</span>
+          <strong>OPENAI_API_KEY</strong>
+          <span>${debug.hasOpenAiApiKey ? "present" : "missing"}</span>
+          <strong>saved API key</strong>
+          <span>${debug.hasStoredApiKey ? "present" : "missing"}</span>
+          <strong>ChatGPT auth valid</strong>
+          <span>${debug.isChatGptAuthenticated ? "yes" : "no"}</span>
+          <strong>read error</strong>
+          <span>${debug.lastCodexAuthReadError ?? "(none)"}</span>
+        </div>
+      </details>
     `;
   }
 
@@ -870,160 +941,6 @@ export class LiltSettingsModal extends LitElement {
     if (e.target === e.currentTarget) this._close();
   }
 
-  private _renderProvidersSection(
-    isOAuthActive: boolean,
-    isCustomActive: boolean,
-    authPhase: string,
-    authMessage: string,
-    codeInputEnabled: boolean,
-    oauthBtnDisabled: boolean
-  ) {
-    return html`
-      <h3>Providers &amp; Models</h3>
-      <p>OAuth Provider と Custom Provider（OpenAI Completions Compatible）を設定できます。</p>
-
-      <div class="provider-choice">
-        <label>
-          <input
-            type="radio"
-            name="active-provider"
-            value="oauth"
-            .checked=${isOAuthActive}
-            @change=${() => this._changeProvider("oauth")}
-          />
-          OAuth Provider
-        </label>
-        <label>
-          <input
-            type="radio"
-            name="active-provider"
-            value="custom-openai-completions"
-            .checked=${isCustomActive}
-            @change=${() => this._changeProvider("custom-openai-completions")}
-          />
-          Custom Provider
-        </label>
-        <span class="status">${this._providerSelStatus}</span>
-      </div>
-
-      <section class="provider-section ${isOAuthActive ? "active" : ""}">
-        <h4>OAuth Authorization</h4>
-        <p>OAuth 認証を開始して、表示された認証コードを入力してください。</p>
-        <label class="oauth-provider-row">
-          OAuth Provider
-          <select
-            id="oauth-provider"
-            .value=${this._oauthProvider}
-            @change=${(e: Event) => {
-              const value = (e.target as HTMLSelectElement).value as OAuthProviderId;
-              this._oauthProvider = OAUTH_PROVIDER_IDS.includes(value) ? value : "anthropic";
-            }}
-          >
-            ${OAUTH_PROVIDER_IDS.map((id) => html`<option value=${id}>${this._oauthProviderLabel(id)}</option>`)}
-          </select>
-        </label>
-        <div class="auth-row">
-          <button .disabled=${oauthBtnDisabled} @click=${this._startOauth}>
-            OAuth で認証
-          </button>
-          <span class="status">${authMessage}</span>
-        </div>
-        <div class="auth-row auth-code-row">
-          <input
-            id="auth-code"
-            placeholder="Authentication Code（code#state）を貼り付け"
-            .value=${this._authCodeValue}
-            .disabled=${!codeInputEnabled}
-            @input=${(e: InputEvent) => {
-              this._authCodeValue = (e.target as HTMLInputElement).value;
-            }}
-            @keydown=${(e: KeyboardEvent) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                void this._submitCode();
-              }
-            }}
-          />
-          <button .disabled=${!codeInputEnabled} @click=${this._submitCode}>
-            コード送信
-          </button>
-        </div>
-        <div class="status">
-          認証画面の「Authentication Code / Paste this into ...」で表示された値を貼り付けて送信してください。
-        </div>
-      </section>
-
-      <section class="provider-section ${isCustomActive ? "active" : ""}">
-        <h4>Custom Provider (OpenAI Completions Compatible)</h4>
-        <div class="input-grid">
-          <label>
-            Provider Name (Required)
-            <input
-              id="custom-provider-name"
-              placeholder="e.g., Ollama"
-              .value=${this._customName}
-              @input=${(e: InputEvent) => {
-                this._customName = (e.target as HTMLInputElement).value;
-              }}
-            />
-          </label>
-          <label>
-            Base URL (Required)
-            <input
-              id="custom-base-url"
-              placeholder="http://127.0.0.1:11434/v1"
-              .value=${this._customBaseUrl}
-              @input=${(e: InputEvent) => {
-                this._customBaseUrl = (e.target as HTMLInputElement).value;
-              }}
-            />
-          </label>
-          <label>
-            API Key (Optional)
-            <input
-              id="custom-api-key"
-              type="password"
-              placeholder="Leave empty if not required"
-              .value=${this._customApiKey}
-              @input=${(e: InputEvent) => {
-                this._customApiKey = (e.target as HTMLInputElement).value;
-              }}
-            />
-          </label>
-          <label>
-            Model ID
-            <input
-              id="custom-model-id"
-              placeholder="qwen2.5:0.5b"
-              .value=${this._customModelId}
-              @input=${(e: InputEvent) => {
-                this._customModelId = (e.target as HTMLInputElement).value;
-              }}
-            />
-          </label>
-        </div>
-        <h4>Network Proxy</h4>
-        <div class="input-grid">
-          <label>
-            <input
-              id="use-proxy"
-              type="checkbox"
-              .checked=${this._useProxy}
-              @change=${(e: InputEvent) => {
-                this._useProxy = (e.target as HTMLInputElement).checked;
-              }}
-            />
-            Proxy を使う（HTTP_PROXY / HTTPS_PROXY / NO_PROXY を利用）
-          </label>
-        </div>
-        <div class="provider-actions">
-          <button @click=${this._saveProviderAndProxy}>Save Provider Settings</button>
-          <span class="status">${this._saveStatus}</span>
-        </div>
-      </section>
-    `;
-  }
-
   private _renderChatSection() {
     const displayShortcut = this._formatShortcutDisplay(this._globalShortcut);
     return html`
@@ -1094,11 +1011,16 @@ export class LiltSettingsModal extends LitElement {
     const next: ProviderSettings = {
       ...this.providerSettings,
       activeProvider: provider,
-      oauthProvider: this._oauthProvider
+      oauthProvider: this._oauthProvider,
+      oauthModelId: this._oauthModelId.trim() || "gpt-5.3-codex",
+      customProvider: {
+        ...this.providerSettings.customProvider,
+        modelId: this._customModelId.trim() || "gpt-5.3-codex"
+      }
     };
     const result = await window.lilto.saveProviderSettings(next);
     if (result.ok) {
-      this._providerSelStatus = provider === "oauth" ? "現在: OAuth Provider" : "現在: Custom Provider";
+      this._providerSelStatus = provider === "oauth" ? "現在: ChatGPT Login" : "現在: API Key";
       this.dispatchEvent(
         new CustomEvent("provider-settings-changed", {
           detail: result.state,
@@ -1110,18 +1032,19 @@ export class LiltSettingsModal extends LitElement {
   }
 
   private async _saveProviderAndProxy() {
-    if (!this._customName.trim() || !this._customBaseUrl.trim()) {
-      this._saveStatus = "name と baseUrl は必須です。";
+    if (this.providerSettings.activeProvider === "custom-openai-completions" && !this._customApiKey.trim()) {
+      this._saveStatus = "API key は必須です。";
       return;
     }
     const next: ProviderSettings = {
       ...this.providerSettings,
       oauthProvider: this._oauthProvider,
+      oauthModelId: this._oauthModelId.trim() || "gpt-5.3-codex",
       customProvider: {
         name: this._customName.trim(),
         baseUrl: this._customBaseUrl.trim(),
         apiKey: this._customApiKey,
-        modelId: this._customModelId.trim() || "qwen2.5:0.5b"
+        modelId: this._customModelId.trim() || "gpt-5.3-codex"
       },
       networkProxy: {
         useProxy: this._useProxy
@@ -1129,7 +1052,7 @@ export class LiltSettingsModal extends LitElement {
     };
     const result = await window.lilto.saveProviderSettings(next);
     if (result.ok) {
-      this._saveStatus = "Provider 設定を保存しました。";
+      this._saveStatus = "設定を保存しました。";
       this.dispatchEvent(
         new CustomEvent("provider-settings-changed", {
           detail: result.state,
@@ -1145,7 +1068,12 @@ export class LiltSettingsModal extends LitElement {
   private async _startOauth() {
     const saveResult = await window.lilto.saveProviderSettings({
       ...this.providerSettings,
-      oauthProvider: this._oauthProvider
+      oauthProvider: this._oauthProvider,
+      oauthModelId: this._oauthModelId.trim() || "gpt-5.3-codex",
+      customProvider: {
+        ...this.providerSettings.customProvider,
+        modelId: this._customModelId.trim() || "gpt-5.3-codex"
+      }
     });
     if (saveResult.ok) {
       this.dispatchEvent(
@@ -1170,36 +1098,76 @@ export class LiltSettingsModal extends LitElement {
     );
   }
 
-  private async _submitCode() {
-    const code = this._authCodeValue.trim();
-    if (!code) return;
-    const result = await window.lilto.submitAuthCode(code);
-    if (result.ok) {
-      this._authCodeValue = "";
-      this.dispatchEvent(
-        new CustomEvent("auth-state-updated", {
-          detail: result.state,
-          bubbles: true,
-          composed: true
-        })
-      );
+  private async _saveOauthSettings() {
+    const result = await window.lilto.saveProviderSettings({
+      ...this.providerSettings,
+      oauthProvider: this._oauthProvider,
+      oauthModelId: this._oauthModelId.trim() || "gpt-5.3-codex"
+    });
+    if (!result.ok) {
+      this._oauthSaveStatus = `${result.error.code}: ${result.error.message}`;
+      return;
+    }
+    this._oauthSaveStatus = "Model 設定を保存しました。";
+    this.dispatchEvent(
+      new CustomEvent("provider-settings-changed", {
+        detail: result.state,
+        bubbles: true,
+        composed: true
+      })
+    );
+  }
+
+  private async _loadOauthModels() {
+    this._oauthModelsLoading = true;
+    this._oauthModelsStatus = "";
+    try {
+      const result = await window.lilto.listModels({
+        mode: "oauth",
+        oauthProvider: this._oauthProvider,
+        networkProxy: { useProxy: this._useProxy }
+      });
+      if (!result.ok) {
+        this._oauthModels = [];
+        this._oauthModelsStatus = `${result.error.code}: ${result.error.message}`;
+        return;
+      }
+      this._oauthModels = result.models;
+      if (!this._oauthModels.some((model) => model.id === this._oauthModelId) && result.models[0]) {
+        this._oauthModelId = result.models[0].id;
+      }
+      this._oauthModelsStatus = result.models.length > 0 ? `${result.models.length} 件取得しました。` : "利用可能なモデルがありません。";
+    } finally {
+      this._oauthModelsLoading = false;
     }
   }
 
-  private _oauthProviderLabel(provider: OAuthProviderId): string {
-    switch (provider) {
-      case "anthropic":
-        return "Anthropic";
-      case "openai-codex":
-        return "OpenAI Codex";
-      case "github-copilot":
-        return "GitHub Copilot";
-      case "google-gemini-cli":
-        return "Google Gemini CLI";
-      case "google-antigravity":
-        return "Google Antigravity";
-      default:
-        return provider;
+  private async _loadCustomModels() {
+    this._customModelsLoading = true;
+    this._customModelsStatus = "";
+    try {
+      const result = await window.lilto.listModels({
+        mode: "custom-openai-completions",
+        customProvider: {
+          name: this._customName.trim(),
+          baseUrl: this._customBaseUrl.trim(),
+          apiKey: this._customApiKey,
+          modelId: this._customModelId.trim()
+        },
+        networkProxy: { useProxy: this._useProxy }
+      });
+      if (!result.ok) {
+        this._customModels = [];
+        this._customModelsStatus = `${result.error.code}: ${result.error.message}`;
+        return;
+      }
+      this._customModels = result.models;
+      if (!this._customModels.some((model) => model.id === this._customModelId) && result.models[0]) {
+        this._customModelId = result.models[0].id;
+      }
+      this._customModelsStatus = result.models.length > 0 ? `${result.models.length} 件取得しました。` : "利用可能なモデルがありません。";
+    } finally {
+      this._customModelsLoading = false;
     }
   }
 

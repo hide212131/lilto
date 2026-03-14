@@ -1,57 +1,80 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const http = require("node:http");
 
 const { AgentRuntime } = require("../dist/main/agent-sdk.js");
 
-function createAuthService(phase, apiKey = "oauth-api-key", provider = "anthropic") {
-  return {
-    getState() {
-      return { phase, provider };
-    },
-    async getApiKey(requestedProvider) {
-      assert.equal(requestedProvider, provider);
-      return apiKey;
-    }
-  };
-}
-
 function createProviderSettings(overrides = {}) {
   return {
-    activeProvider: "claude",
-    oauthProvider: "anthropic",
+    activeProvider: "oauth",
+    oauthProvider: "openai-codex",
+    oauthModelId: "gpt-5.3-codex",
     customProvider: {
-      name: "",
+      name: "OpenAI API Key",
       baseUrl: "",
       apiKey: "",
-      modelId: "gpt-4.1-mini"
+      modelId: "gpt-5.3-codex"
     },
     networkProxy: {
       useProxy: false
+    },
+    chatSettings: {
+      enterToSend: false,
+      globalShortcut: "CommandOrControl+L"
     },
     updatedAt: Date.now(),
     ...overrides
   };
 }
 
-test("認証済みなら SDK 応答を返す", async () => {
+function createAuthService(phase = "authenticated") {
+  return {
+    getState() {
+      return { phase, provider: "openai-codex" };
+    },
+    async getApiKey() {
+      return null;
+    }
+  };
+}
+
+test("ChatGPT 認証済みなら Codex thread event を text_delta と session_bound に正規化する", async () => {
+  const events = [];
   const runtime = new AgentRuntime({
     authService: createAuthService("authenticated"),
     createSession: async () => ({
-      subscribe(listener) {
-        listener({
-          type: "message_update",
-          assistantMessageEvent: { type: "text_delta", delta: "hello" }
-        });
-        return () => {};
-      },
-      async prompt() {}
+      id: null,
+      async runStreamed() {
+        async function* stream() {
+          yield { type: "thread.started", thread_id: "thread-1" };
+          yield { type: "item.started", item: { id: "r1", type: "reasoning", text: "考え中" } };
+          yield { type: "item.completed", item: { id: "r1", type: "reasoning", text: "考え中" } };
+          yield { type: "item.updated", item: { id: "m1", type: "agent_message", text: "hello" } };
+          yield { type: "item.completed", item: { id: "m1", type: "agent_message", text: "hello world" } };
+        }
+        return { events: stream() };
+      }
     }),
     logger: { info() {}, error() {} }
   });
 
-  const result = await runtime.submitPrompt("test", createProviderSettings());
+  const result = await runtime.submitPrompt("test", createProviderSettings(), {
+    requestId: "req-1",
+    conversationId: "conv-1",
+    onLoopEvent: (event) => events.push(event)
+  });
+
   assert.equal(result.ok, true);
-  assert.equal(result.text, "hello");
+  assert.equal(result.text, "hello world");
+  assert.deepEqual(events[0], {
+    type: "session_bound",
+    requestId: "req-1",
+    conversationId: "conv-1",
+    agentSessionId: "thread-1"
+  });
+  assert.ok(events.some((event) => event.type === "thinking_start"));
+  assert.ok(events.some((event) => event.type === "thinking_end"));
+  assert.ok(events.some((event) => event.type === "text_delta" && event.delta === "hello"));
 });
 
 test("未認証なら AUTH_REQUIRED を返す", async () => {
@@ -68,124 +91,20 @@ test("未認証なら AUTH_REQUIRED を返す", async () => {
   assert.equal(result.error.code, "AUTH_REQUIRED");
 });
 
-test("認証済みでも provider 不一致なら AUTH_REQUIRED を返す", async () => {
-  const runtime = new AgentRuntime({
-    authService: createAuthService("authenticated", "oauth-api-key", "anthropic"),
-    createSession: async () => {
-      throw new Error("should not be called");
-    },
-    logger: { info() {}, error() {} }
-  });
-
-  const result = await runtime.submitPrompt(
-    "test",
-    createProviderSettings({
-      oauthProvider: "openai-codex"
-    })
-  );
-  assert.equal(result.ok, false);
-  assert.equal(result.error.code, "AUTH_REQUIRED");
-  assert.match(result.error.message, /openai-codex/);
-});
-
-test("OpenAI Codex OAuth 選択時は provider 固有モデルで実行される", async () => {
-  let receivedOptions;
-  const runtime = new AgentRuntime({
-    authService: createAuthService("authenticated", "oauth-api-key", "openai-codex"),
-    createSession: async (options) => {
-      receivedOptions = options;
-      return {
-        subscribe(listener) {
-          listener({
-            type: "message_update",
-            assistantMessageEvent: { type: "text_delta", delta: "codex-ok" }
-          });
-          return () => {};
-        },
-        async prompt() {}
-      };
-    },
-    logger: { info() {}, error() {} }
-  });
-
-  const result = await runtime.submitPrompt(
-    "test",
-    createProviderSettings({
-      oauthProvider: "openai-codex"
-    })
-  );
-
-  assert.equal(result.ok, true);
-  assert.equal(result.text, "codex-ok");
-  assert.equal(receivedOptions.oauthProvider, "openai-codex");
-});
-
-test("Gemini CLI OAuth 選択時は provider 情報を保持して実行される", async () => {
-  let receivedOptions;
-  const runtime = new AgentRuntime({
-    authService: createAuthService("authenticated", "oauth-api-key", "google-gemini-cli"),
-    createSession: async (options) => {
-      receivedOptions = options;
-      return {
-        subscribe(listener) {
-          listener({
-            type: "message_update",
-            assistantMessageEvent: { type: "text_delta", delta: "gemini-ok" }
-          });
-          return () => {};
-        },
-        async prompt() {}
-      };
-    },
-    logger: { info() {}, error() {} }
-  });
-
-  const result = await runtime.submitPrompt(
-    "test",
-    createProviderSettings({
-      oauthProvider: "google-gemini-cli"
-    })
-  );
-
-  assert.equal(result.ok, true);
-  assert.equal(result.text, "gemini-ok");
-  assert.equal(receivedOptions.oauthProvider, "google-gemini-cli");
-});
-
-test("Custom Provider 未設定なら PROVIDER_CONFIG_REQUIRED を返す", async () => {
-  const runtime = new AgentRuntime({
-    authService: createAuthService("authenticated"),
-    createSession: async () => {
-      throw new Error("should not be called");
-    },
-    logger: { info() {}, error() {} }
-  });
-
-  const result = await runtime.submitPrompt(
-    "test",
-    createProviderSettings({
-      activeProvider: "custom-openai-completions"
-    })
-  );
-  assert.equal(result.ok, false);
-  assert.equal(result.error.code, "PROVIDER_CONFIG_REQUIRED");
-});
-
-test("Custom Provider 設定済みなら custom model で実行される", async () => {
-  let receivedOptions;
+test("API key モードでは保存済み API key と model/baseUrl を使う", async () => {
+  let receivedOptions = null;
   const runtime = new AgentRuntime({
     authService: createAuthService("authenticated"),
     createSession: async (options) => {
       receivedOptions = options;
       return {
-        subscribe(listener) {
-          listener({
-            type: "message_update",
-            assistantMessageEvent: { type: "text_delta", delta: "custom-ok" }
-          });
-          return () => {};
-        },
-        async prompt() {}
+        id: "thread-api-key",
+        async runStreamed() {
+          async function* stream() {
+            yield { type: "item.completed", item: { id: "m1", type: "agent_message", text: "done" } };
+          }
+          return { events: stream() };
+        }
       };
     },
     logger: { info() {}, error() {} }
@@ -196,37 +115,35 @@ test("Custom Provider 設定済みなら custom model で実行される", async
     createProviderSettings({
       activeProvider: "custom-openai-completions",
       customProvider: {
-        name: "my-custom",
+        name: "OpenAI API Key",
         baseUrl: "https://example.com/v1",
-        apiKey: "custom-key",
-        modelId: "gpt-4o-mini"
+        apiKey: "sk-test",
+        modelId: "gpt-5.3-codex"
       }
     })
   );
 
   assert.equal(result.ok, true);
-  assert.equal(result.text, "custom-ok");
-  assert.equal(receivedOptions.apiKey, "custom-key");
-  assert.equal(receivedOptions.model.provider, "custom-openai-completions");
+  assert.equal(result.text, "done");
+  assert.equal(receivedOptions.apiKey, "sk-test");
+  assert.equal(receivedOptions.model.id, "gpt-5.3-codex");
   assert.equal(receivedOptions.model.baseUrl, "https://example.com/v1");
-  assert.equal(receivedOptions.model.id, "gpt-4o-mini");
 });
 
-test("Custom Provider の Ollama URL は /v1 を補完する", async () => {
-  let receivedOptions;
+test("ChatGPT 認証モードでも保存済み modelId を使う", async () => {
+  let receivedOptions = null;
   const runtime = new AgentRuntime({
     authService: createAuthService("authenticated"),
     createSession: async (options) => {
       receivedOptions = options;
       return {
-        subscribe(listener) {
-          listener({
-            type: "message_update",
-            assistantMessageEvent: { type: "text_delta", delta: "ok" }
-          });
-          return () => {};
-        },
-        async prompt() {}
+        id: "thread-oauth",
+        async runStreamed() {
+          async function* stream() {
+            yield { type: "item.completed", item: { id: "m1", type: "agent_message", text: "done" } };
+          }
+          return { events: stream() };
+        }
       };
     },
     logger: { info() {}, error() {} }
@@ -235,105 +152,113 @@ test("Custom Provider の Ollama URL は /v1 を補完する", async () => {
   const result = await runtime.submitPrompt(
     "test",
     createProviderSettings({
-      activeProvider: "custom-openai-completions",
       customProvider: {
-        name: "Ollama",
-        baseUrl: "http://127.0.0.1:11434",
+        name: "OpenAI API Key",
+        baseUrl: "",
+        apiKey: "",
+        modelId: "gpt-5.3-codex"
+      },
+      oauthModelId: "gpt-5.3-codex"
+    })
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.text, "done");
+  assert.equal(receivedOptions.apiKey, null);
+  assert.equal(receivedOptions.model.id, "gpt-5.3-codex");
+});
+
+test("ChatGPT 認証モードでは legacy qwen modelId を gpt-5.3-codex へ矯正する", async () => {
+  let receivedOptions = null;
+  const runtime = new AgentRuntime({
+    authService: createAuthService("authenticated"),
+    createSession: async (options) => {
+      receivedOptions = options;
+      return {
+        id: "thread-oauth",
+        async runStreamed() {
+          async function* stream() {
+            yield { type: "item.completed", item: { id: "m1", type: "agent_message", text: "done" } };
+          }
+          return { events: stream() };
+        }
+      };
+    },
+    logger: { info() {}, error() {} }
+  });
+
+  const result = await runtime.submitPrompt(
+    "test",
+    createProviderSettings({
+      customProvider: {
+        name: "OpenAI API Key",
+        baseUrl: "",
         apiKey: "",
         modelId: "qwen2.5:0.5b"
-      }
+      },
+      oauthModelId: "qwen2.5:0.5b"
     })
   );
 
   assert.equal(result.ok, true);
-  assert.equal(receivedOptions.model.baseUrl, "http://127.0.0.1:11434/v1");
-  assert.equal(receivedOptions.apiKey, "ollama");
+  assert.equal(receivedOptions.model.id, "gpt-5.3-codex");
 });
 
-test("text_delta がなくても done イベントから応答を復元する", async () => {
+test("同じ conversationId は thread.started 後の session を再利用する", async () => {
+  const calls = [];
   const runtime = new AgentRuntime({
     authService: createAuthService("authenticated"),
-    createSession: async () => ({
-      subscribe(listener) {
-        listener({
-          type: "message_update",
-          assistantMessageEvent: {
-            type: "done",
-            message: {
-              content: [{ type: "text", text: "done-text" }]
-            }
-          }
-        });
-        return () => {};
-      },
-      async prompt() {}
-    }),
-    logger: { info() {}, error() {} }
-  });
-
-  const result = await runtime.submitPrompt("test", createProviderSettings());
-  assert.equal(result.ok, true);
-  assert.equal(result.text, "done-text");
-});
-
-test("delta と done が両方来ても重複せず最終テキストを返す", async () => {
-  const runtime = new AgentRuntime({
-    authService: createAuthService("authenticated"),
-    createSession: async () => ({
-      subscribe(listener) {
-        listener({
-          type: "message_update",
-          assistantMessageEvent: { type: "text_delta", delta: "partial" }
-        });
-        listener({
-          type: "message_update",
-          assistantMessageEvent: {
-            type: "done",
-            message: {
-              content: [{ type: "text", text: "final" }]
-            }
-          }
-        });
-        return () => {};
-      },
-      async prompt() {}
-    }),
-    logger: { info() {}, error() {} }
-  });
-
-  const result = await runtime.submitPrompt("test", createProviderSettings());
-  assert.equal(result.ok, true);
-  assert.equal(result.text, "final");
-});
-
-test("SDK 失敗時に標準化エラーを返す", async () => {
-  const runtime = new AgentRuntime({
-    authService: createAuthService("authenticated"),
-    createSession: async () => ({
-      subscribe() {
-        return () => {};
-      },
-      async prompt() {
-        throw new Error("sdk boom");
+    codexHomeDir: "/tmp/codex-home",
+    schedulerBridge: {
+      getBridgeEnv(sessionId) {
+        return { LILTO_CRON_SESSION_ID: sessionId };
       }
-    }),
+    },
+    createSession: async (options) => {
+      calls.push(options);
+      const threadId = options.threadId || null;
+      return {
+        id: threadId,
+        async runStreamed() {
+          async function* stream() {
+            if (!threadId) {
+              yield { type: "thread.started", thread_id: "thread-reused" };
+            }
+            yield { type: "item.completed", item: { id: "m1", type: "agent_message", text: "ok" } };
+          }
+          return { events: stream() };
+        }
+      };
+    },
     logger: { info() {}, error() {} }
   });
 
-  const result = await runtime.submitPrompt("test", createProviderSettings());
-  assert.equal(result.ok, false);
-  assert.equal(result.error.code, "AGENT_EXECUTION_FAILED");
-  assert.equal(result.error.retryable, true);
+  await runtime.submitPrompt("first", createProviderSettings(), { requestId: "req-1", conversationId: "conv-1" });
+  await runtime.submitPrompt("second", createProviderSettings(), { requestId: "req-2", conversationId: "conv-1" });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].threadId, undefined);
+  assert.equal(calls[0].codexHomeDir, "/tmp/codex-home");
+  assert.equal(calls[0].schedulerSessionId, "conv-1");
 });
 
-test("Proxy precheck 失敗時に標準化エラーを返す", async () => {
+test("proxy precheck 失敗は PROXY_CONNECTION_FAILED に正規化する", async () => {
+  const server = http.createServer((_req, res) => {
+    res.writeHead(403, { "content-type": "text/plain" });
+    res.end("proxy required");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+
   process.env.LILTO_E2E_MOCK = "1";
-  process.env.LILTO_PROXY_TEST_URL = "http://127.0.0.1:1/probe";
+  process.env.LILTO_PROXY_TEST_URL = `http://127.0.0.1:${port}/proxy-check`;
+
   try {
     const runtime = new AgentRuntime({
       authService: createAuthService("authenticated"),
       createSession: async () => {
-        throw new Error("should not create session");
+        throw new Error("should not be called");
       },
       logger: { info() {}, error() {} }
     });
@@ -343,10 +268,13 @@ test("Proxy precheck 失敗時に標準化エラーを返す", async () => {
       createProviderSettings({
         activeProvider: "custom-openai-completions",
         customProvider: {
-          name: "my-custom",
+          name: "OpenAI API Key",
           baseUrl: "https://example.com/v1",
-          apiKey: "custom-key",
-          modelId: "gpt-4o-mini"
+          apiKey: "sk-test",
+          modelId: "gpt-5.3-codex"
+        },
+        networkProxy: {
+          useProxy: false
         }
       })
     );
@@ -356,429 +284,39 @@ test("Proxy precheck 失敗時に標準化エラーを返す", async () => {
   } finally {
     delete process.env.LILTO_E2E_MOCK;
     delete process.env.LILTO_PROXY_TEST_URL;
+    await new Promise((resolve) => server.close(resolve));
   }
 });
 
-test("useProxy が OFF の場合は環境変数の Proxy を使わない", async () => {
-  const prevHttpProxy = process.env.HTTP_PROXY;
-  process.env.HTTP_PROXY = "http://proxy.local:8080";
-  let observedHttpProxy = null;
-
-  try {
-    const runtime = new AgentRuntime({
-      authService: createAuthService("authenticated"),
-      createSession: async () => {
-        observedHttpProxy = process.env.HTTP_PROXY ?? null;
-        return {
-          subscribe(listener) {
-            listener({
-              type: "message_update",
-              assistantMessageEvent: { type: "text_delta", delta: "ok" }
-            });
-            return () => {};
-          },
-          async prompt() {}
-        };
-      },
-      logger: { info() {}, error() {} }
-    });
-
-    const result = await runtime.submitPrompt("test", createProviderSettings());
-    assert.equal(result.ok, true);
-    assert.equal(observedHttpProxy, null);
-  } finally {
-    if (prevHttpProxy === undefined) {
-      delete process.env.HTTP_PROXY;
-    } else {
-      process.env.HTTP_PROXY = prevHttpProxy;
-    }
-  }
-});
-
-test("useProxy が ON の場合は環境変数の Proxy を使う", async () => {
-  const prevHttpProxy = process.env.HTTP_PROXY;
-  process.env.HTTP_PROXY = "http://proxy.local:8080";
-  let observedHttpProxy = null;
-
-  try {
-    const runtime = new AgentRuntime({
-      authService: createAuthService("authenticated"),
-      createSession: async () => {
-        observedHttpProxy = process.env.HTTP_PROXY ?? null;
-        return {
-          subscribe(listener) {
-            listener({
-              type: "message_update",
-              assistantMessageEvent: { type: "text_delta", delta: "ok" }
-            });
-            return () => {};
-          },
-          async prompt() {}
-        };
-      },
-      logger: { info() {}, error() {} }
-    });
-
-    const result = await runtime.submitPrompt(
-      "test",
-      createProviderSettings({
-        networkProxy: { useProxy: true }
-      })
-    );
-    assert.equal(result.ok, true);
-    assert.equal(observedHttpProxy, "http://proxy.local:8080");
-  } finally {
-    if (prevHttpProxy === undefined) {
-      delete process.env.HTTP_PROXY;
-    } else {
-      process.env.HTTP_PROXY = prevHttpProxy;
-    }
-  }
-});
-
-test("E2E mock は thinking と複数コマンド進行を通知し最終回答を返す", async () => {
-  process.env.LILTO_E2E_MOCK = "1";
-  const loopEvents = [];
-
-  try {
-    const runtime = new AgentRuntime({
-      authService: createAuthService("authenticated"),
-      createSession: async () => {
-        throw new Error("should not create session in mock mode");
-      },
-      logger: { info() {}, error() {} }
-    });
-
-    const result = await runtime.submitPrompt("mock request", createProviderSettings(), {
-      requestId: "req-mock-1",
-      onLoopEvent: (event) => {
-        loopEvents.push(event);
-      }
-    });
-
-    assert.equal(result.ok, true);
-    assert.equal(
-      result.text,
-      "[E2E_MOCK_FINAL] 要求「mock request」を処理し、複数コマンドを実行して回答しました。"
-    );
-
-    assert.deepEqual(loopEvents, [
-      { type: "thinking_start", requestId: "req-mock-1" },
-      {
-        type: "thinking_delta",
-        requestId: "req-mock-1",
-        delta: "要求を分解し、必要な手順を確認します。\n"
-      },
-      {
-        type: "thinking_delta",
-        requestId: "req-mock-1",
-        delta: "読み取りとコマンド実行の順で進めます。\n"
-      },
-      { type: "thinking_end", requestId: "req-mock-1" },
-      {
-        type: "tool_execution_start",
-        requestId: "req-mock-1",
-        toolCallId: "mock-read-1",
-        toolName: "read_file",
-        args: { command: "read_file README.md" }
-      },
-      {
-        type: "tool_execution_end",
-        requestId: "req-mock-1",
-        toolCallId: "mock-read-1",
-        toolName: "read_file",
-        isError: false
-      },
-      {
-        type: "tool_execution_start",
-        requestId: "req-mock-1",
-        toolCallId: "mock-run-1",
-        toolName: "run_in_terminal",
-        args: { command: "npm run check" }
-      },
-      {
-        type: "tool_execution_end",
-        requestId: "req-mock-1",
-        toolCallId: "mock-run-1",
-        toolName: "run_in_terminal",
-        isError: false
-      }
-    ]);
-  } finally {
-    delete process.env.LILTO_E2E_MOCK;
-  }
-});
-
-test("ブラウザ依頼時は agent-browser スキルを優先する", async () => {
-  let receivedPrompt = "";
+test("item.completed の error item は失敗として返す", async () => {
   const runtime = new AgentRuntime({
     authService: createAuthService("authenticated"),
     createSession: async () => ({
-      subscribe(listener) {
-        listener({
-          type: "message_update",
-          assistantMessageEvent: { type: "text_delta", delta: "ok" }
-        });
-        return () => {};
-      },
-      async prompt(text) {
-        receivedPrompt = text;
+      id: null,
+      async runStreamed() {
+        async function* stream() {
+          yield { type: "thread.started", thread_id: "thread-1" };
+          yield {
+            type: "item.completed",
+            item: {
+              id: "err-1",
+              type: "error",
+              error: { code: "tool_error", message: "scheduler bridge unavailable" }
+            }
+          };
+        }
+        return { events: stream() };
       }
-    }),
-    availableSkills: [{ name: "agent-browser" }],
-    logger: { info() {}, error() {} }
-  });
-
-  const result = await runtime.submitPrompt("ブラウザで動作確認して", createProviderSettings());
-  assert.equal(result.ok, true);
-  assert.equal(receivedPrompt.startsWith("/skill:agent-browser"), true);
-});
-
-test("スキル化依頼時は skill-creator スキルを優先する", async () => {
-  let receivedPrompt = "";
-  const runtime = new AgentRuntime({
-    authService: createAuthService("authenticated"),
-    createSession: async () => ({
-      subscribe(listener) {
-        listener({
-          type: "message_update",
-          assistantMessageEvent: { type: "text_delta", delta: "ok" }
-        });
-        return () => {};
-      },
-      async prompt(text) {
-        receivedPrompt = text;
-      }
-    }),
-    availableSkills: [{ name: "agent-browser" }, { name: "skill-creator" }],
-    logger: { info() {}, error() {} }
-  });
-
-  const result = await runtime.submitPrompt("この手順を再現できるようにスキルにして", createProviderSettings());
-  assert.equal(result.ok, true);
-  assert.equal(receivedPrompt.startsWith("/skill:skill-creator"), true);
-});
-
-test("明示 /skill 指定がある場合は自動補正しない", async () => {
-  let receivedPrompt = "";
-  const runtime = new AgentRuntime({
-    authService: createAuthService("authenticated"),
-    createSession: async () => ({
-      subscribe(listener) {
-        listener({
-          type: "message_update",
-          assistantMessageEvent: { type: "text_delta", delta: "ok" }
-        });
-        return () => {};
-      },
-      async prompt(text) {
-        receivedPrompt = text;
-      }
-    }),
-    availableSkills: [{ name: "agent-browser" }, { name: "skill-creator" }],
-    logger: { info() {}, error() {} }
-  });
-
-  const explicit = "/skill:agent-browser\n\nこの手順をスキル化して";
-  const result = await runtime.submitPrompt(explicit, createProviderSettings());
-  assert.equal(result.ok, true);
-  assert.equal(receivedPrompt, explicit);
-});
-
-test("agent-browser が無い場合はスキル接頭辞を付けない", async () => {
-  let receivedPrompt = "";
-  const runtime = new AgentRuntime({
-    authService: createAuthService("authenticated"),
-    createSession: async () => ({
-      subscribe(listener) {
-        listener({
-          type: "message_update",
-          assistantMessageEvent: { type: "text_delta", delta: "ok" }
-        });
-        return () => {};
-      },
-      async prompt(text) {
-        receivedPrompt = text;
-      }
-    }),
-    availableSkills: [],
-    logger: { info() {}, error() {} }
-  });
-
-  const result = await runtime.submitPrompt("ブラウザで動作確認して", createProviderSettings());
-  assert.equal(result.ok, true);
-  assert.equal(receivedPrompt, "ブラウザで動作確認して");
-});
-
-test("refreshSkills 後は次回送信からスキル優先が有効になる", async () => {
-  let receivedPrompt = "";
-  const runtime = new AgentRuntime({
-    authService: createAuthService("authenticated"),
-    createSession: async () => ({
-      subscribe(listener) {
-        listener({
-          type: "message_update",
-          assistantMessageEvent: { type: "text_delta", delta: "ok" }
-        });
-        return () => {};
-      },
-      async prompt(text) {
-        receivedPrompt = text;
-      }
-    }),
-    availableSkills: [],
-    logger: { info() {}, error() {} }
-  });
-
-  runtime["sessionCache"].set("cached-session", {
-    subscribe() {
-      return () => {};
-    },
-    async prompt() {}
-  });
-
-  runtime.refreshSkills([{ name: "agent-browser" }]);
-
-  assert.equal(runtime["sessionCache"].size, 0);
-
-  const result = await runtime.submitPrompt("ブラウザで動作確認して", createProviderSettings());
-  assert.equal(result.ok, true);
-  assert.equal(receivedPrompt.startsWith("/skill:agent-browser"), true);
-});
-
-test("loop event 正規化: tool start/end を送出する", async () => {
-  const loopEvents = [];
-  const runtime = new AgentRuntime({
-    authService: createAuthService("authenticated"),
-    createSession: async () => ({
-      subscribe(listener) {
-        listener({
-          type: "tool_execution_start",
-          toolCallId: "call-1",
-          toolName: "bash"
-        });
-        listener({
-          type: "tool_execution_end",
-          toolCallId: "call-1",
-          toolName: "bash",
-          isError: false
-        });
-        listener({
-          type: "message_update",
-          assistantMessageEvent: { type: "text_delta", delta: "ok" }
-        });
-        return () => {};
-      },
-      async prompt() {}
     }),
     logger: { info() {}, error() {} }
   });
 
   const result = await runtime.submitPrompt("test", createProviderSettings(), {
     requestId: "req-1",
-    onLoopEvent: (event) => {
-      loopEvents.push(event);
-    }
+    conversationId: "conv-1"
   });
 
-  assert.equal(result.ok, true);
-  assert.deepEqual(loopEvents, [
-    { type: "session_bound", requestId: "req-1", conversationId: undefined, agentSessionId: "unknown" },
-    { type: "tool_execution_start", requestId: "req-1", toolCallId: "call-1", toolName: "bash" },
-    { type: "tool_execution_end", requestId: "req-1", toolCallId: "call-1", toolName: "bash", isError: false },
-    { type: "text_delta", requestId: "req-1", delta: "ok" }
-  ]);
-});
-
-test("loop event 正規化: tool error を送出する", async () => {
-  const loopEvents = [];
-  const runtime = new AgentRuntime({
-    authService: createAuthService("authenticated"),
-    createSession: async () => ({
-      subscribe(listener) {
-        listener({
-          type: "tool_execution_start",
-          toolCallId: "call-err",
-          toolName: "edit"
-        });
-        listener({
-          type: "tool_execution_end",
-          toolCallId: "call-err",
-          toolName: "edit",
-          isError: true
-        });
-        listener({
-          type: "message_update",
-          assistantMessageEvent: { type: "text_delta", delta: "failed" }
-        });
-        return () => {};
-      },
-      async prompt() {}
-    }),
-    logger: { info() {}, error() {} }
-  });
-
-  const result = await runtime.submitPrompt("test", createProviderSettings(), {
-    requestId: "req-2",
-    onLoopEvent: (event) => {
-      loopEvents.push(event);
-    }
-  });
-
-  assert.equal(result.ok, true);
-  assert.deepEqual(loopEvents.find(e => e.type === "tool_execution_end"), {
-    type: "tool_execution_end",
-    requestId: "req-2",
-    toolCallId: "call-err",
-    toolName: "edit",
-    isError: true
-  });
-});
-
-test("loop event 正規化: thinking_end の content を fallback で送出する", async () => {
-  const loopEvents = [];
-  const runtime = new AgentRuntime({
-    authService: createAuthService("authenticated"),
-    createSession: async () => ({
-      subscribe(listener) {
-        listener({ type: "thinking_start" });
-        listener({
-          type: "message_update",
-          assistantMessageEvent: { type: "thinking_end", content: "思考完了テキスト" }
-        });
-        listener({
-          type: "message_update",
-          assistantMessageEvent: { type: "text_delta", delta: "ok" }
-        });
-        return () => {};
-      },
-      async prompt() {}
-    }),
-    logger: { info() {}, error() {} }
-  });
-
-  const result = await runtime.submitPrompt("test", createProviderSettings(), {
-    requestId: "req-think-fallback",
-    onLoopEvent: (event) => {
-      loopEvents.push(event);
-    }
-  });
-
-  assert.equal(result.ok, true);
-  assert.deepEqual(loopEvents, [
-    {
-      type: "session_bound",
-      requestId: "req-think-fallback",
-      conversationId: undefined,
-      agentSessionId: "unknown"
-    },
-    { type: "thinking_start", requestId: "req-think-fallback" },
-    {
-      type: "thinking_delta",
-      requestId: "req-think-fallback",
-      delta: "思考完了テキスト"
-    },
-    { type: "thinking_end", requestId: "req-think-fallback" },
-    { type: "text_delta", requestId: "req-think-fallback", delta: "ok" }
-  ]);
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "AGENT_EXECUTION_FAILED");
+  assert.match(result.error.message, /scheduler bridge unavailable/);
 });

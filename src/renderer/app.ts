@@ -19,12 +19,13 @@ export class LiltApp extends LitElement {
   @property({ type: Object }) authState: AuthState | null = null;
   @property({ type: Object }) providerSettings: ProviderSettings = {
     activeProvider: "oauth",
-    oauthProvider: "anthropic",
+    oauthProvider: "openai-codex",
+    oauthModelId: "gpt-5.3-codex",
     customProvider: {
-      name: "Ollama",
-      baseUrl: "http://127.0.0.1:11434/v1",
+      name: "OpenAI API Key",
+      baseUrl: "",
       apiKey: "",
-      modelId: "qwen2.5:0.5b"
+      modelId: "gpt-5.3-codex"
     },
     networkProxy: {
       useProxy: false
@@ -225,16 +226,8 @@ export class LiltApp extends LitElement {
 
   private _oauthProviderLabel(provider: OAuthProviderId): string {
     switch (provider) {
-      case "anthropic":
-        return "Anthropic";
       case "openai-codex":
         return "OpenAI Codex";
-      case "github-copilot":
-        return "GitHub Copilot";
-      case "google-gemini-cli":
-        return "Google Gemini CLI";
-      case "google-antigravity":
-        return "Google Antigravity";
       default:
         return provider;
     }
@@ -415,8 +408,8 @@ export class LiltApp extends LitElement {
       if (!this._canSend()) {
         this._addMessage("system",
           this.providerSettings.activeProvider === "oauth"
-            ? "プロバイダー設定が必要です。Settings から OAuth Provider を設定してください。"
-            : "Custom Provider の name / baseUrl を設定して保存してから送信してください。"
+            ? "Codex ChatGPT 認証が必要です。Settings から認証を開始してください。"
+            : "API key を設定して保存してから送信してください。"
         );
         this.settingsOpen = true;
       }
@@ -448,7 +441,9 @@ export class LiltApp extends LitElement {
   }
 
   private _onSchedulerNotification(event: SchedulerNotificationEvent) {
-    const targetSession = this.sessions.find((session) => session.backendSessionId === event.sessionId);
+    const targetSession = this.sessions.find((session) =>
+      session.backendSessionId === event.sessionId || session.id === event.sessionId
+    );
     if (!targetSession) {
       return;
     }

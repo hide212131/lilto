@@ -1,14 +1,11 @@
 import http from "node:http";
+import path from "node:path";
 import { createLogger, type Logger } from "./logger";
 import type { ClaudeAuthService } from "./auth-service";
 import type { ProviderSettings } from "./provider-settings";
 import { isCustomProviderReady } from "./provider-settings";
-import { shouldPrioritizeAgentBrowser, shouldPrioritizeSkillCreator } from "./skill-runtime";
-import { createCliCompatibilityMap, isWindowsExecutionPolicyError } from "./command-compat";
-import { createCronTool } from "./cron-tool";
-import type { SchedulerClient } from "./scheduler";
+import type { SchedulerBridgeServer } from "./scheduler-bridge";
 import type { AgentLoopEvent } from "../shared/agent-loop";
-import type { OAuthProviderId } from "../shared/provider-settings";
 
 type AgentError = {
   code: string;
@@ -21,62 +18,39 @@ type AgentSuccess = { ok: true; text: string };
 type AgentFailure = { ok: false; error: AgentError };
 export type AgentResult = AgentSuccess | AgentFailure;
 
-type AgentEvent = {
-  type: string;
-  delta?: string;
-  content?: string;
-  toolCallId?: string;
-  toolName?: string;
-  args?: unknown;
-  isError?: boolean;
-  assistantMessageEvent?: {
-    type?: string;
-    delta?: string;
-    thinking?: string;
-    content?: string;
-    message?: {
-      content?: Array<{ type?: string; text?: string; thinking?: string }>;
-    };
-  };
-  message?: {
-    role?: string;
-    content?: Array<{ type?: string; text?: string; thinking?: string }> | string;
-  };
-};
-
-type PiSession = {
-  prompt: (text: string) => Promise<void>;
-  subscribe: (listener: (event: AgentEvent) => void) => () => void;
-  sessionId?: string;
-};
-
-type PiModel = {
+type RuntimeModel = {
   id: string;
-  name: string;
-  api: string;
-  provider: string;
-  baseUrl: string;
-  reasoning: boolean;
-  input: Array<"text" | "image">;
-  cost: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-  };
-  contextWindow: number;
-  maxTokens: number;
+  baseUrl?: string;
 };
 
-const importEsm = new Function("specifier", "return import(specifier)") as (specifier: string) => Promise<unknown>;
-const EVENT_LOG_PREVIEW_LIMIT = 160;
-const DEFAULT_OAUTH_MODEL_IDS: Record<OAuthProviderId, string> = {
-  anthropic: "claude-opus-4-6",
-  "openai-codex": "gpt-5.3-codex",
-  "github-copilot": "gpt-4o",
-  "google-gemini-cli": "gemini-2.5-pro",
-  "google-antigravity": "gemini-3-pro-high"
+type Thread = {
+  id: string | null;
+  runStreamed(input: string, options?: { signal?: AbortSignal }): Promise<{ events: AsyncGenerator<ThreadEvent> }>;
 };
+
+type ThreadEvent =
+  | { type: "thread.started"; thread_id: string }
+  | { type: "turn.failed"; error: { message: string } }
+  | { type: "error"; message: string }
+  | { type: "item.started" | "item.updated" | "item.completed"; item: ThreadItem }
+  | { type: string };
+
+type ThreadItem =
+  | { id: string; type: "reasoning"; text: string }
+  | { id: string; type: "agent_message"; text: string }
+  | { id: string; type: "command_execution"; command: string; status: "in_progress" | "completed" | "failed" }
+  | { id: string; type: "mcp_tool_call"; tool: string; server: string; arguments: unknown; status: "in_progress" | "completed" | "failed" }
+  | { id: string; type: "error"; message?: string; text?: string; error?: { message?: string; code?: string } }
+  | { id: string; type: string };
+
+type CodexSession = {
+  signature: string;
+  thread: Thread;
+};
+
+const EVENT_LOG_PREVIEW_LIMIT = 160;
+const OAUTH_MODEL_IDS = new Set(["gpt-5.3-codex"]);
+const importEsm = new Function("specifier", "return import(specifier)") as (specifier: string) => Promise<unknown>;
 
 export function standardizeError(
   error: unknown,
@@ -100,184 +74,12 @@ export function standardizeError(
   };
 }
 
-function standardizeAgentRuntimeError(error: unknown): AgentError {
-  if (isWindowsExecutionPolicyError(error)) {
-    const map = createCliCompatibilityMap("win32");
-    return {
-      code: "WINDOWS_CLI_EXECUTION_BLOCKED",
-      message: "Windows 実行ポリシーの制約で CLI 起動に失敗しました。",
-      details: `Windows では .cmd シムを優先してください: ${map.npm}, ${map.npx}, ${map.openspec}`,
-      retryable: true
-    };
+function standardizeExecutionError(error: unknown): AgentError {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("proxy precheck failed")) {
+    return standardizeError(error, "PROXY_CONNECTION_FAILED", true);
   }
   return standardizeError(error);
-}
-
-export async function createPiSessionFromSdk(options: {
-  apiKey: string | null;
-  model?: PiModel;
-  oauthProvider?: OAuthProviderId;
-  cwd?: string;
-  customTools?: unknown[];
-  sessionManager?: unknown;
-}): Promise<PiSession> {
-  const sessionCwd = options.cwd ?? process.cwd();
-  const { AuthStorage, createAgentSession, ModelRegistry, SessionManager } = (await importEsm(
-    "@mariozechner/pi-coding-agent"
-  )) as {
-    AuthStorage: { create: () => unknown };
-    createAgentSession: (args: {
-      sessionManager: unknown;
-      authStorage: unknown;
-      modelRegistry: unknown;
-      cwd: string;
-      model?: PiModel;
-      customTools?: unknown[];
-    }) => Promise<{ session: unknown }>;
-    ModelRegistry: new (authStorage: unknown) => unknown;
-    SessionManager: {
-      inMemory: (cwd?: string) => unknown;
-      create?: (cwd: string) => unknown;
-    };
-  };
-
-  const authStorage = AuthStorage.create();
-  const selectedModel = options.model ?? (await resolveOAuthModel(options.oauthProvider));
-  const authStorageWithRuntimeKey = authStorage as { setRuntimeApiKey?: (provider: string, key: string) => void };
-  if (options.apiKey && typeof authStorageWithRuntimeKey.setRuntimeApiKey === "function") {
-    const keyProvider = selectedModel?.provider ?? options.oauthProvider ?? "anthropic";
-    authStorageWithRuntimeKey.setRuntimeApiKey(keyProvider, options.apiKey);
-  }
-  const modelRegistry = new ModelRegistry(authStorage);
-
-  const sessionManager = options.sessionManager ??
-    (typeof SessionManager.create === "function" ? SessionManager.create(sessionCwd) : SessionManager.inMemory(sessionCwd));
-
-  const { session } = await createAgentSession({
-    sessionManager,
-    authStorage,
-    modelRegistry,
-    cwd: sessionCwd,
-    model: selectedModel,
-    customTools: options.customTools
-  });
-
-  return session as PiSession;
-}
-
-async function resolveOAuthModel(providerId?: OAuthProviderId): Promise<PiModel | undefined> {
-  if (!providerId) {
-    return undefined;
-  }
-
-  const { getModel, getModels } = (await importEsm("@mariozechner/pi-ai")) as {
-    getModel?: (provider: string, modelId: string) => PiModel | undefined;
-    getModels?: (provider: string) => PiModel[];
-  };
-  const defaultModelId = DEFAULT_OAUTH_MODEL_IDS[providerId];
-  if (typeof getModel === "function") {
-    try {
-      const matched = getModel(providerId, defaultModelId);
-      if (matched) {
-        return matched;
-      }
-    } catch {
-      // Fall back to the first provider model if the default alias is unavailable.
-    }
-  }
-  if (typeof getModels === "function") {
-    const candidates = getModels(providerId);
-    if (Array.isArray(candidates) && candidates.length > 0) {
-      return candidates[0];
-    }
-  }
-  return undefined;
-}
-
-type AuthSnapshot = {
-  phase: "unauthenticated" | "auth_in_progress" | "awaiting_code" | "authenticated" | "auth_failed";
-  provider: OAuthProviderId;
-};
-
-function buildCustomModel(settings: ProviderSettings): PiModel {
-  const modelId = settings.customProvider.modelId.trim() || "gpt-4.1-mini";
-  const providerName = settings.customProvider.name.trim() || "custom-provider";
-  const baseUrlInput = settings.customProvider.baseUrl.trim();
-  const baseUrl = normalizeBaseUrl(baseUrlInput);
-
-  return {
-    id: modelId,
-    name: providerName,
-    api: "openai-completions",
-    provider: "custom-openai-completions",
-    baseUrl,
-    reasoning: false,
-    input: ["text"],
-    cost: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0
-    },
-    contextWindow: 128000,
-    maxTokens: 16384
-  };
-}
-
-function normalizeBaseUrl(baseUrl: string): string {
-  try {
-    const parsed = new URL(baseUrl);
-    const isOllamaHost = (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost") && parsed.port === "11434";
-    const normalizedPath = parsed.pathname.replace(/\/+$/, "");
-    if (isOllamaHost && (normalizedPath === "" || normalizedPath === "/")) {
-      parsed.pathname = "/v1";
-      return parsed.toString().replace(/\/$/, "");
-    }
-    return baseUrl;
-  } catch {
-    return baseUrl;
-  }
-}
-
-function extractTextFromContent(content: unknown): string {
-  if (!content) return "";
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-
-  const chunks: string[] = [];
-  for (const item of content) {
-    if (!item || typeof item !== "object") continue;
-    const block = item as { type?: string; text?: string; thinking?: string };
-    if (block.type === "text" && typeof block.text === "string") {
-      chunks.push(block.text);
-      continue;
-    }
-    if (block.type === "thinking" && typeof block.thinking === "string") {
-      chunks.push(block.thinking);
-    }
-  }
-  return chunks.join("");
-}
-
-function extractTextFromAgentEvent(event: AgentEvent): string {
-  if (event.type === "message_update" && event.assistantMessageEvent) {
-    const stream = event.assistantMessageEvent;
-    if (stream.type === "text_delta" && typeof stream.delta === "string") {
-      return stream.delta;
-    }
-    if (stream.type === "text_end" && typeof stream.content === "string") {
-      return stream.content;
-    }
-    if (stream.type === "done") {
-      return extractTextFromContent(stream.message?.content);
-    }
-  }
-
-  if (event.type === "message_end" && event.message?.role === "assistant") {
-    return extractTextFromContent(event.message.content);
-  }
-
-  return "";
 }
 
 function previewForLog(text: string): string {
@@ -287,35 +89,71 @@ function previewForLog(text: string): string {
   return text.length > EVENT_LOG_PREVIEW_LIMIT ? `${text.slice(0, EVENT_LOG_PREVIEW_LIMIT)}...` : text;
 }
 
-function summarizeAgentEvent(event: AgentEvent): Record<string, unknown> {
-  const assistantType = event.type === "message_update" ? event.assistantMessageEvent?.type : undefined;
-  const previewSource =
-    (event.type === "message_update" ? event.assistantMessageEvent?.delta : undefined) ??
-    (event.type === "thinking_delta" ? event.delta : undefined) ??
-    (event.type === "message_update" ? event.assistantMessageEvent?.content : undefined) ??
-    extractTextFromAgentEvent(event);
-
-  const payload: Record<string, unknown> = { type: event.type };
-  if (assistantType) {
-    payload.assistantType = assistantType;
-  }
-  if (event.toolName) {
-    payload.toolName = event.toolName;
-  }
-  if (event.toolCallId) {
-    payload.toolCallId = event.toolCallId;
-  }
-  if (event.isError === true) {
-    payload.isError = true;
-  }
-  if (event.args !== undefined) {
-    payload.args = event.args;
-  }
-  if (typeof previewSource === "string" && previewSource.trim()) {
-    payload.preview = previewForLog(previewSource);
-    payload.previewLength = previewSource.length;
+function summarizeThreadItem(item: ThreadItem): Record<string, unknown> {
+  const typedItem = item as any;
+  const payload: Record<string, unknown> = { type: item.type, id: item.id };
+  if (item.type === "reasoning" || item.type === "agent_message") {
+    payload.preview = previewForLog(typedItem.text ?? "");
+  } else if (item.type === "command_execution") {
+    payload.command = typedItem.command;
+    payload.status = typedItem.status;
+  } else if (item.type === "mcp_tool_call") {
+    payload.server = typedItem.server;
+    payload.tool = typedItem.tool;
+    payload.status = typedItem.status;
+  } else if (item.type === "error") {
+    payload.message = typedItem.message ?? typedItem.error?.message ?? previewForLog(typedItem.text ?? "");
+    payload.code = typedItem.error?.code;
   }
   return payload;
+}
+
+function extractThreadItemErrorMessage(item: ThreadItem): string {
+  const typedItem = item as any;
+  if (typeof typedItem.message === "string" && typedItem.message.trim()) {
+    return typedItem.message.trim();
+  }
+  if (typeof typedItem.error?.message === "string" && typedItem.error.message.trim()) {
+    return typedItem.error.message.trim();
+  }
+  if (typeof typedItem.text === "string" && typedItem.text.trim()) {
+    return typedItem.text.trim();
+  }
+  return "Codex runtime returned an error item.";
+}
+
+function buildCustomModel(settings: ProviderSettings): RuntimeModel {
+  const modelId = settings.customProvider.modelId.trim() || "gpt-5.3-codex";
+  const baseUrlInput = settings.customProvider.baseUrl.trim();
+  return {
+    id: modelId,
+    baseUrl: normalizeBaseUrl(baseUrlInput) || undefined
+  };
+}
+
+function buildOauthModel(settings: ProviderSettings): RuntimeModel {
+  const requestedModel = settings.oauthModelId.trim();
+  return {
+    id: OAUTH_MODEL_IDS.has(requestedModel) ? requestedModel : "gpt-5.3-codex"
+  };
+}
+
+function normalizeBaseUrl(baseUrl: string): string {
+  if (!baseUrl) {
+    return "";
+  }
+  try {
+    const parsed = new URL(baseUrl);
+    const isOllamaHost = (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost") && parsed.port === "11434";
+    const normalizedPath = parsed.pathname.replace(/\/+$/, "");
+    if (isOllamaHost && (normalizedPath === "" || normalizedPath === "/")) {
+      parsed.pathname = "/v1";
+      return parsed.toString().replace(/\/$/, "");
+    }
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return baseUrl;
+  }
 }
 
 function isLocalOllamaUrl(baseUrl: string): boolean {
@@ -478,292 +316,348 @@ function withScopedProxyEnvironment(settings: ProviderSettings): () => void {
   };
 }
 
+export async function createCodexThreadFromSdk(options: {
+  apiKey: string | null;
+  model?: RuntimeModel;
+  cwd?: string;
+  threadId?: string;
+  additionalDirectories?: string[];
+  codexHomeDir?: string;
+  schedulerBridge?: SchedulerBridgeServer;
+  schedulerSessionId?: string;
+}): Promise<Thread> {
+  const { Codex } = (await importEsm("@openai/codex-sdk")) as {
+    Codex: new (options: {
+      apiKey?: string;
+      baseUrl?: string;
+      env?: Record<string, string>;
+      config?: Record<string, unknown>;
+    }) => {
+      startThread: (options: Record<string, unknown>) => Thread;
+      resumeThread: (id: string, options: Record<string, unknown>) => Thread;
+    };
+  };
+  const env = { ...process.env } as Record<string, string>;
+  if (options.codexHomeDir) {
+    env.CODEX_HOME = options.codexHomeDir;
+  }
+  const mcpConfig = options.schedulerBridge
+    ? {
+        mcp_servers: {
+          cron: {
+            command: process.execPath,
+            args: [path.join(process.cwd(), "dist", "main", "cron-mcp-server.js")],
+            env: {
+              ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
+              ...options.schedulerBridge.getBridgeEnv(options.schedulerSessionId ?? "default")
+            }
+          }
+        }
+      }
+    : undefined;
+  const codex = new Codex({
+    apiKey: options.apiKey ?? undefined,
+    baseUrl: options.model?.baseUrl,
+    env,
+    config: mcpConfig
+  });
+  const threadOptions = {
+    model: options.model?.id,
+    workingDirectory: options.cwd ?? process.cwd(),
+    additionalDirectories: options.additionalDirectories ?? [],
+    sandboxMode: "danger-full-access" as const,
+    approvalPolicy: "never" as const,
+    networkAccessEnabled: true,
+    skipGitRepoCheck: true
+  };
+  return options.threadId ? codex.resumeThread(options.threadId, threadOptions) : codex.startThread(threadOptions);
+}
+
 export class AgentRuntime {
   private readonly createSession: (options: {
     apiKey: string | null;
-    model?: PiModel;
+    model?: RuntimeModel;
     cwd?: string;
-    oauthProvider?: OAuthProviderId;
-    customTools?: unknown[];
-    sessionManager?: unknown;
-  }) => Promise<PiSession>;
+    threadId?: string;
+    additionalDirectories?: string[];
+    codexHomeDir?: string;
+    schedulerBridge?: SchedulerBridgeServer;
+    schedulerSessionId?: string;
+  }) => Promise<Thread>;
   private readonly authService: Pick<ClaudeAuthService, "getState" | "getApiKey">;
   private readonly logger: Logger;
   private readonly workspaceDir?: string;
-  private readonly availableSkillNames: Set<string>;
-  private readonly scheduler?: SchedulerClient;
-  private readonly sessionCache = new Map<string, PiSession>();
-  private _abortReject: ((reason: Error) => void) | null = null;
+  private readonly codexHomeDir?: string;
+  private readonly schedulerBridge?: SchedulerBridgeServer;
+  private readonly sessionCache = new Map<string, CodexSession>();
+  private readonly conversationThreads = new Map<string, string>();
+  private currentAbortController: AbortController | null = null;
 
   constructor({
-    createSession = createPiSessionFromSdk,
+    createSession = createCodexThreadFromSdk,
     authService,
     workspaceDir,
-    scheduler,
-    availableSkills = [],
+    codexHomeDir,
+    schedulerBridge,
     logger = createLogger("agent")
   }: {
     createSession?: (options: {
       apiKey: string | null;
-      model?: PiModel;
+      model?: RuntimeModel;
       cwd?: string;
-      oauthProvider?: OAuthProviderId;
-      customTools?: unknown[];
-      sessionManager?: unknown;
-    }) => Promise<PiSession>;
+      threadId?: string;
+      additionalDirectories?: string[];
+      codexHomeDir?: string;
+      schedulerBridge?: SchedulerBridgeServer;
+      schedulerSessionId?: string;
+    }) => Promise<Thread>;
     authService: Pick<ClaudeAuthService, "getState" | "getApiKey">;
     workspaceDir?: string;
-    scheduler?: SchedulerClient;
+    codexHomeDir?: string;
     availableSkills?: Array<{ name: string }>;
+    schedulerBridge?: SchedulerBridgeServer;
     logger?: Logger;
   }) {
     this.createSession = createSession;
     this.authService = authService;
     this.logger = logger;
     this.workspaceDir = workspaceDir;
-    this.scheduler = scheduler;
-    this.availableSkillNames = new Set(availableSkills.map((skill) => skill.name));
+    this.codexHomeDir = codexHomeDir;
+    this.schedulerBridge = schedulerBridge;
   }
 
   abort(): void {
-    if (this._abortReject) {
-      this._abortReject(new Error("aborted"));
-      this._abortReject = null;
-    }
-    this.invalidateSession();
+    this.currentAbortController?.abort();
+    this.currentAbortController = null;
   }
 
-  refreshSkills(skills: Array<{ name: string }>): void {
-    this.availableSkillNames.clear();
-    for (const skill of skills) {
-      this.availableSkillNames.add(skill.name);
-    }
-
+  refreshSkills(_skills?: Array<{ name: string }>): void {
     this.invalidateSession();
-
-    this.logger.info("agent_skills_refreshed", {
-      skillCount: this.availableSkillNames.size,
-      skills: [...this.availableSkillNames]
-    });
   }
 
   private invalidateSession(): void {
     this.sessionCache.clear();
   }
 
+  private getAdditionalDirectories(cwd: string): string[] {
+    const dirs = new Set<string>();
+    dirs.add(cwd);
+    if (process.cwd() !== cwd) {
+      dirs.add(process.cwd());
+    }
+    return [...dirs];
+  }
+
   private async ensureSession(options: {
     apiKey: string | null;
-    model?: PiModel;
-    oauthProvider?: OAuthProviderId;
+    model?: RuntimeModel;
     cwd?: string;
     conversationId?: string;
-  }): Promise<PiSession> {
+  }): Promise<CodexSession> {
+    const cwd = options.cwd ?? process.cwd();
+    const threadId = options.conversationId ? this.conversationThreads.get(options.conversationId) : undefined;
     const signature = JSON.stringify({
       conversationId: options.conversationId ?? "default",
-      apiKey: options.apiKey,
-      provider: options.model?.provider ?? "anthropic",
-      model: options.model?.id ?? "default",
+      apiKey: options.apiKey ?? "",
+      modelId: options.model?.id ?? "",
       baseUrl: options.model?.baseUrl ?? "",
-      oauthProvider: options.oauthProvider ?? "anthropic",
-      cwd: options.cwd ?? process.cwd()
+      cwd
     });
-
     const existing = this.sessionCache.get(signature);
     if (existing) {
-      this.logger.info("agent_session_reused", {
-        conversationId: options.conversationId ?? "default",
-        provider: options.model?.provider ?? options.oauthProvider ?? "anthropic",
-        modelId: options.model?.id ?? null
-      });
       return existing;
     }
 
-    this.logger.info("agent_session_creating", {
-      conversationId: options.conversationId ?? "default",
-      provider: options.model?.provider ?? options.oauthProvider ?? "anthropic",
-      modelId: options.model?.id ?? null,
-      cwd: options.cwd ?? process.cwd()
+    const thread = await this.createSession({
+      apiKey: options.apiKey,
+      model: options.model,
+      cwd,
+      threadId,
+      additionalDirectories: this.getAdditionalDirectories(cwd),
+      codexHomeDir: this.codexHomeDir,
+      schedulerBridge: this.schedulerBridge,
+      schedulerSessionId: threadId ?? options.conversationId ?? "default"
     });
-    const customTools = this.scheduler
-      ? [await createCronTool({ scheduler: this.scheduler, logger: this.logger })]
-      : [];
-    const session = await this.createSession({ ...options, customTools });
+    const session = { signature, thread };
     this.sessionCache.set(signature, session);
     return session;
   }
 
+  private handleThreadEvent(
+    event: ThreadEvent,
+    state: {
+      requestId: string;
+      conversationId?: string;
+      textByItemId: Map<string, string>;
+      textOutput: string;
+      thinkingActive: Set<string>;
+    },
+    hooks?: { requestId: string; conversationId?: string; onLoopEvent?: (event: AgentLoopEvent) => void }
+  ): { textOutput: string; fatalError?: string } {
+    if (event.type === "thread.started") {
+      const started = event as { thread_id: string };
+      if (hooks?.conversationId) {
+        this.conversationThreads.set(hooks.conversationId, started.thread_id);
+      }
+      hooks?.onLoopEvent?.({
+        type: "session_bound",
+        requestId: state.requestId,
+        conversationId: hooks?.conversationId,
+        agentSessionId: started.thread_id
+      });
+      return { textOutput: state.textOutput };
+    }
+
+    if (event.type !== "item.started" && event.type !== "item.updated" && event.type !== "item.completed") {
+      return { textOutput: state.textOutput };
+    }
+
+    const item = (event as { item: ThreadItem }).item;
+    const typedItem = item as any;
+    this.logger.info("agent_item_event", summarizeThreadItem(item));
+
+    if (item.type === "reasoning") {
+      const previous = state.textByItemId.get(item.id) ?? "";
+      const next = typedItem.text ?? "";
+      if (!state.thinkingActive.has(item.id)) {
+        state.thinkingActive.add(item.id);
+        hooks?.onLoopEvent?.({ type: "thinking_start", requestId: state.requestId });
+      }
+      const delta = next.startsWith(previous) ? next.slice(previous.length) : next;
+      if (delta) {
+        hooks?.onLoopEvent?.({ type: "thinking_delta", requestId: state.requestId, delta });
+      }
+      state.textByItemId.set(item.id, next);
+      if (event.type === "item.completed") {
+        state.thinkingActive.delete(item.id);
+        hooks?.onLoopEvent?.({ type: "thinking_end", requestId: state.requestId });
+      }
+      return { textOutput: state.textOutput };
+    }
+
+    if (item.type === "command_execution") {
+      if (event.type === "item.started") {
+        hooks?.onLoopEvent?.({
+          type: "tool_execution_start",
+          requestId: state.requestId,
+          toolCallId: item.id,
+          toolName: "shell",
+          args: { command: typedItem.command }
+        });
+      }
+      if (event.type === "item.completed") {
+        hooks?.onLoopEvent?.({
+          type: "tool_execution_end",
+          requestId: state.requestId,
+          toolCallId: item.id,
+          toolName: "shell",
+          isError: typedItem.status === "failed"
+        });
+      }
+      return { textOutput: state.textOutput };
+    }
+
+    if (item.type === "mcp_tool_call") {
+      if (event.type === "item.started") {
+        hooks?.onLoopEvent?.({
+          type: "tool_execution_start",
+          requestId: state.requestId,
+          toolCallId: item.id,
+          toolName: typedItem.tool,
+          args: typedItem.arguments
+        });
+      }
+      if (event.type === "item.completed") {
+        hooks?.onLoopEvent?.({
+          type: "tool_execution_end",
+          requestId: state.requestId,
+          toolCallId: item.id,
+          toolName: typedItem.tool,
+          isError: typedItem.status === "failed"
+        });
+      }
+      return { textOutput: state.textOutput };
+    }
+
+    if (item.type === "agent_message") {
+      const previous = state.textByItemId.get(item.id) ?? "";
+      const next = typedItem.text ?? "";
+      const delta = next.startsWith(previous) ? next.slice(previous.length) : next;
+      if (delta) {
+        hooks?.onLoopEvent?.({ type: "text_delta", requestId: state.requestId, delta });
+      }
+      state.textByItemId.set(item.id, next);
+      return { textOutput: next || state.textOutput };
+    }
+
+    if (item.type === "error" && event.type === "item.completed") {
+      const message = extractThreadItemErrorMessage(item);
+      this.logger.error("agent_item_error", item);
+      return { textOutput: state.textOutput, fatalError: message };
+    }
+
+    return { textOutput: state.textOutput };
+  }
+
   private async runSessionPrompt(
     text: string,
-    options: { apiKey: string | null; model?: PiModel; oauthProvider?: OAuthProviderId; cwd?: string; conversationId?: string },
+    options: { apiKey: string | null; model?: RuntimeModel; cwd?: string; conversationId?: string },
     providerSettings: ProviderSettings,
     hooks?: { requestId: string; conversationId?: string; onLoopEvent?: (event: AgentLoopEvent) => void }
   ): Promise<AgentResult> {
     const restoreProxyEnv = withScopedProxyEnvironment(providerSettings);
+    const abortController = new AbortController();
+    this.currentAbortController = abortController;
     try {
-      this.logger.info("agent_prompt_session_start", {
-        requestId: hooks?.requestId ?? null,
-        provider: options.model?.provider ?? options.oauthProvider ?? providerSettings.activeProvider,
-        modelId: options.model?.id ?? null
-      });
       const session = await this.ensureSession(options);
-      hooks?.onLoopEvent?.({
-        type: "session_bound",
-        requestId: hooks.requestId,
-        conversationId: hooks.conversationId,
-        agentSessionId: session.sessionId ?? "unknown"
-      });
-      let streamOutput = "";
-      let finalOutput = "";
-      let thinkingDeltaSeenInBlock = false;
-      let aborted = false;
-
-      const abortPromise = new Promise<never>((_, reject) => {
-        this._abortReject = reject;
-      });
-
-      const unsubscribe = session.subscribe((event) => {
-        this.logger.info("agent_event", summarizeAgentEvent(event));
-        const assistantEventType = event.type === "message_update" ? event.assistantMessageEvent?.type : undefined;
-
-        if (hooks?.onLoopEvent) {
-          if (event.type === "thinking_start" || assistantEventType === "thinking_start") {
-            thinkingDeltaSeenInBlock = false;
-            hooks.onLoopEvent({ type: "thinking_start", requestId: hooks.requestId });
-          } else if (
-            (event.type === "thinking_delta" && typeof event.delta === "string") ||
-            (assistantEventType === "thinking_delta" && typeof event.assistantMessageEvent?.delta === "string")
-          ) {
-            const thinkingDelta = event.type === "thinking_delta" ? event.delta : event.assistantMessageEvent?.delta;
-            if (!thinkingDelta) return;
-            thinkingDeltaSeenInBlock = true;
-            hooks.onLoopEvent({
-              type: "thinking_delta",
-              requestId: hooks.requestId,
-              delta: thinkingDelta
-            });
-          } else if (event.type === "thinking_end" || assistantEventType === "thinking_end") {
-            const thinkingContent =
-              event.type === "thinking_end" ? event.content : event.assistantMessageEvent?.content;
-            if (!thinkingDeltaSeenInBlock && typeof thinkingContent === "string" && thinkingContent.trim()) {
-              hooks.onLoopEvent({
-                type: "thinking_delta",
-                requestId: hooks.requestId,
-                delta: thinkingContent
-              });
-            }
-            thinkingDeltaSeenInBlock = false;
-            hooks.onLoopEvent({ type: "thinking_end", requestId: hooks.requestId });
-          } else if (
-            event.type === "tool_execution_start" &&
-            typeof event.toolCallId === "string" &&
-            typeof event.toolName === "string"
-          ) {
-            const startEvent: AgentLoopEvent = {
-              type: "tool_execution_start",
-              requestId: hooks.requestId,
-              toolCallId: event.toolCallId,
-              toolName: event.toolName
-            };
-            if (event.args !== undefined) {
-              startEvent.args = event.args;
-            }
-            hooks.onLoopEvent(startEvent);
-          } else if (
-            event.type === "tool_execution_end" &&
-            typeof event.toolCallId === "string" &&
-            typeof event.toolName === "string"
-          ) {
-            hooks.onLoopEvent({
-              type: "tool_execution_end",
-              requestId: hooks.requestId,
-              toolCallId: event.toolCallId,
-              toolName: event.toolName,
-              isError: event.isError === true
-            });
-          }
-        }
-
-        if (event.type === "message_update") {
-          if (event.assistantMessageEvent?.type === "text_delta" && typeof event.assistantMessageEvent.delta === "string") {
-            streamOutput += event.assistantMessageEvent.delta;
-            if (hooks?.onLoopEvent) {
-              hooks.onLoopEvent({ type: "text_delta", requestId: hooks.requestId, delta: event.assistantMessageEvent.delta });
-            }
-            return;
-          }
-          if (event.assistantMessageEvent?.type === "done") {
-            finalOutput = extractTextFromAgentEvent(event);
-            return;
-          }
-          if (event.assistantMessageEvent?.type === "text_end" && !streamOutput) {
-            finalOutput = extractTextFromAgentEvent(event);
-            return;
-          }
-        }
-
-        if (event.type === "message_end") {
-          const textFromEnd = extractTextFromAgentEvent(event);
-          if (textFromEnd) {
-            finalOutput = textFromEnd;
-          }
-        }
-      });
-
-      try {
-        await Promise.race([session.prompt(text), abortPromise]);
-      } catch (error) {
-        if (error instanceof Error && error.message === "aborted") {
-          aborted = true;
-          this.logger.info("agent_prompt_aborted", { requestId: hooks?.requestId ?? null });
-        } else {
-          throw error;
-        }
-      } finally {
-        this._abortReject = null;
-        unsubscribe();
+      if (session.thread.id && hooks?.onLoopEvent) {
+        hooks.onLoopEvent({
+          type: "session_bound",
+          requestId: hooks.requestId,
+          conversationId: hooks.conversationId,
+          agentSessionId: session.thread.id
+        });
       }
 
-      if (aborted) {
+      const streamed = await session.thread.runStreamed(text, { signal: abortController.signal });
+      const state = {
+        requestId: hooks?.requestId ?? "request",
+        conversationId: hooks?.conversationId,
+        textByItemId: new Map<string, string>(),
+        textOutput: "",
+        thinkingActive: new Set<string>()
+      };
+
+      for await (const event of streamed.events) {
+        if (event.type === "turn.failed") {
+          throw new Error((event as { error: { message: string } }).error.message);
+        }
+        if (event.type === "error") {
+          throw new Error((event as { message: string }).message);
+        }
+        const next = this.handleThreadEvent(event, state, hooks);
+        if (next.fatalError) {
+          throw new Error(next.fatalError);
+        }
+        state.textOutput = next.textOutput;
+      }
+
+      const output = state.textOutput.trim() ? state.textOutput : "エージェント応答は空でした。";
+      return { ok: true, text: output };
+    } catch (error) {
+      if (abortController.signal.aborted) {
         return {
           ok: false,
           error: { code: "ABORTED", message: "中断しました", details: null, retryable: false }
         };
       }
-
-      let output = finalOutput.trim() ? finalOutput : streamOutput;
-      if (!output.trim()) {
-        this.logger.error("agent_prompt_empty_response", {
-          requestId: hooks?.requestId ?? null,
-          provider: options.model?.provider ?? options.oauthProvider ?? providerSettings.activeProvider,
-          modelId: options.model?.id ?? null
-        });
-        output = "エージェント応答は空でした。";
-      }
-
-      this.logger.info("agent_prompt_completed", {
-        outputLength: output.length,
-        outputSource: finalOutput.trim() ? "final" : streamOutput.trim() ? "stream" : "fallback-empty"
-      });
-      return { ok: true, text: output };
+      throw error;
     } finally {
       restoreProxyEnv();
+      if (this.currentAbortController === abortController) {
+        this.currentAbortController = null;
+      }
     }
-  }
-
-  private buildPromptWithSkillHint(text: string): string {
-    if (text.trimStart().startsWith("/skill:")) {
-      return text;
-    }
-
-    if (this.availableSkillNames.has("skill-creator") && shouldPrioritizeSkillCreator(text)) {
-      return `/skill:skill-creator\n\n${text}`;
-    }
-
-    if (this.availableSkillNames.has("agent-browser") && shouldPrioritizeAgentBrowser(text)) {
-      return `/skill:agent-browser\n\n${text}`;
-    }
-
-    return text;
   }
 
   async submitPrompt(
@@ -771,85 +665,48 @@ export class AgentRuntime {
     providerSettings: ProviderSettings,
     hooks?: { requestId: string; conversationId?: string; onLoopEvent?: (event: AgentLoopEvent) => void }
   ): Promise<AgentResult> {
-    this.logger.info("agent_prompt_received", {
-      textLength: text.length,
-      provider: providerSettings.activeProvider,
-      oauthProvider: providerSettings.oauthProvider
-    });
-
     try {
       if (process.env.LILTO_E2E_MOCK === "1") {
-        try {
-          await runProxyPrecheckIfEnabled(providerSettings);
-        } catch (error) {
-          return {
-            ok: false,
-            error: standardizeError(error, "PROXY_CONNECTION_FAILED")
-          };
-        }
+        await runProxyPrecheckIfEnabled(providerSettings);
         if (hooks?.onLoopEvent) {
-          const pause = async () => {
-            await new Promise((resolve) => setTimeout(resolve, 15));
-          };
-
-          hooks.onLoopEvent({ type: "thinking_start", requestId: hooks.requestId });
-          await pause();
           hooks.onLoopEvent({
-            type: "thinking_delta",
+            type: "session_bound",
             requestId: hooks.requestId,
-            delta: "要求を分解し、必要な手順を確認します。\n"
+            conversationId: hooks.conversationId,
+            agentSessionId: hooks.conversationId ?? "e2e-mock-session"
           });
-          await pause();
-          hooks.onLoopEvent({
-            type: "thinking_delta",
-            requestId: hooks.requestId,
-            delta: "読み取りとコマンド実行の順で進めます。\n"
-          });
-          await pause();
-          hooks.onLoopEvent({ type: "thinking_end", requestId: hooks.requestId });
-          await pause();
-
           hooks.onLoopEvent({
             type: "tool_execution_start",
             requestId: hooks.requestId,
-            toolCallId: "mock-read-1",
-            toolName: "read_file",
-            args: { command: "read_file README.md" }
+            toolCallId: "e2e-read-file",
+            toolName: "shell",
+            args: { command: "Running command: read_file" }
           });
-          await pause();
           hooks.onLoopEvent({
             type: "tool_execution_end",
             requestId: hooks.requestId,
-            toolCallId: "mock-read-1",
-            toolName: "read_file",
+            toolCallId: "e2e-read-file",
+            toolName: "shell",
             isError: false
           });
-          await pause();
-
           hooks.onLoopEvent({
             type: "tool_execution_start",
             requestId: hooks.requestId,
-            toolCallId: "mock-run-1",
-            toolName: "run_in_terminal",
-            args: { command: "npm run check" }
+            toolCallId: "e2e-run-terminal",
+            toolName: "shell",
+            args: { command: "Running command: run_in_terminal" }
           });
-          await pause();
           hooks.onLoopEvent({
             type: "tool_execution_end",
             requestId: hooks.requestId,
-            toolCallId: "mock-run-1",
-            toolName: "run_in_terminal",
+            toolCallId: "e2e-run-terminal",
+            toolName: "shell",
             isError: false
           });
-          await pause();
         }
-
-        const mock = `[E2E_MOCK_FINAL] 要求「${text}」を処理し、複数コマンドを実行して回答しました。`;
-        this.logger.info("agent_prompt_mock_completed", { outputLength: mock.length });
-        return { ok: true, text: mock };
+        return { ok: true, text: `[E2E_MOCK_FINAL] 要求「${text}」を処理し、複数コマンドを実行して回答しました。` };
       }
 
-      const promptText = this.buildPromptWithSkillHint(text);
       const runOptionsBase = { cwd: this.workspaceDir };
 
       if (providerSettings.activeProvider === "custom-openai-completions") {
@@ -858,7 +715,7 @@ export class AgentRuntime {
             ok: false,
             error: {
               code: "PROVIDER_CONFIG_REQUIRED",
-              message: "Custom Provider を使うには name と baseUrl の設定が必要です。",
+              message: "API key を使うには API key の設定が必要です。",
               details: null,
               retryable: true
             }
@@ -866,41 +723,34 @@ export class AgentRuntime {
         }
 
         const model = buildCustomModel(providerSettings);
-        const apiKeyFromSettings = providerSettings.customProvider.apiKey;
-        const apiKey =
-          apiKeyFromSettings && apiKeyFromSettings.trim()
-            ? apiKeyFromSettings
-            : isLocalOllamaUrl(model.baseUrl)
-              ? "ollama"
-              : "not-required";
+        const apiKey = providerSettings.customProvider.apiKey.trim() || (model.baseUrl && isLocalOllamaUrl(model.baseUrl) ? "ollama" : "");
+        if (!apiKey) {
+          return {
+            ok: false,
+            error: {
+              code: "PROVIDER_CONFIG_REQUIRED",
+              message: "API key を入力してください。",
+              details: null,
+              retryable: true
+            }
+          };
+        }
+
         return await this.runSessionPrompt(
-          promptText,
-          { apiKey, model, oauthProvider: providerSettings.oauthProvider, conversationId: hooks?.conversationId, ...runOptionsBase },
+          text,
+          { apiKey, model, conversationId: hooks?.conversationId, ...runOptionsBase },
           providerSettings,
           hooks
         );
       }
 
-      const authState = this.authService.getState() as AuthSnapshot;
-      if (authState.phase !== "authenticated" || authState.provider !== providerSettings.oauthProvider) {
+      const authState = this.authService.getState();
+      if (authState.phase !== "authenticated") {
         return {
           ok: false,
           error: {
             code: "AUTH_REQUIRED",
-            message: `${providerSettings.oauthProvider} の OAuth 認証が必要です。`,
-            details: null,
-            retryable: true
-          }
-        };
-      }
-
-      const apiKey = await this.authService.getApiKey(providerSettings.oauthProvider);
-      if (!apiKey) {
-        return {
-          ok: false,
-          error: {
-            code: "AUTH_REQUIRED",
-            message: "認証情報を取得できませんでした。再認証してください。",
+            message: "Codex ChatGPT 認証が必要です。",
             details: null,
             retryable: true
           }
@@ -908,18 +758,17 @@ export class AgentRuntime {
       }
 
       return await this.runSessionPrompt(
-        promptText,
-        { apiKey, model: undefined, oauthProvider: providerSettings.oauthProvider, conversationId: hooks?.conversationId, ...runOptionsBase },
+        text,
+        { apiKey: null, model: buildOauthModel(providerSettings), conversationId: hooks?.conversationId, ...runOptionsBase },
         providerSettings,
         hooks
       );
     } catch (error) {
-      const normalized = standardizeAgentRuntimeError(error);
+      const normalized = standardizeExecutionError(error);
       this.logger.error("agent_prompt_failed", normalized);
       return { ok: false, error: normalized };
     }
   }
 }
 
-// Backward-compatible alias for existing imports.
 export { AgentRuntime as PiAgentBridge };

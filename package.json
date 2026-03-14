@@ -2,7 +2,7 @@
   "name": "lilt-o",
   "version": "0.1.0",
   "private": true,
-  "description": "Lilt-o desktop shell with Pi SDK bridge",
+  "description": "Lilt-o desktop shell with Codex SDK bridge",
   "main": "dist/main/index.js",
   "scripts": {
     "prebuild": "node scripts/sync-skill-creator.js",
@@ -26,8 +26,7 @@
     ]
   },
   "dependencies": {
-    "@mariozechner/pi-ai": "^0.54.2",
-    "@mariozechner/pi-coding-agent": "latest",
+    "@openai/codex-sdk": "^0.114.0",
     "marked": "^17.0.4",
     "skills": "^1.4.4"
   },

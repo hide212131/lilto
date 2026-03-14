@@ -1,8 +1,6 @@
 import type { Logger } from "./logger";
 import type { SchedulerClient } from "./scheduler";
 import type { SchedulerCreateInput, SchedulerScheduleSummary } from "../shared/scheduler";
-
-const importEsm = new Function("specifier", "return import(specifier)") as (specifier: string) => Promise<unknown>;
 const DEFAULT_TIMEZONE = "Asia/Tokyo";
 
 type CronToolOperation =
@@ -48,17 +46,7 @@ export async function createCronTool({
   scheduler: SchedulerClient;
   logger: Logger;
 }): Promise<unknown> {
-  const { Type } = (await importEsm("@mariozechner/pi-ai")) as {
-    Type: {
-      Object: (...args: unknown[]) => unknown;
-      Optional: (value: unknown) => unknown;
-      String: (...args: unknown[]) => unknown;
-      Number: (...args: unknown[]) => unknown;
-      Union: (values: unknown[], options?: unknown) => unknown;
-      Literal: (value: string) => unknown;
-    };
-  };
-
+  const execute = createCronToolExecutor({ scheduler, logger });
   return {
     name: "cron",
     label: "Cron",
@@ -68,58 +56,32 @@ export async function createCronTool({
       "If the user wants the AI to continue with another action after the timer fires, set followUpInstruction to that concrete next step.",
       "Use low-level create/update with runAt or cronExpr only for complex schedules that the high-level operations cannot express."
     ].join(" "),
-    parameters: Type.Object({
-      operation: Type.Union(
-        [
-          Type.Literal("set_timer"),
-          Type.Literal("set_reminder_at"),
-          Type.Literal("set_daily_reminder"),
-          Type.Literal("create"),
-          Type.Literal("list"),
-          Type.Literal("update"),
-          Type.Literal("delete")
-        ],
-        { description: "Operation to perform. Prefer set_timer, set_reminder_at, or set_daily_reminder." }
-      ),
-      id: Type.Optional(Type.String({ description: "Schedule ID. Required for update/delete." })),
-      title: Type.Optional(Type.String({ description: "Human-readable label for the schedule" })),
-      kind: Type.Optional(
-        Type.Union([Type.Literal("one_shot"), Type.Literal("cron")], {
-          description: "Low-level schedule kind. Required only for create/update."
-        })
-      ),
-      runAt: Type.Optional(
-        Type.String({ description: "Low-level RFC3339 timestamp for one-shot schedules. Use only with create/update." })
-      ),
-      cronExpr: Type.Optional(
-        Type.String({ description: "Low-level 6-field cron expression. Use only with create/update." })
-      ),
-      timezone: Type.Optional(Type.String({ description: "IANA timezone, e.g. Asia/Tokyo" })),
-      notificationMessage: Type.Optional(Type.String({ description: "Message delivered when the schedule fires" })),
-      followUpInstruction: Type.Optional(
-        Type.String({ description: "Optional concrete action for the AI to continue after the notification fires" })
-      ),
-      scope: Type.Optional(
-        Type.Union([Type.Literal("current_session"), Type.Literal("all")], {
-          description: "For list: current session only (default) or all sessions"
-        })
-      ),
-      afterSeconds: Type.Optional(
-        Type.Number({ description: "For set_timer: notify after this many seconds" })
-      ),
-      date: Type.Optional(
-        Type.String({ description: "For set_reminder_at: local date in YYYY-MM-DD" })
-      ),
-      time: Type.Optional(
-        Type.String({ description: "For set_reminder_at: local time in HH:MM or HH:MM:SS" })
-      ),
-      hour: Type.Optional(
-        Type.Number({ description: "For set_daily_reminder: hour in 24h format (0-23)" })
-      ),
-      minute: Type.Optional(
-        Type.Number({ description: "For set_daily_reminder: minute (0-59)" })
-      )
-    }),
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        operation: {
+          type: "string",
+          enum: ["set_timer", "set_reminder_at", "set_daily_reminder", "create", "list", "update", "delete"],
+          description: "Operation to perform. Prefer set_timer, set_reminder_at, or set_daily_reminder."
+        },
+        id: { type: "string", description: "Schedule ID. Required for update/delete." },
+        title: { type: "string", description: "Human-readable label for the schedule" },
+        kind: { type: "string", enum: ["one_shot", "cron"], description: "Low-level schedule kind. Required only for create/update." },
+        runAt: { type: "string", description: "Low-level RFC3339 timestamp for one-shot schedules. Use only with create/update." },
+        cronExpr: { type: "string", description: "Low-level 6-field cron expression. Use only with create/update." },
+        timezone: { type: "string", description: "IANA timezone, e.g. Asia/Tokyo" },
+        notificationMessage: { type: "string", description: "Message delivered when the schedule fires" },
+        followUpInstruction: { type: "string", description: "Optional concrete action for the AI to continue after the notification fires" },
+        scope: { type: "string", enum: ["current_session", "all"], description: "For list: current session only (default) or all sessions" },
+        afterSeconds: { type: "number", description: "For set_timer: notify after this many seconds" },
+        date: { type: "string", description: "For set_reminder_at: local date in YYYY-MM-DD" },
+        time: { type: "string", description: "For set_reminder_at: local time in HH:MM or HH:MM:SS" },
+        hour: { type: "number", description: "For set_daily_reminder: hour in 24h format (0-23)" },
+        minute: { type: "number", description: "For set_daily_reminder: minute (0-59)" }
+      },
+      required: ["operation"]
+    },
     async execute(
       _toolCallId: string,
       rawParams: unknown,
@@ -127,61 +89,77 @@ export async function createCronTool({
       _onUpdate: unknown,
       ctx: { sessionManager: { getSessionId(): string } }
     ) {
-      const params = rawParams as CronToolParams;
-      const currentSessionId = ctx.sessionManager.getSessionId();
-
-      logger.info("cron_tool_called", {
-        operation: params.operation,
-        currentSessionId,
-        id: params.id ?? null
-      });
-
-      if (params.operation === "list") {
-        const items = await scheduler.listSchedules();
-        const scope = params.scope ?? "current_session";
-        const visible = scope === "all" ? items : items.filter((item) => item.sessionId === currentSessionId);
-        const lines = visible.length > 0 ? visible.map(formatSchedule).join("\n") : "No schedules found.";
-        return {
-          content: [{ type: "text", text: lines }],
-          details: { items: visible }
-        };
-      }
-
-      if (params.operation === "delete") {
-        if (!params.id) {
-          throw new Error("delete operation requires id");
-        }
-        await scheduler.deleteSchedule(params.id);
-        return {
-          content: [{ type: "text", text: `Deleted schedule ${params.id}.` }],
-          details: { id: params.id, deleted: true }
-        };
-      }
-
-      const notificationMessage = params.notificationMessage?.trim() || "スケジュールの時刻になりました。";
-      const input = buildSchedulerInput(params, currentSessionId, notificationMessage);
-
-      if (params.operation === "create" || params.operation === "set_timer" || params.operation === "set_reminder_at" || params.operation === "set_daily_reminder") {
-        const summary = await scheduler.createSchedule(input);
-        return {
-          content: [{ type: "text", text: `Created schedule:\n${formatSchedule(summary)}` }],
-          details: summary
-        };
-      }
-
-      if (params.operation === "update") {
-        if (!params.id) {
-          throw new Error("update operation requires id");
-        }
-        const summary = await scheduler.updateSchedule(params.id, input);
-        return {
-          content: [{ type: "text", text: `Updated schedule:\n${formatSchedule(summary)}` }],
-          details: summary
-        };
-      }
-
-      throw new Error(`unsupported operation: ${params.operation satisfies never}`);
+      return execute(rawParams, ctx.sessionManager.getSessionId());
     }
+  };
+}
+
+export function createCronToolExecutor({
+  scheduler,
+  logger
+}: {
+  scheduler: SchedulerClient;
+  logger: Logger;
+}) {
+  return async (rawParams: unknown, currentSessionId: string) => {
+    const params = rawParams as CronToolParams;
+
+    logger.info("cron_tool_called", {
+      operation: params.operation,
+      currentSessionId,
+      id: params.id ?? null
+    });
+
+    if (params.operation === "list") {
+      const items = await scheduler.listSchedules();
+      const scope = params.scope ?? "current_session";
+      const visible = scope === "all" ? items : items.filter((item) => item.sessionId === currentSessionId);
+      const lines = visible.length > 0 ? visible.map(formatSchedule).join("\n") : "No schedules found.";
+      return {
+        content: [{ type: "text", text: lines }],
+        details: { items: visible }
+      };
+    }
+
+    if (params.operation === "delete") {
+      if (!params.id) {
+        throw new Error("delete operation requires id");
+      }
+      await scheduler.deleteSchedule(params.id);
+      return {
+        content: [{ type: "text", text: `Deleted schedule ${params.id}.` }],
+        details: { id: params.id, deleted: true }
+      };
+    }
+
+    const notificationMessage = params.notificationMessage?.trim() || "スケジュールの時刻になりました。";
+    const input = buildSchedulerInput(params, currentSessionId, notificationMessage);
+
+    if (
+      params.operation === "create" ||
+      params.operation === "set_timer" ||
+      params.operation === "set_reminder_at" ||
+      params.operation === "set_daily_reminder"
+    ) {
+      const summary = await scheduler.createSchedule(input);
+      return {
+        content: [{ type: "text", text: `Created schedule:\n${formatSchedule(summary)}` }],
+        details: summary
+      };
+    }
+
+    if (params.operation === "update") {
+      if (!params.id) {
+        throw new Error("update operation requires id");
+      }
+      const summary = await scheduler.updateSchedule(params.id, input);
+      return {
+        content: [{ type: "text", text: `Updated schedule:\n${formatSchedule(summary)}` }],
+        details: summary
+      };
+    }
+
+    throw new Error(`unsupported operation: ${params.operation satisfies never}`);
   };
 }
 

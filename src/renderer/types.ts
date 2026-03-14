@@ -36,6 +36,22 @@ export type AuthState = {
   message: string;
   authUrl: string | null;
   updatedAt: number;
+  debug: {
+    codexAuthPath: string;
+    codexAuthFileExists: boolean;
+    authMode: string | null;
+    hasAccessToken: boolean;
+    hasRefreshToken: boolean;
+    hasOpenAiApiKey: boolean;
+    hasStoredApiKey: boolean;
+    isChatGptAuthenticated: boolean;
+  lastCodexAuthReadError: string | null;
+  };
+};
+
+export type ListedModel = {
+  id: string;
+  displayName: string;
 };
 
 export type { ActiveProvider, ProviderSettings };
@@ -96,6 +112,12 @@ declare global {
         | { ok: false; error: { code: string; message: string } }
       >;
       getAuthState: () => Promise<AuthState>;
+      listModels: (
+        payload: unknown
+      ) => Promise<
+        | { ok: true; models: ListedModel[] }
+        | { ok: false; error: { code: string; message: string } }
+      >;
       getProviderSettings: () => Promise<ProviderSettings>;
       saveProviderSettings: (
         settings: ProviderSettings

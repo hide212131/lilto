@@ -25,7 +25,7 @@ export type ProviderSettingsSaveResult =
   | { ok: true; state: ProviderSettings }
   | { ok: false; error: { code: "INVALID_PROVIDER_SETTINGS"; message: string } };
 
-const DEFAULT_MODEL_ID = "qwen2.5:0.5b";
+const DEFAULT_MODEL_ID = "gpt-5.3-codex";
 
 function hasProxyEnvironment(): boolean {
   const vars = [process.env.HTTP_PROXY, process.env.http_proxy, process.env.HTTPS_PROXY, process.env.https_proxy];
@@ -39,12 +39,13 @@ function defaultGlobalShortcut(): string {
 function createDefaultSettings(): ProviderSettings {
   return {
     activeProvider: "oauth",
-    oauthProvider: "anthropic",
+    oauthProvider: "openai-codex",
+    oauthModelId: "gpt-5.3-codex",
     customProvider: {
-      name: "Ollama",
-      baseUrl: "http://127.0.0.1:11434/v1",
+      name: "OpenAI API Key",
+      baseUrl: "",
       apiKey: "",
-      modelId: DEFAULT_MODEL_ID
+      modelId: "gpt-5.3-codex"
     },
     networkProxy: { useProxy: hasProxyEnvironment() },
     chatSettings: { ...DEFAULT_CHAT_SETTINGS, globalShortcut: defaultGlobalShortcut() },
@@ -62,9 +63,9 @@ function normalizeActiveProvider(value: unknown): ActiveProvider {
 
 function normalizeOAuthProvider(value: unknown): OAuthProviderId {
   if (typeof value !== "string") {
-    return "anthropic";
+    return "openai-codex";
   }
-  return OAUTH_PROVIDER_IDS.includes(value as OAuthProviderId) ? (value as OAuthProviderId) : "anthropic";
+  return OAUTH_PROVIDER_IDS.includes(value as OAuthProviderId) ? (value as OAuthProviderId) : "openai-codex";
 }
 
 function normalizeChatSettings(value: unknown): ChatSettings {
@@ -77,6 +78,7 @@ function normalizeChatSettings(value: unknown): ChatSettings {
 
 function normalizeSettings(value: unknown): ProviderSettings {
   const record = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const activeProvider = normalizeActiveProvider(record.activeProvider);
   const custom =
     record.customProvider && typeof record.customProvider === "object"
       ? (record.customProvider as Record<string, unknown>)
@@ -87,15 +89,19 @@ function normalizeSettings(value: unknown): ProviderSettings {
       : {};
   const defaultUseProxy = hasProxyEnvironment();
   const useProxy = typeof proxy.useProxy === "boolean" ? proxy.useProxy : defaultUseProxy;
+  const rawModelId = toTrimmedString(custom.modelId, DEFAULT_MODEL_ID) || DEFAULT_MODEL_ID;
+  const rawOauthModelId = toTrimmedString(record.oauthModelId, rawModelId) || DEFAULT_MODEL_ID;
+  const normalizedOauthModelId = rawOauthModelId === "qwen2.5:0.5b" ? DEFAULT_MODEL_ID : rawOauthModelId;
 
   return {
-    activeProvider: normalizeActiveProvider(record.activeProvider),
+    activeProvider,
     oauthProvider: normalizeOAuthProvider(record.oauthProvider),
+    oauthModelId: normalizedOauthModelId,
     customProvider: {
       name: toTrimmedString(custom.name),
       baseUrl: toTrimmedString(custom.baseUrl),
       apiKey: typeof custom.apiKey === "string" ? custom.apiKey : "",
-      modelId: toTrimmedString(custom.modelId, DEFAULT_MODEL_ID) || DEFAULT_MODEL_ID
+      modelId: rawModelId
     },
     networkProxy: {
       useProxy
@@ -108,6 +114,7 @@ function normalizeSettings(value: unknown): ProviderSettings {
 function isValidSavePayload(payload: unknown): payload is {
   activeProvider: ActiveProvider;
   oauthProvider?: OAuthProviderId;
+  oauthModelId?: string;
   customProvider: CustomProviderSettings;
   networkProxy?: NetworkProxySettings;
   chatSettings?: ChatSettings;
@@ -121,6 +128,9 @@ function isValidSavePayload(payload: unknown): payload is {
     return false;
   }
   if (record.oauthProvider !== undefined && !OAUTH_PROVIDER_IDS.includes(record.oauthProvider as OAuthProviderId)) {
+    return false;
+  }
+  if (record.oauthModelId !== undefined && typeof record.oauthModelId !== "string") {
     return false;
   }
   if (!record.customProvider || typeof record.customProvider !== "object") {
@@ -216,5 +226,5 @@ export class ProviderSettingsService {
 }
 
 export function isCustomProviderReady(settings: ProviderSettings): boolean {
-  return Boolean(settings.customProvider.name.trim() && settings.customProvider.baseUrl.trim());
+  return Boolean(settings.customProvider.apiKey.trim() || settings.customProvider.baseUrl.trim());
 }

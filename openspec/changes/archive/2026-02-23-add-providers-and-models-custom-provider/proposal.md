@@ -22,5 +22,5 @@
 ## Impact
 
 - 影響コード: `src/renderer/index.html`, `src/renderer/renderer.ts`, `src/main/*`（IPC 契約・設定保存・実行分岐）。
-- 参照/移植元: `/Users/hide/Github/pi-mono/packages/web-ui/src/dialogs/ProvidersModelsTab.ts`, `/Users/hide/Github/pi-mono/packages/web-ui/src/dialogs/CustomProviderDialog.ts`, `/Users/hide/Github/pi-mono/packages/web-ui/example/src/main.ts`。
+- 参照/移植元: `$PI_REPO_DIR/packages/web-ui/src/dialogs/ProvidersModelsTab.ts`, `$PI_REPO_DIR/packages/web-ui/src/dialogs/CustomProviderDialog.ts`, `$PI_REPO_DIR/packages/web-ui/example/src/main.ts`。
 - 追加考慮: 既存認証状態イベントとの後方互換、設定未完了時エラー文言、E2E セレクタ更新。

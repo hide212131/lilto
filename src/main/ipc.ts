@@ -6,6 +6,7 @@ import { AGENT_LOOP_EVENT_CHANNEL, validatePrompt } from "./ipc-contract";
 import { createLogger } from "./logger";
 import type { NotificationService } from "./notifications";
 import type { ProviderSettingsService } from "./provider-settings";
+import type { ModelCatalogService } from "./model-catalog";
 import { checkSkillUpdates, installSkillFromSource, installSkillFromUrl, listSkillsWithSource, uninstallUserSkill } from "./skill-runtime";
 import type { AgentLoopEvent } from "../shared/agent-loop";
 
@@ -29,14 +30,16 @@ export function registerAgentIpcHandlers({
   bundledSkillsDir,
   userSkillsDir,
   notificationService,
+  modelCatalogService,
   onSettingsSaved
 }: {
   agentRuntime: AgentRuntime;
-  authService: ClaudeAuthService;
+  authService: ClaudeAuthService & { setApiKey(apiKey: string | null): void };
   providerSettingsService: ProviderSettingsService;
   bundledSkillsDir: string;
   userSkillsDir: string;
   notificationService: NotificationService;
+  modelCatalogService: ModelCatalogService;
   onSettingsSaved?: (settings: import("./provider-settings").ProviderSettings) => void;
 }): void {
   const logger = createLogger("ipc");
@@ -113,8 +116,7 @@ export function registerAgentIpcHandlers({
   });
 
   ipcMain.handle("auth:startClaudeOauth", async () => {
-    const oauthProvider = providerSettingsService.getState().oauthProvider;
-    const state = await authService.startOAuth(oauthProvider);
+    const state = await authService.startOAuth("openai-codex");
     return { ok: state.phase === "authenticated", state };
   });
 
@@ -136,9 +138,44 @@ export function registerAgentIpcHandlers({
     return providerSettingsService.getState();
   });
 
+  ipcMain.handle("models:list", async (_event, payload: unknown) => {
+    const state = providerSettingsService.getState();
+    const record = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+    const mode = record.mode === "custom-openai-completions" ? "custom-openai-completions" : "oauth";
+    const networkProxy =
+      record.networkProxy && typeof record.networkProxy === "object" && typeof (record.networkProxy as { useProxy?: unknown }).useProxy === "boolean"
+        ? { useProxy: (record.networkProxy as { useProxy: boolean }).useProxy }
+        : state.networkProxy;
+
+    if (mode === "custom-openai-completions") {
+      const customProvider =
+        record.customProvider && typeof record.customProvider === "object"
+          ? {
+              baseUrl: typeof (record.customProvider as { baseUrl?: unknown }).baseUrl === "string"
+                ? (record.customProvider as { baseUrl: string }).baseUrl
+                : state.customProvider.baseUrl,
+              apiKey: typeof (record.customProvider as { apiKey?: unknown }).apiKey === "string"
+                ? (record.customProvider as { apiKey: string }).apiKey
+                : state.customProvider.apiKey
+            }
+          : {
+              baseUrl: state.customProvider.baseUrl,
+              apiKey: state.customProvider.apiKey
+            };
+      return await modelCatalogService.listCustomProviderModels(customProvider, networkProxy);
+    }
+
+    const oauthProvider =
+      typeof record.oauthProvider === "string"
+        ? (record.oauthProvider as import("./provider-settings").OAuthProviderId)
+        : state.oauthProvider;
+    return await modelCatalogService.listOauthModels(oauthProvider, networkProxy);
+  });
+
   ipcMain.handle("providers:saveSettings", (_event, payload: unknown) => {
     const result = providerSettingsService.save(payload);
     if (result.ok && onSettingsSaved) {
+      authService.setApiKey(result.state.customProvider.apiKey || null);
       onSettingsSaved(result.state);
     }
     return result;

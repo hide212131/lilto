@@ -12,6 +12,10 @@ const targets = [
 test("CLI 別プロセス起動コードを含まない", () => {
   for (const file of targets) {
     const content = fs.readFileSync(file, "utf8");
+    if (file === "src/main/auth-service.ts") {
+      assert.match(content, /spawn\(this\.codexCommand, \["login"\]/, "auth-service は codex login のみ許可する");
+      continue;
+    }
     assert.equal(/child_process/.test(content), false, `${file} に child_process 参照があります`);
     assert.equal(/\bspawn\s*\(/.test(content), false, `${file} に spawn 呼び出しがあります`);
     assert.equal(/\bexec\s*\(/.test(content), false, `${file} に exec 呼び出しがあります`);

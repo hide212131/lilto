@@ -1,8 +1,5 @@
-# claude-oauth-chat-bootstrap Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change add-pi-sdk-main-process-agent. Update Purpose after archive.
-## Requirements
 ### Requirement: Pi ai パッケージによる Claude OAuth 開始
 システムは、OAuth 利用開始時に Providers & Models 画面の認証セクションから、Pi の `ai` パッケージではなく OpenAI Codex TypeScript SDK に対応した認証フローを開始しなければならない（MUST）。認証開始時は lilto が管理する Codex 実行用の認証設定を解決しなければならない（MUST）。
 

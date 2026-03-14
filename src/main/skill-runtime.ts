@@ -14,6 +14,7 @@ export type SkillMetadata = {
 };
 
 export type SkillRuntimeSetup = {
+  codexHomeDir: string;
   appSkillsDir: string;
   bundledSkillsDir: string;
   userSkillsDir: string;
@@ -24,7 +25,8 @@ export type SkillRuntimeSetup = {
 };
 
 const BUNDLED_SKILL_NAMES = ["agent-browser", "skill-creator"] as const;
-const DEFAULT_PI_USER_SKILLS_DIR = path.join(os.homedir(), ".pi", "agent", "skills");
+const DEFAULT_CODEX_HOME_DIR = path.join(os.homedir(), ".codex");
+const DEFAULT_CODEX_USER_SKILLS_DIR = path.join(DEFAULT_CODEX_HOME_DIR, "skills");
 const ANSI_ESCAPE_REGEX = /\x1B\[[0-9;]*m/g;
 const SKILL_INSTALL_TIMEOUT_MS = 60_000;
 const BUNDLED_SKILL_SOURCES: Record<string, string> = {
@@ -33,7 +35,7 @@ const BUNDLED_SKILL_SOURCES: Record<string, string> = {
 };
 
 function isDefaultUserSkillsDir(userSkillsDir: string): boolean {
-  return path.resolve(userSkillsDir) === path.resolve(DEFAULT_PI_USER_SKILLS_DIR);
+  return path.resolve(userSkillsDir) === path.resolve(DEFAULT_CODEX_USER_SKILLS_DIR);
 }
 
 function resolveSkillsCliPath(projectRoot: string): string {
@@ -278,110 +280,8 @@ export function discoverSkillMetadata(skillDirs: string[]): SkillMetadata[] {
   return discovered;
 }
 
-function updateSettingsFile(settingsPath: string, skillDir: string): boolean {
-  let root: Record<string, unknown> = {};
-
-  if (fs.existsSync(settingsPath)) {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(settingsPath, "utf8")) as unknown;
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        root = parsed as Record<string, unknown>;
-      }
-    } catch {
-      root = {};
-    }
-  }
-
-  const existing = Array.isArray(root.skills)
-    ? root.skills.filter((item): item is string => typeof item === "string")
-    : [];
-
-  if (existing.includes(skillDir)) {
-    return false;
-  }
-
-  root.skills = [...existing, skillDir];
-
-  fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
-  fs.writeFileSync(settingsPath, `${JSON.stringify(root, null, 2)}\n`, "utf8");
-  return true;
-}
-
-export function ensureSkillDirInPiSettings(options: {
-  skillDir?: string;
-  skillDirs?: string[];
-  homeDir?: string;
-  settingsPaths?: string[];
-}): string[] {
-  const homeDir = options.homeDir ?? os.homedir();
-  const settingsPaths =
-    options.settingsPaths ?? [path.join(homeDir, ".pi", "settings.json"), path.join(homeDir, ".pi", "agent", "settings.json")];
-  const skillDirs = options.skillDirs ?? (options.skillDir ? [options.skillDir] : []);
-
-  const updated: string[] = [];
-  for (const skillDir of skillDirs) {
-    for (const settingsPath of settingsPaths) {
-      if (updateSettingsFile(settingsPath, skillDir) && !updated.includes(settingsPath)) {
-        updated.push(settingsPath);
-      }
-    }
-  }
-
-  return updated;
-}
-
-export function resolveWorkspaceDir(projectName: string, homeDir = os.homedir()): string {
-  const normalized = projectName
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/^-+|-+$/g, "") || "lilt-o";
-  return path.join(homeDir, ".pi", "workspaces", normalized);
-}
-
-export function cleanupOldWorkspaces(options: {
-  workspaceRoot: string;
-  currentWorkspaceDir: string;
-  ttlHours: number;
-}): string[] {
-  const removed: string[] = [];
-  if (options.ttlHours <= 0 || !fs.existsSync(options.workspaceRoot)) {
-    return removed;
-  }
-
-  const thresholdMs = Date.now() - options.ttlHours * 60 * 60 * 1000;
-  let entries: fs.Dirent[] = [];
-  try {
-    entries = fs.readdirSync(options.workspaceRoot, { withFileTypes: true });
-  } catch {
-    return removed;
-  }
-
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-
-    const workspacePath = path.join(options.workspaceRoot, entry.name);
-    if (path.resolve(workspacePath) === path.resolve(options.currentWorkspaceDir)) {
-      continue;
-    }
-
-    let stats: fs.Stats;
-    try {
-      stats = fs.statSync(workspacePath);
-    } catch {
-      continue;
-    }
-
-    if (stats.mtimeMs >= thresholdMs) continue;
-
-    try {
-      fs.rmSync(workspacePath, { recursive: true, force: true });
-      removed.push(workspacePath);
-    } catch {
-      // ignore cleanup errors
-    }
-  }
-
-  return removed;
+export function resolveCodexHomeDir(appDataDir: string): string {
+  return path.join(appDataDir, "codex");
 }
 
 function resolveBundledSkillSource(options: {
@@ -465,40 +365,26 @@ export function setupSkillRuntime(options: {
   settingsPaths?: string[];
   projectRoot?: string;
 }): SkillRuntimeSetup {
-  const homeDir = options.homeDir ?? os.homedir();
-  const appSkillsDir = path.join(options.appDataDir, "skills");
-  const bundledSkillsDir = path.join(appSkillsDir, "bundled");
-  const userSkillsDir = path.join(homeDir, ".pi", "agent", "skills");
+  const codexHomeDir = resolveCodexHomeDir(options.appDataDir);
+  const appSkillsDir = path.join(codexHomeDir, "skills");
+  const bundledSkillsDir = path.join(appSkillsDir, ".system");
+  const userSkillsDir = appSkillsDir;
 
   ensureBundledSkills({ bundledSkillsDir, projectRoot: options.projectRoot });
   fs.mkdirSync(userSkillsDir, { recursive: true });
 
-  const updatedSettings = ensureSkillDirInPiSettings({
-    skillDirs: [userSkillsDir, bundledSkillsDir],
-    homeDir,
-    settingsPaths: options.settingsPaths
-  });
   const availableSkills = discoverSkillMetadata([userSkillsDir, bundledSkillsDir]);
-
-  const workspaceDir = resolveWorkspaceDir(options.projectName);
-  const workspaceRoot = path.dirname(workspaceDir);
-  fs.mkdirSync(workspaceDir, { recursive: true });
-
-  const ttl = options.workspaceTtlHours ?? 24 * 7;
-  const removedWorkspaces = cleanupOldWorkspaces({
-    workspaceRoot,
-    currentWorkspaceDir: workspaceDir,
-    ttlHours: ttl
-  });
+  const workspaceDir = path.resolve(options.projectRoot ?? process.cwd());
 
   return {
+    codexHomeDir,
     appSkillsDir,
     bundledSkillsDir,
     userSkillsDir,
     workspaceDir,
     availableSkills,
-    updatedSettings,
-    removedWorkspaces
+    updatedSettings: [],
+    removedWorkspaces: []
   };
 }
 
@@ -1361,7 +1247,7 @@ export async function installSkillFromSource(options: {
   const execFileAsync = promisify(execFile);
 
   const projectRoot = options.projectRoot ?? process.cwd();
-  const userSkillsDir = options.userSkillsDir ?? DEFAULT_PI_USER_SKILLS_DIR;
+  const userSkillsDir = options.userSkillsDir ?? DEFAULT_CODEX_USER_SKILLS_DIR;
   const sourceIsHttp = isHttpUrl(source);
   const localSourceSkillInfo = collectLocalSourceSkillInfo(source);
   let namesBeforeInstall: Set<string> | null = null;

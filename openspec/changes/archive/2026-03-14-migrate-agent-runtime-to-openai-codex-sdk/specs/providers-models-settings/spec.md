@@ -1,8 +1,5 @@
-# providers-models-settings Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change add-providers-and-models-custom-provider. Update Purpose after archive.
-## Requirements
 ### Requirement: Providers & Models 設定画面の提供
 システムは、Settings モーダル内の設定メニューを `Providers & Models` として提供し、Codex のブラウザ OAuth と API key 設定導線を同一画面で提示しなければならない（MUST）。また同一画面でネットワーク Proxy 設定導線を提示しなければならない（MUST）。設定画面は Pi 由来の複数 OAuth provider 選択 UI を表示してはならない（MUST NOT）。
 

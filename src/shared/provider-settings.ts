@@ -1,10 +1,6 @@
 export type ActiveProvider = "oauth" | "custom-openai-completions";
 export const OAUTH_PROVIDER_IDS = [
-  "anthropic",
-  "openai-codex",
-  "github-copilot",
-  "google-gemini-cli",
-  "google-antigravity"
+  "openai-codex"
 ] as const;
 export type OAuthProviderId = (typeof OAUTH_PROVIDER_IDS)[number];
 
@@ -32,6 +28,7 @@ export const DEFAULT_CHAT_SETTINGS: ChatSettings = {
 export type ProviderSettings = {
   activeProvider: ActiveProvider;
   oauthProvider: OAuthProviderId;
+  oauthModelId: string;
   customProvider: CustomProviderSettings;
   networkProxy: NetworkProxySettings;
   chatSettings: ChatSettings;
