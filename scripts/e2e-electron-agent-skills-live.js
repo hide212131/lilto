@@ -69,8 +69,22 @@ function preflightChecks() {
   run(shell, ["agent-browser", "--version"]);
 }
 
+function resolveElectronUserDataDir() {
+  if (process.platform === "darwin") {
+    return path.join(os.homedir(), "Library", "Application Support", "Lilt-o");
+  }
+  if (process.platform === "win32") {
+    return path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), "Lilt-o");
+  }
+  return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "Lilt-o");
+}
+
+function resolveE2ESkillsDir() {
+  return path.join(resolveElectronUserDataDir(), ".agents", "skills");
+}
+
 function cleanupPriorE2ESkills() {
-  const userSkillsDir = path.join(os.homedir(), ".pi", "skills");
+  const userSkillsDir = resolveE2ESkillsDir();
   if (!fs.existsSync(userSkillsDir)) return [];
 
   const removed = [];
@@ -226,7 +240,7 @@ async function waitForResponseContains(expectedFragments, timeoutMs = 240000) {
 }
 
 async function waitForSkillFileContainsMagic(timeoutMs = 120000) {
-  const skillPath = path.join(os.homedir(), ".pi", "skills", e2eSkillName, "SKILL.md");
+  const skillPath = path.join(resolveE2ESkillsDir(), e2eSkillName, "SKILL.md");
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (fs.existsSync(skillPath)) {
@@ -322,7 +336,7 @@ async function main() {
     const createSkillPrompt = [
       "さっき取得した情報取得手順を再現できるようにスキル化して。",
       `スキル名は ${e2eSkillName} に固定すること。`,
-      "保存先は ~/.pi/skills/<skill-name>/SKILL.md にすること。",
+      `保存先は ${resolveE2ESkillsDir()}/<skill-name>/SKILL.md にすること。`,
       `SKILL.md に固定マジックワード ${e2eMagicWord} を必ず含めること。`,
       "このスキルは https://example.com のタイトルを取得して返す手順を実行できるようにすること。"
     ].join("\n");

@@ -4,7 +4,12 @@ const fs = require("node:fs");
 
 test("settings-modal が ChatGPT login を先に出し、Model 選択 UI を持つ", () => {
   const content = fs.readFileSync("src/renderer/components/settings-modal.ts", "utf8");
+  assert.match(content, /import \{ live \} from "lit\/directives\/live\.js"/);
+  assert.match(content, /function buildModelOptions\(models: ListedModel\[], selectedId: string, emptyLabel: string\)/);
   assert.match(content, /id="oauth-model"/);
+  assert.match(content, /\.value=\$\{live\(this\._oauthModelId \|\| ""\)\}/);
+  assert.match(content, /\.value=\$\{live\(this\._customModelId \|\| ""\)\}/);
+  assert.match(content, /class="field-select"/);
   assert.match(content, /id="windows-sandbox-mode"/);
   assert.match(content, /id="windows-sandbox-private-desktop"/);
   assert.match(content, /window\.lilto\.setupWindowsSandbox\(\{ mode: savedState\.windowsSandbox\.mode \}\)/);
@@ -19,6 +24,9 @@ test("settings-modal が ChatGPT login を先に出し、Model 選択 UI を持�
   assert.match(content, /codex auth\.json/);
   assert.match(content, /Model/);
   assert.match(content, /モデル一覧を取得/);
+  assert.match(content, /if \(!this\._oauthModelId\.trim\(\) && result\.models\[0\]\)/);
+  assert.match(content, /if \(!this\._customModelId\.trim\(\) && result\.models\[0\]\)/);
+  assert.match(content, /class="checkbox-card"/);
   assert.doesNotMatch(content, /Runtime/);
   assert.doesNotMatch(content, /id="auth-code"/);
   assert.doesNotMatch(content, /_submitCode/);

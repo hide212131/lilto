@@ -31,6 +31,15 @@ export type ProviderSettingsSaveResult =
   | { ok: false; error: { code: "INVALID_PROVIDER_SETTINGS"; message: string } };
 
 const DEFAULT_MODEL_ID = "gpt-5.3-codex";
+const PROVIDER_SETTINGS_PATH_ENV = "LILTO_PROVIDER_SETTINGS_PATH";
+
+function defaultProviderSettingsPath(): string {
+  const fromEnv = process.env[PROVIDER_SETTINGS_PATH_ENV];
+  if (typeof fromEnv === "string" && fromEnv.trim()) {
+    return path.resolve(fromEnv.trim());
+  }
+  return path.join(process.cwd(), ".lilto-provider-settings.json");
+}
 
 function hasProxyEnvironment(): boolean {
   const vars = [process.env.HTTP_PROXY, process.env.http_proxy, process.env.HTTPS_PROXY, process.env.https_proxy];
@@ -205,7 +214,7 @@ export class ProviderSettingsService {
 
   constructor({
     logger = createLogger("providers"),
-    storagePath = path.join(process.cwd(), ".lilto-provider-settings.json")
+    storagePath = defaultProviderSettingsPath()
   }: {
     logger?: Logger;
     storagePath?: string;

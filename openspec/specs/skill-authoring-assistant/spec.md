@@ -19,9 +19,8 @@ TBD - created by archiving change add-bundled-skill-creator-skill. Update Purpos
 
 #### Scenario: 生成スキルの保存先
 - **WHEN** `skill-creator` が新規スキルを生成する
-- **THEN** 生成物は `~/.pi/skills/<skill-name>/SKILL.md` を含む構造で保存される
+- **THEN** 生成物は `<app userData>/.agents/skills/<skill-name>/SKILL.md` を含む構造で保存される
 
 #### Scenario: 次回起動での再発見
 - **WHEN** アプリを再起動してスキル一覧を生成する
-- **THEN** 前回作成した `~/.pi/skills` 配下のスキルが一覧に含まれる
-
+- **THEN** 前回作成した `<app userData>/.agents/skills` 配下のスキルが一覧に含まれる

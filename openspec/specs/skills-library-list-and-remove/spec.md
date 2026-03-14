@@ -12,7 +12,7 @@ TBD - synced from change extend-skill-management-list-and-delete-via-skills-libr
 - **THEN** `skills` ライブラリ管理状態と矛盾しない Skill 一覧が返される
 
 #### Scenario: symlink 形式の user skill が存在する
-- **WHEN** `~/.pi/agent/skills` 配下に symlink 形式で Skill が配置されている
+- **WHEN** `<app userData>/.agents/skills` 配下に symlink 形式で Skill が配置されている
 - **THEN** 一覧に当該 Skill が `source=user` として含まれる
 
 ### Requirement: Skills ライブラリ準拠の削除

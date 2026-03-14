@@ -53,6 +53,43 @@ test("ProviderSettingsService は保存した設定を再読込できる", () =>
   assert.equal(state.windowsSandbox.privateDesktop, false);
 });
 
+test("ProviderSettingsService は環境変数の保存先を優先する", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "lilto-provider-"));
+  const storagePath = path.join(tempDir, "providers-from-env.json");
+  const previousPath = process.env.LILTO_PROVIDER_SETTINGS_PATH;
+  process.env.LILTO_PROVIDER_SETTINGS_PATH = storagePath;
+
+  try {
+    const service = new ProviderSettingsService({
+      logger: { info() {}, error() {} }
+    });
+
+    const result = service.save({
+      activeProvider: "custom-openai-completions",
+      oauthProvider: "openai-codex",
+      oauthModelId: "gpt-5.3-codex",
+      customProvider: {
+        name: "env-path",
+        baseUrl: "https://example.com/v1",
+        apiKey: "secret",
+        modelId: "gpt-4o-mini"
+      },
+      networkProxy: {
+        useProxy: false
+      }
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(fs.existsSync(storagePath), true);
+  } finally {
+    if (previousPath === undefined) {
+      delete process.env.LILTO_PROVIDER_SETTINGS_PATH;
+    } else {
+      process.env.LILTO_PROVIDER_SETTINGS_PATH = previousPath;
+    }
+  }
+});
+
 test("ProviderSettingsService は不正 payload を拒否する", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "lilto-provider-"));
   const storagePath = path.join(tempDir, "providers.json");

@@ -382,6 +382,7 @@ export async function createCodexThreadFromSdk(options: {
   threadId?: string;
   additionalDirectories?: string[];
   codexHomeDir?: string;
+  homeDir?: string;
   schedulerBridge?: SchedulerBridgeServer;
   schedulerSessionId?: string;
   sandboxMode?: "danger-full-access" | "workspace-write";
@@ -399,6 +400,10 @@ export async function createCodexThreadFromSdk(options: {
     };
   };
   const env = { ...process.env } as Record<string, string>;
+  if (options.homeDir) {
+    env.HOME = options.homeDir;
+    env.USERPROFILE = options.homeDir;
+  }
   if (options.codexHomeDir) {
     env.CODEX_HOME = options.codexHomeDir;
   }
@@ -442,6 +447,7 @@ export class AgentRuntime {
     threadId?: string;
     additionalDirectories?: string[];
     codexHomeDir?: string;
+    homeDir?: string;
     schedulerBridge?: SchedulerBridgeServer;
     schedulerSessionId?: string;
     sandboxMode?: "danger-full-access" | "workspace-write";
@@ -451,6 +457,7 @@ export class AgentRuntime {
   private readonly logger: Logger;
   private readonly workspaceDir?: string;
   private readonly codexHomeDir?: string;
+  private readonly homeDir?: string;
   private readonly schedulerBridge?: SchedulerBridgeServer;
   private readonly platform: NodeJS.Platform;
   private readonly sessionCache = new Map<string, CodexSession>();
@@ -462,6 +469,7 @@ export class AgentRuntime {
     authService,
     workspaceDir,
     codexHomeDir,
+    homeDir,
     schedulerBridge,
     platform = process.platform,
     logger = createLogger("agent")
@@ -473,6 +481,7 @@ export class AgentRuntime {
       threadId?: string;
       additionalDirectories?: string[];
       codexHomeDir?: string;
+      homeDir?: string;
       schedulerBridge?: SchedulerBridgeServer;
       schedulerSessionId?: string;
       sandboxMode?: "danger-full-access" | "workspace-write";
@@ -481,6 +490,7 @@ export class AgentRuntime {
     authService: Pick<ClaudeAuthService, "getState" | "getApiKey">;
     workspaceDir?: string;
     codexHomeDir?: string;
+    homeDir?: string;
     availableSkills?: Array<{ name: string }>;
     schedulerBridge?: SchedulerBridgeServer;
     platform?: NodeJS.Platform;
@@ -491,6 +501,7 @@ export class AgentRuntime {
     this.logger = logger;
     this.workspaceDir = workspaceDir;
     this.codexHomeDir = codexHomeDir;
+    this.homeDir = homeDir;
     this.schedulerBridge = schedulerBridge;
     this.platform = platform;
   }
@@ -551,6 +562,7 @@ export class AgentRuntime {
       threadId,
       additionalDirectories: this.getAdditionalDirectories(cwd),
       codexHomeDir: this.codexHomeDir,
+      homeDir: this.homeDir,
       schedulerBridge: this.schedulerBridge,
       schedulerSessionId: threadId ?? options.conversationId ?? "default",
       sandboxMode: options.threadOptions.sandboxMode,

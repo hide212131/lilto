@@ -1,8 +1,8 @@
 # Skills / Workspace Policy
 
 - Skill directories:
-  - Bundled skills (app managed): `<app data>/skills/bundled`
-  - User-created skills (persistent): `~/.pi/agent/skills`
+  - Bundled skills (app managed): `<app userData>/codex/skills/.system`
+  - User-created skills (persistent): `<app userData>/.agents/skills/<skill-name>`
 - Bundled skills:
   - `agent-browser` (`SKILL.md` + references/templates)
   - `skill-creator` (`SKILL.md` + references/templates, build 時に GitHub から最新取得)
@@ -16,12 +16,12 @@
 - Remove policy:
   - user skill の削除は `skills` ライブラリ管理境界に従って実施する
   - bundled skill は削除対象外（アプリ固有資産）
-- Pi settings update targets:
-  - `~/.pi/settings.json` (legacy compatibility)
-  - `~/.pi/agent/settings.json` (current Pi SDK path)
-  - `skills` には `~/.pi/agent/skills` と `<app data>/skills/bundled` を登録する
-- Workspace root: `~/.pi/workspaces`
-- Project workspace: `~/.pi/workspaces/<project>`
+- Runtime integration:
+  - `CODEX_HOME` はアプリ専用の `<app userData>/codex` を使う
+  - `HOME` もアプリ専用 `userData` へスコープし、global skill は `<app userData>/.agents/skills` に閉じ込める
+  - skill 一覧は `<app userData>/.agents/skills` と `<app userData>/codex/skills/.system` から構成する
+- Workspace root: project root (`process.cwd()`)
+- Project workspace: project root (`process.cwd()`)
 
 ## Execution Model
 
@@ -52,4 +52,4 @@
 - Default TTL: 168 hours (7 days).
 - Workspaces older than TTL are removed recursively.
 - Current project workspace is never removed.
-- TTL override: `LILTO_PI_WORKSPACE_TTL_HOURS` environment variable.
+- TTL override: `LILTO_WORKSPACE_TTL_HOURS` environment variable.

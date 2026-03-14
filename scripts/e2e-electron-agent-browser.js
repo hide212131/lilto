@@ -9,6 +9,7 @@ const rootDir = path.resolve(__dirname, "..");
 const sessionName = "lilto-electron-e2e";
 let cdpPort = "9222";
 const screenshotPath = path.join(rootDir, "test", "artifacts", "electron-e2e.png");
+const mockProviderSettingsPath = path.join(rootDir, "test", "artifacts", "e2e-mock-provider-settings.json");
 
 function getFreePort() {
   return new Promise((resolve, reject) => {
@@ -372,6 +373,13 @@ async function waitForMessagesContaining(expectedTexts, timeoutMs = 15000) {
 
 async function main() {
   fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
+  try {
+    fs.unlinkSync(mockProviderSettingsPath);
+  } catch (error) {
+    if (error && error.code !== "ENOENT") {
+      throw error;
+    }
+  }
   cdpPort = await getFreePort();
   const proxyFixture = await createProxyFixture();
 
@@ -386,6 +394,7 @@ async function main() {
     env: {
       ...process.env,
       LILTO_E2E_MOCK: "1",
+      LILTO_PROVIDER_SETTINGS_PATH: mockProviderSettingsPath,
       LILTO_PROXY_TEST_URL: proxyFixture.targetUrl,
       HTTP_PROXY: proxyFixture.proxyUrl,
       HTTPS_PROXY: proxyFixture.proxyUrl,
