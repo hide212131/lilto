@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface, type Interface } from "node:readline";
-import { resolveCliCommand } from "./command-compat";
+import { resolveCliInvocation } from "./command-compat";
 import { createLogger, type Logger } from "./logger";
 
 type JsonRpcMessage = {
@@ -52,10 +52,11 @@ export class CodexAppServerClient {
     }
 
     const spawnImpl = this.options.spawnImpl ?? spawn;
-    const command = resolveCliCommand(this.options.codexCommand ?? "codex");
-    const child = spawnImpl(command, ["app-server", "--listen", "stdio://"], {
+    const invocation = resolveCliInvocation(this.options.codexCommand ?? "codex", ["app-server", "--listen", "stdio://"]);
+    const child = spawnImpl(invocation.command, invocation.args, {
       env: {
         ...process.env,
+        ...(invocation.env ?? {}),
         CODEX_HOME: this.options.codexHomeDir
       },
       stdio: ["pipe", "pipe", "pipe"]

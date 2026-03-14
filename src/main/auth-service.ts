@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { createLogger, type Logger } from "./logger";
+import { resolveCliInvocation } from "./command-compat";
 import { shell } from "electron";
 import { type OAuthProviderId } from "../shared/provider-settings";
 
@@ -281,9 +282,11 @@ export class ClaudeAuthService {
     this.loginPromise = (async () => {
       this.setState("auth_in_progress", "Codex ChatGPT 認証を開始しています...", null, providerId);
       try {
-        this.loginChild = spawn(this.codexCommand, ["login"], {
+        const invocation = resolveCliInvocation(this.codexCommand, ["login"]);
+        this.loginChild = spawn(invocation.command, invocation.args, {
           env: {
             ...process.env,
+            ...(invocation.env ?? {}),
             CODEX_HOME: this.codexHome
           },
           stdio: "ignore"

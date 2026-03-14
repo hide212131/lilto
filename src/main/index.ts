@@ -13,6 +13,7 @@ import { NotificationService } from "./notifications";
 import { ProviderSettingsService } from "./provider-settings";
 import { ModelCatalogService } from "./model-catalog";
 import { SchedulerService } from "./scheduler";
+import { SchedulerUnavailableError } from "./scheduler";
 import { SchedulerBridgeServer } from "./scheduler-bridge";
 import { setupSkillRuntime } from "./skill-runtime";
 import { WindowsSandboxSetupService } from "./windows-sandbox-setup";
@@ -166,6 +167,10 @@ if (hasSingleInstanceLock) {
     });
     void scheduler.start().catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
+      if (error instanceof SchedulerUnavailableError) {
+        logger.info("scheduler_unavailable", { message });
+        return;
+      }
       logger.error("scheduler_start_failed", { message });
     });
 

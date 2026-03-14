@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 
 const WINDOWS_CLI_SHIMS = {
@@ -6,6 +7,15 @@ const WINDOWS_CLI_SHIMS = {
   npx: "npx.cmd",
   openspec: "openspec.cmd"
 } as const;
+
+type CliInvocationSource = "explicit" | "local-bin" | "package-script" | "path";
+
+export type CliInvocation = {
+  command: string;
+  args: string[];
+  env?: Record<string, string>;
+  source: CliInvocationSource;
+};
 
 function hasExecutableSuffix(command: string): boolean {
   const lowered = command.toLowerCase();
@@ -42,6 +52,24 @@ export function isWindowsPlatform(platform = process.platform): boolean {
   return platform === "win32";
 }
 
+function resolveAppRootDir(baseDir?: string): string {
+  return baseDir ? path.resolve(baseDir) : path.resolve(__dirname, "..", "..");
+}
+
+function resolveBundledCodexBinPath(
+  platform: NodeJS.Platform,
+  baseDir: string,
+  pathExists: (filePath: string) => boolean
+): string | null {
+  const candidate = path.join(baseDir, "node_modules", ".bin", isWindowsPlatform(platform) ? "codex.cmd" : "codex");
+  return pathExists(candidate) ? candidate : null;
+}
+
+function resolveBundledCodexScriptPath(baseDir: string, pathExists: (filePath: string) => boolean): string | null {
+  const candidate = path.join(baseDir, "node_modules", "@openai", "codex", "bin", "codex.js");
+  return pathExists(candidate) ? candidate : null;
+}
+
 export function resolveCliCommand(command: string, platform = process.platform): string {
   const normalized = normalizeCommandToken(command);
   if (!normalized) return normalized;
@@ -56,6 +84,71 @@ export function resolveCliCommand(command: string, platform = process.platform):
 
   const lowered = normalized.toLowerCase();
   return WINDOWS_CLI_SHIMS[lowered as keyof typeof WINDOWS_CLI_SHIMS] ?? normalized;
+}
+
+export function resolveCliInvocation(
+  command: string,
+  args: readonly string[] = [],
+  options: {
+    platform?: NodeJS.Platform;
+    baseDir?: string;
+    pathExists?: (filePath: string) => boolean;
+  } = {}
+): CliInvocation {
+  const normalized = normalizeCommandToken(command);
+  const platform = options.platform ?? process.platform;
+  const normalizedArgs = normalizeCommandArgs(args, platform);
+
+  if (!normalized) {
+    return {
+      command: normalized,
+      args: normalizedArgs,
+      source: "explicit"
+    };
+  }
+
+  if (normalized.includes("/") || normalized.includes("\\") || hasExecutableSuffix(normalized)) {
+    return {
+      command: normalized,
+      args: normalizedArgs,
+      source: "explicit"
+    };
+  }
+
+  if (normalized.toLowerCase() === "codex") {
+    const baseDir = resolveAppRootDir(options.baseDir);
+    const pathExists = options.pathExists ?? fs.existsSync;
+    const bundledScript = resolveBundledCodexScriptPath(baseDir, pathExists);
+    if (bundledScript) {
+      return {
+        command: process.execPath,
+        args: [bundledScript, ...normalizedArgs],
+        env: {
+          ELECTRON_RUN_AS_NODE: "1"
+        },
+        source: "package-script"
+      };
+    }
+
+    const bundledBin = resolveBundledCodexBinPath(platform, baseDir, pathExists);
+    if (bundledBin) {
+      return {
+        command: bundledBin,
+        args: normalizedArgs,
+        source: "local-bin"
+      };
+    }
+
+    throw new Error(
+      `Bundled Codex CLI not found under ${path.join(baseDir, "node_modules")}. Run npm install to restore @openai/codex.`
+    );
+  }
+
+  return {
+    command: resolveCliCommand(normalized, platform),
+    args: normalizedArgs,
+    source: "path"
+  };
 }
 
 export function normalizeCommandArgs(args: readonly string[], platform = process.platform): string[] {
@@ -81,8 +174,15 @@ export function normalizeWorkingDirectory(cwd: string, platform = process.platfo
 }
 
 export function createCliCompatibilityMap(platform = process.platform): Record<"codex" | "npm" | "npx" | "openspec", string> {
+  let codex = resolveCliCommand("codex", platform);
+  try {
+    codex = resolveCliInvocation("codex", [], { platform }).command;
+  } catch {
+    // Keep startup logging non-fatal when dependencies have not been installed yet.
+  }
+
   return {
-    codex: resolveCliCommand("codex", platform),
+    codex,
     npm: resolveCliCommand("npm", platform),
     npx: resolveCliCommand("npx", platform),
     openspec: resolveCliCommand("openspec", platform)

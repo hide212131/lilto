@@ -36,6 +36,7 @@ test("WindowsSandboxSetupService は setupCompleted success を返す", async ()
   const service = new WindowsSandboxSetupService({
     codexHomeDir: "C:/tmp/codex-home",
     workspaceDir: "C:/tmp/workspace",
+    codexCommand: "codex.cmd",
     platform: "win32",
     spawnImpl: () => createFakeChild((request, child) => {
       if (request.method === "initialize") {
@@ -60,10 +61,41 @@ test("WindowsSandboxSetupService は setupCompleted success を返す", async ()
   assert.equal(result.mode, "unelevated");
 });
 
+test("WindowsSandboxSetupService は elevated success message を返す", async () => {
+  const service = new WindowsSandboxSetupService({
+    codexHomeDir: "C:/tmp/codex-home",
+    workspaceDir: "C:/tmp/workspace",
+    codexCommand: "codex.cmd",
+    platform: "win32",
+    spawnImpl: () => createFakeChild((request, child) => {
+      if (request.method === "initialize") {
+        child.stdout.write(`${JSON.stringify({ id: request.id, result: { protocolVersion: "2" } })}\n`);
+        return;
+      }
+      if (request.method === "windowsSandbox/setupStart") {
+        child.stdout.write(`${JSON.stringify({ id: request.id, result: { started: true } })}\n`);
+        process.nextTick(() => {
+          child.stdout.write(`${JSON.stringify({
+            method: "windowsSandbox/setupCompleted",
+            params: { mode: "elevated", success: true, error: null }
+          })}\n`);
+        });
+      }
+    }),
+    logger: { info() {}, error() {} }
+  });
+
+  const result = await service.runSetup("elevated");
+  assert.equal(result.ok, true);
+  assert.equal(result.mode, "elevated");
+  assert.match(result.message, /elevated/);
+});
+
 test("WindowsSandboxSetupService は canceled を専用エラーへ変換する", async () => {
   const service = new WindowsSandboxSetupService({
     codexHomeDir: "C:/tmp/codex-home",
     workspaceDir: "C:/tmp/workspace",
+    codexCommand: "codex.cmd",
     platform: "win32",
     spawnImpl: () => createFakeChild((request, child) => {
       if (request.method === "initialize") {

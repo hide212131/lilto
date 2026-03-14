@@ -69,6 +69,7 @@ Codex 実行時に Windows sandbox 由来のエラーが返った場合、Render
 - [モデル一覧取得と setup 実行で app-server 呼び出し実装が二重化する] → 先に共通クライアントを導入し、`model/list` と `windowsSandbox/setupStart` の両方で使う。
 - [設定変更直後に sandbox モードと既存 session cache がずれる] → provider settings 保存成功時に AgentRuntime の session cache を破棄し、新設定で再開させる。
 - [Windows sandbox backend の制約を UI が隠しきれない] → 設定画面に `workspace-write` 前提であることと read-only 非対応を明示する。
+- [Codex upstream が保証していない拒否ケースまで lilto の回帰条件に含めると、lilto 側が upstream の実装詳細を勝手に固定してしまう] → live test は Codex smoke tests と整合する拒否ケースに限定し、PowerShell absolute path 書き込みや ADS は security policy 文書で「未保証」と明示する。
 
 ## Migration Plan
 
