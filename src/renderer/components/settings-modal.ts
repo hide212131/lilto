@@ -1,7 +1,7 @@
 import { LitElement, html, css } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { AuthState, ActiveProvider, ProviderSettings, SkillInfo, SkillUpdateInfo } from "../types.js";
-import type { OAuthProviderId } from "../../shared/provider-settings.js";
+import type { OAuthProviderId, WindowsSandboxMode } from "../../shared/provider-settings.js";
 
 type ListedModel = {
   id: string;
@@ -24,6 +24,10 @@ export class LiltSettingsModal extends LitElement {
     },
     networkProxy: {
       useProxy: false
+    },
+    windowsSandbox: {
+      mode: "off",
+      privateDesktop: true
     },
     chatSettings: {
       enterToSend: false
@@ -48,6 +52,10 @@ export class LiltSettingsModal extends LitElement {
   @state() private _oauthModelsStatus = "";
   @state() private _customModelsStatus = "";
   @state() private _oauthSaveStatus = "";
+  @state() private _windowsSandboxMode: WindowsSandboxMode = "off";
+  @state() private _windowsSandboxPrivateDesktop = true;
+  @state() private _windowsSandboxStatus = "Windows sandbox は無効です。";
+  @state() private _windowsSandboxBusy = false;
   @state() private _activeSection: "providers" | "chat" = "providers";
   @state() private _enterToSend = false;
   @state() private _globalShortcut = "";
@@ -71,6 +79,8 @@ export class LiltSettingsModal extends LitElement {
   @state() private _skillUpdatesChecked = false;
 
   private readonly _isMac = window.lilto.getPlatform() === "darwin";
+  private readonly _isWindows = window.lilto.getPlatform() === "win32";
+  private _preserveWindowsSandboxStatusOnce = false;
 
   private _boundKeydown = (e: KeyboardEvent) => {
     if (e.key === "Escape" && this.open) this._close();
@@ -99,8 +109,15 @@ export class LiltSettingsModal extends LitElement {
       this._customModelId = cp.modelId;
       this._useProxy = np.useProxy;
       this._oauthProvider = this.providerSettings.oauthProvider;
+      this._windowsSandboxMode = this.providerSettings.windowsSandbox?.mode ?? "off";
+      this._windowsSandboxPrivateDesktop = this.providerSettings.windowsSandbox?.privateDesktop ?? true;
       this._enterToSend = cs?.enterToSend ?? false;
       this._globalShortcut = cs?.globalShortcut ?? "";
+      if (this._preserveWindowsSandboxStatusOnce) {
+        this._preserveWindowsSandboxStatusOnce = false;
+      } else {
+        this._windowsSandboxStatus = this._describeWindowsSandboxStatus();
+      }
     }
     if (changedProps.has("open") && this.open) {
       void this._loadOauthModels();
@@ -682,6 +699,48 @@ export class LiltSettingsModal extends LitElement {
           <span class="status">${this._saveStatus}</span>
         </div>
       </section>
+
+      ${this._isWindows ? html`
+        <section class="provider-section">
+          <h4>Windows Sandbox</h4>
+          <p>Windows では <code>workspace-write</code> 前提で Codex sandbox backend を使います。read-only は利用しません。</p>
+          <div class="input-grid">
+            <label>
+              Mode
+              <select
+                id="windows-sandbox-mode"
+                .disabled=${this._windowsSandboxBusy}
+                .value=${this._windowsSandboxMode}
+                @change=${(e: Event) => {
+                  this._windowsSandboxMode = (e.target as HTMLSelectElement).value as WindowsSandboxMode;
+                }}
+              >
+                <option value="off">off</option>
+                <option value="unelevated">unelevated</option>
+                <option value="elevated">elevated</option>
+              </select>
+            </label>
+            <label>
+              <input
+                id="windows-sandbox-private-desktop"
+                type="checkbox"
+                .checked=${this._windowsSandboxPrivateDesktop}
+                .disabled=${this._windowsSandboxBusy || this._windowsSandboxMode === "off"}
+                @change=${(e: InputEvent) => {
+                  this._windowsSandboxPrivateDesktop = (e.target as HTMLInputElement).checked;
+                }}
+              />
+              private desktop を使う
+            </label>
+          </div>
+          <div class="status">${this._windowsSandboxStatus}</div>
+          <div class="provider-actions">
+            <button .disabled=${this._windowsSandboxBusy} @click=${this._saveWindowsSandboxSettings}>
+              ${this._windowsSandboxBusy ? "セットアップ中..." : "Windows sandbox 設定を保存"}
+            </button>
+          </div>
+        </section>
+      ` : ""}
     `;
   }
 
@@ -1006,6 +1065,105 @@ export class LiltSettingsModal extends LitElement {
     }
   }
 
+  private _describeWindowsSandboxStatus(): string {
+    if (!this._isWindows) {
+      return "Windows sandbox は Windows でのみ利用できます。";
+    }
+    if (this._windowsSandboxMode === "off") {
+      return "Windows sandbox は無効です。";
+    }
+    return "設定済みです。保存するとセットアップを実行し、完了後に利用可能か判定します。";
+  }
+
+  private _buildProviderSettingsDraft(): ProviderSettings {
+    return {
+      ...this.providerSettings,
+      oauthProvider: this._oauthProvider,
+      oauthModelId: this._oauthModelId.trim() || "gpt-5.3-codex",
+      customProvider: {
+        name: this._customName.trim(),
+        baseUrl: this._customBaseUrl.trim(),
+        apiKey: this._customApiKey,
+        modelId: this._customModelId.trim() || "gpt-5.3-codex"
+      },
+      networkProxy: {
+        useProxy: this._useProxy
+      },
+      windowsSandbox: {
+        mode: this._windowsSandboxMode,
+        privateDesktop: this._windowsSandboxPrivateDesktop
+      }
+    };
+  }
+
+  private _emitProviderSettingsChanged(state: ProviderSettings, options: { preserveWindowsSandboxStatus?: boolean } = {}) {
+    if (options.preserveWindowsSandboxStatus) {
+      this._preserveWindowsSandboxStatusOnce = true;
+    }
+    this.dispatchEvent(
+      new CustomEvent("provider-settings-changed", {
+        detail: state,
+        bubbles: true,
+        composed: true
+      })
+    );
+  }
+
+  private async _finalizeWindowsSandboxSave(
+    savedState: ProviderSettings,
+    options: {
+      forceSetup?: boolean;
+      onStatus: (message: string) => void;
+    }
+  ): Promise<ProviderSettings> {
+    if (!this._isWindows || savedState.windowsSandbox.mode === "off") {
+      this._windowsSandboxStatus = savedState.windowsSandbox.mode === "off"
+        ? "Windows sandbox は無効です。"
+        : this._describeWindowsSandboxStatus();
+      return savedState;
+    }
+
+    const previousMode = this.providerSettings.windowsSandbox?.mode ?? "off";
+    const shouldRunSetup = options.forceSetup || previousMode !== savedState.windowsSandbox.mode;
+    if (!shouldRunSetup) {
+      this._windowsSandboxStatus = "設定は保存済みです。必要ならこのセクションの保存でセットアップを再実行できます。";
+      return savedState;
+    }
+
+    this._windowsSandboxBusy = true;
+    this._windowsSandboxStatus = `${savedState.windowsSandbox.mode} モードのセットアップを実行しています...`;
+
+    try {
+      const result = await window.lilto.setupWindowsSandbox({ mode: savedState.windowsSandbox.mode });
+      if (result.ok) {
+        this._windowsSandboxStatus = result.message;
+        options.onStatus("設定を保存し、Windows sandbox のセットアップを完了しました。");
+        return savedState;
+      }
+
+      const fallbackResult = await window.lilto.saveProviderSettings({
+        ...savedState,
+        windowsSandbox: {
+          ...savedState.windowsSandbox,
+          mode: "off"
+        }
+      });
+      if (!fallbackResult.ok) {
+        const message = `${result.error.code}: ${result.error.message}`;
+        this._windowsSandboxStatus = `${message} / fallback 保存にも失敗しました。`;
+        options.onStatus(this._windowsSandboxStatus);
+        return savedState;
+      }
+
+      this._windowsSandboxMode = "off";
+      this._windowsSandboxStatus = `${result.error.message} 失敗したため mode を off に戻しました。`;
+      options.onStatus(this._windowsSandboxStatus);
+      return fallbackResult.state;
+    } finally {
+      this._windowsSandboxBusy = false;
+    }
+  }
+
 
   private async _changeProvider(provider: ActiveProvider) {
     const next: ProviderSettings = {
@@ -1036,30 +1194,19 @@ export class LiltSettingsModal extends LitElement {
       this._saveStatus = "API key は必須です。";
       return;
     }
-    const next: ProviderSettings = {
-      ...this.providerSettings,
-      oauthProvider: this._oauthProvider,
-      oauthModelId: this._oauthModelId.trim() || "gpt-5.3-codex",
-      customProvider: {
-        name: this._customName.trim(),
-        baseUrl: this._customBaseUrl.trim(),
-        apiKey: this._customApiKey,
-        modelId: this._customModelId.trim() || "gpt-5.3-codex"
-      },
-      networkProxy: {
-        useProxy: this._useProxy
-      }
-    };
+    this._saveStatus = "";
+    const next = this._buildProviderSettingsDraft();
     const result = await window.lilto.saveProviderSettings(next);
     if (result.ok) {
-      this._saveStatus = "設定を保存しました。";
-      this.dispatchEvent(
-        new CustomEvent("provider-settings-changed", {
-          detail: result.state,
-          bubbles: true,
-          composed: true
-        })
-      );
+      const finalState = await this._finalizeWindowsSandboxSave(result.state, {
+        onStatus: (message) => {
+          this._saveStatus = message;
+        }
+      });
+      if (!this._saveStatus) {
+        this._saveStatus = "設定を保存しました。";
+      }
+      this._emitProviderSettingsChanged(finalState, { preserveWindowsSandboxStatus: true });
     } else {
       this._saveStatus = `${result.error.code}: ${result.error.message}`;
     }
@@ -1099,23 +1246,37 @@ export class LiltSettingsModal extends LitElement {
   }
 
   private async _saveOauthSettings() {
-    const result = await window.lilto.saveProviderSettings({
-      ...this.providerSettings,
-      oauthProvider: this._oauthProvider,
-      oauthModelId: this._oauthModelId.trim() || "gpt-5.3-codex"
-    });
+    this._oauthSaveStatus = "";
+    const result = await window.lilto.saveProviderSettings(this._buildProviderSettingsDraft());
     if (!result.ok) {
       this._oauthSaveStatus = `${result.error.code}: ${result.error.message}`;
       return;
     }
-    this._oauthSaveStatus = "Model 設定を保存しました。";
-    this.dispatchEvent(
-      new CustomEvent("provider-settings-changed", {
-        detail: result.state,
-        bubbles: true,
-        composed: true
-      })
-    );
+    const finalState = await this._finalizeWindowsSandboxSave(result.state, {
+      onStatus: (message) => {
+        this._oauthSaveStatus = message;
+      }
+    });
+    if (!this._oauthSaveStatus) {
+      this._oauthSaveStatus = "Model 設定を保存しました。";
+    }
+    this._emitProviderSettingsChanged(finalState, { preserveWindowsSandboxStatus: true });
+  }
+
+  private async _saveWindowsSandboxSettings() {
+    this._windowsSandboxStatus = this._describeWindowsSandboxStatus();
+    const result = await window.lilto.saveProviderSettings(this._buildProviderSettingsDraft());
+    if (!result.ok) {
+      this._windowsSandboxStatus = `${result.error.code}: ${result.error.message}`;
+      return;
+    }
+    const finalState = await this._finalizeWindowsSandboxSave(result.state, {
+      forceSetup: result.state.windowsSandbox.mode !== "off",
+      onStatus: (message) => {
+        this._windowsSandboxStatus = message;
+      }
+    });
+    this._emitProviderSettingsChanged(finalState, { preserveWindowsSandboxStatus: true });
   }
 
   private async _loadOauthModels() {

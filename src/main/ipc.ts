@@ -7,6 +7,7 @@ import { createLogger } from "./logger";
 import type { NotificationService } from "./notifications";
 import type { ProviderSettingsService } from "./provider-settings";
 import type { ModelCatalogService } from "./model-catalog";
+import type { WindowsSandboxSetupService } from "./windows-sandbox-setup";
 import { checkSkillUpdates, installSkillFromSource, installSkillFromUrl, listSkillsWithSource, uninstallUserSkill } from "./skill-runtime";
 import type { AgentLoopEvent } from "../shared/agent-loop";
 
@@ -31,6 +32,7 @@ export function registerAgentIpcHandlers({
   userSkillsDir,
   notificationService,
   modelCatalogService,
+  windowsSandboxSetupService,
   onSettingsSaved
 }: {
   agentRuntime: AgentRuntime;
@@ -40,6 +42,7 @@ export function registerAgentIpcHandlers({
   userSkillsDir: string;
   notificationService: NotificationService;
   modelCatalogService: ModelCatalogService;
+  windowsSandboxSetupService: WindowsSandboxSetupService;
   onSettingsSaved?: (settings: import("./provider-settings").ProviderSettings) => void;
 }): void {
   const logger = createLogger("ipc");
@@ -174,11 +177,36 @@ export function registerAgentIpcHandlers({
 
   ipcMain.handle("providers:saveSettings", (_event, payload: unknown) => {
     const result = providerSettingsService.save(payload);
-    if (result.ok && onSettingsSaved) {
+    if (result.ok) {
       authService.setApiKey(result.state.customProvider.apiKey || null);
-      onSettingsSaved(result.state);
+      agentRuntime.refreshProviderSettings();
+      if (onSettingsSaved) {
+        onSettingsSaved(result.state);
+      }
     }
     return result;
+  });
+
+  ipcMain.handle("windowsSandbox:setup", async (_event, payload: unknown) => {
+    const mode =
+      payload &&
+      typeof payload === "object" &&
+      (((payload as { mode?: unknown }).mode === "elevated") || ((payload as { mode?: unknown }).mode === "unelevated"))
+        ? (payload as { mode: "elevated" | "unelevated" }).mode
+        : null;
+
+    if (!mode) {
+      return {
+        ok: false as const,
+        error: {
+          code: "INVALID_REQUEST",
+          message: "mode は elevated または unelevated を指定してください。",
+          retryable: false
+        }
+      };
+    }
+
+    return await windowsSandboxSetupService.runSetup(mode);
   });
 
   ipcMain.handle("app:openExternal", async (_event, payload: unknown) => {

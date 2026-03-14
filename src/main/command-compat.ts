@@ -1,6 +1,7 @@
 import path from "node:path";
 
 const WINDOWS_CLI_SHIMS = {
+  codex: "codex.cmd",
   npm: "npm.cmd",
   npx: "npx.cmd",
   openspec: "openspec.cmd"
@@ -79,8 +80,9 @@ export function normalizeWorkingDirectory(cwd: string, platform = process.platfo
   return path.win32.normalize(resolved);
 }
 
-export function createCliCompatibilityMap(platform = process.platform): Record<"npm" | "npx" | "openspec", string> {
+export function createCliCompatibilityMap(platform = process.platform): Record<"codex" | "npm" | "npx" | "openspec", string> {
   return {
+    codex: resolveCliCommand("codex", platform),
     npm: resolveCliCommand("npm", platform),
     npx: resolveCliCommand("npx", platform),
     openspec: resolveCliCommand("openspec", platform)

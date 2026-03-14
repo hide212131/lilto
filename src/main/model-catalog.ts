@@ -1,6 +1,5 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { createInterface } from "node:readline";
 import { createLogger, type Logger } from "./logger";
+import { CodexAppServerClient } from "./codex-app-server-client";
 import type { CustomProviderSettings, NetworkProxySettings, OAuthProviderId } from "../shared/provider-settings";
 
 export type ListedModel = {
@@ -99,66 +98,6 @@ function toListedModels(models: Array<{ id: string; displayName?: string }>): Li
     .sort((a, b) => a.displayName.localeCompare(b.displayName));
 }
 
-async function waitForJsonRpcResponse(
-  child: ChildProcessWithoutNullStreams,
-  requestId: number,
-  timeoutMs: number
-): Promise<any> {
-  return await new Promise((resolve, reject) => {
-    const rl = createInterface({ input: child.stdout });
-    const stderrLines: string[] = [];
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(new Error(`Timed out waiting for JSON-RPC response ${requestId}. stderr=${stderrLines.slice(-10).join("\n")}`));
-    }, timeoutMs);
-
-    const onStderr = (chunk: Buffer | string) => {
-      stderrLines.push(String(chunk).trim());
-      if (stderrLines.length > 20) {
-        stderrLines.shift();
-      }
-    };
-
-    const cleanup = () => {
-      clearTimeout(timeout);
-      rl.close();
-      child.stderr.off("data", onStderr);
-    };
-
-    child.stderr.on("data", onStderr);
-    rl.on("line", (line) => {
-      if (!line.trim()) return;
-      try {
-        const message = JSON.parse(line);
-        if (message.id === requestId) {
-          cleanup();
-          if (message.error) {
-            reject(new Error(message.error.message || JSON.stringify(message.error)));
-            return;
-          }
-          resolve(message.result);
-        }
-      } catch {
-        // ignore non-json lines from stdout
-      }
-    });
-    child.once("exit", (code) => {
-      cleanup();
-      reject(new Error(`codex app-server exited before response ${requestId} (code=${code ?? "unknown"})`));
-    });
-  });
-}
-
-async function requestAppServer(
-  child: ChildProcessWithoutNullStreams,
-  requestId: number,
-  method: string,
-  params: Record<string, unknown>
-): Promise<any> {
-  child.stdin.write(`${JSON.stringify({ id: requestId, method, params })}\n`);
-  return await waitForJsonRpcResponse(child, requestId, 15000);
-}
-
 export class ModelCatalogService {
   constructor(
     private readonly options: {
@@ -166,7 +105,7 @@ export class ModelCatalogService {
       codexCommand?: string;
       logger?: Logger;
       fetchImpl?: typeof fetch;
-      spawnImpl?: typeof spawn;
+      spawnImpl?: typeof import("node:child_process").spawn;
     }
   ) {}
 
@@ -176,26 +115,17 @@ export class ModelCatalogService {
 
   async listOauthModels(_provider: OAuthProviderId, networkProxy: NetworkProxySettings): Promise<ModelCatalogResult> {
     const restoreProxyEnv = withScopedProxyEnvironment(networkProxy);
-    const child = (this.options.spawnImpl ?? spawn)(this.options.codexCommand ?? "codex", ["app-server", "--listen", "stdio://"], {
-      env: {
-        ...process.env,
-        CODEX_HOME: this.options.codexHomeDir
-      },
-      stdio: ["pipe", "pipe", "pipe"]
-    }) as ChildProcessWithoutNullStreams;
+    const client = new CodexAppServerClient({
+      codexHomeDir: this.options.codexHomeDir,
+      codexCommand: this.options.codexCommand,
+      logger: this.logger,
+      spawnImpl: this.options.spawnImpl
+    });
 
     try {
-      await requestAppServer(child, 1, "initialize", {
-        clientInfo: {
-          name: "lilto",
-          title: "Lilt-o",
-          version: "0.1.0"
-        },
-        capabilities: {
-          experimentalApi: true
-        }
+      const response = await client.request<{ data?: Array<{ id: string; displayName?: string }> }>("model/list", {
+        includeHidden: false
       });
-      const response = await requestAppServer(child, 2, "model/list", { includeHidden: false });
       const data = Array.isArray(response?.data) ? response.data : [];
       return { ok: true, models: toListedModels(data) };
     } catch (error) {
@@ -210,7 +140,7 @@ export class ModelCatalogService {
       };
     } finally {
       restoreProxyEnv();
-      child.kill();
+      client.close();
     }
   }
 

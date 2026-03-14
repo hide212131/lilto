@@ -5,6 +5,10 @@ const fs = require("node:fs");
 test("settings-modal が ChatGPT login を先に出し、Model 選択 UI を持つ", () => {
   const content = fs.readFileSync("src/renderer/components/settings-modal.ts", "utf8");
   assert.match(content, /id="oauth-model"/);
+  assert.match(content, /id="windows-sandbox-mode"/);
+  assert.match(content, /id="windows-sandbox-private-desktop"/);
+  assert.match(content, /window\.lilto\.setupWindowsSandbox\(\{ mode: savedState\.windowsSandbox\.mode \}\)/);
+  assert.match(content, /mode: "off"/);
   assert.match(content, /window\.lilto\.listModels\(\{/);
   assert.match(content, /oauthModelId:\s*this\._oauthModelId\.trim\(\) \|\| "gpt-5\.3-codex"/);
   assert.match(content, /oauthProvider:\s*this\._oauthProvider/);

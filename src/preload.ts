@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld("lilto", {
   listModels: async (payload: unknown) => ipcRenderer.invoke("models:list", payload),
   getProviderSettings: async () => ipcRenderer.invoke("providers:getSettings"),
   saveProviderSettings: async (settings: unknown) => ipcRenderer.invoke("providers:saveSettings", settings),
+  setupWindowsSandbox: async (payload: unknown) => ipcRenderer.invoke("windowsSandbox:setup", payload),
   listSkills: async () => ipcRenderer.invoke("skills:list"),
   installSkill: async (url: string) => ipcRenderer.invoke("skills:install", { url }),
   installSkillFromSource: async (source: string) => ipcRenderer.invoke("skills:install", { source }),
