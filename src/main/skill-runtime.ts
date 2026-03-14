@@ -14,6 +14,7 @@ export type SkillMetadata = {
 };
 
 export type SkillRuntimeSetup = {
+  homeDir: string;
   codexHomeDir: string;
   appSkillsDir: string;
   bundledSkillsDir: string;
@@ -27,8 +28,11 @@ export type SkillRuntimeSetup = {
 const BUNDLED_SKILL_NAMES = ["agent-browser", "skill-creator"] as const;
 const DEFAULT_CODEX_HOME_DIR = path.join(os.homedir(), ".codex");
 const DEFAULT_CODEX_USER_SKILLS_DIR = path.join(DEFAULT_CODEX_HOME_DIR, "skills");
+const SKILLS_CLI_AGENT = "codex";
 const ANSI_ESCAPE_REGEX = /\x1B\[[0-9;]*m/g;
 const SKILL_INSTALL_TIMEOUT_MS = 60_000;
+const MANAGED_SKILLS_CONFIG_START = "# lilto-managed-skills-config:start";
+const MANAGED_SKILLS_CONFIG_END = "# lilto-managed-skills-config:end";
 const BUNDLED_SKILL_SOURCES: Record<string, string> = {
   "agent-browser": "https://github.com/vercel-labs/agent-browser",
   "skill-creator": "https://github.com/anthropics/skills"
@@ -51,15 +55,31 @@ function resolveSkillsCliPath(projectRoot: string): string {
   }
 }
 
-function resolveRuntimeEnv(): NodeJS.ProcessEnv {
+function resolveRuntimeEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return process.versions.electron
-    ? { ...process.env, ELECTRON_RUN_AS_NODE: "1" }
-    : process.env;
+    ? { ...process.env, ...overrides, ELECTRON_RUN_AS_NODE: "1" }
+    : { ...process.env, ...overrides };
+}
+
+function buildManagedSkillEnv(options: {
+  homeDir?: string;
+  codexHomeDir?: string;
+}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  if (options.homeDir) {
+    env.HOME = options.homeDir;
+    env.USERPROFILE = options.homeDir;
+  }
+  if (options.codexHomeDir) {
+    env.CODEX_HOME = options.codexHomeDir;
+  }
+  return env;
 }
 
 function runSkillsCliSync(options: {
   args: string[];
   projectRoot?: string;
+  envOverrides?: NodeJS.ProcessEnv;
 }): { ok: true; stdout: string } | { ok: false; error: string } {
   const projectRoot = options.projectRoot ?? process.cwd();
   let skillsCliPath = "";
@@ -75,7 +95,7 @@ function runSkillsCliSync(options: {
       [skillsCliPath, ...options.args],
       {
         cwd: projectRoot,
-        env: resolveRuntimeEnv(),
+        env: resolveRuntimeEnv(options.envOverrides),
         timeout: SKILL_INSTALL_TIMEOUT_MS,
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"]
@@ -280,8 +300,51 @@ export function discoverSkillMetadata(skillDirs: string[]): SkillMetadata[] {
   return discovered;
 }
 
+function isPathWithin(parentDir: string, childPath: string): boolean {
+  const parent = path.resolve(parentDir);
+  const child = path.resolve(childPath);
+  return child === parent || child.startsWith(parent + path.sep);
+}
+
+function filterOutBundledSkills(skillFiles: string[], bundledSkillsDir: string): string[] {
+  return skillFiles.filter((skillFilePath) => !isPathWithin(bundledSkillsDir, skillFilePath));
+}
+
+function discoverUserSkillMetadata(options: {
+  userSkillsDir: string;
+  bundledSkillsDir: string;
+}): SkillMetadata[] {
+  const skillFiles = filterOutBundledSkills(
+    collectSkillMarkdownFiles(options.userSkillsDir),
+    options.bundledSkillsDir
+  );
+  const discovered: SkillMetadata[] = [];
+  const seen = new Set<string>();
+
+  for (const filePath of skillFiles) {
+    let content = "";
+    try {
+      content = fs.readFileSync(filePath, "utf8");
+    } catch {
+      continue;
+    }
+
+    const metadata = parseSkillMarkdown(content, filePath);
+    if (!metadata || seen.has(metadata.name)) continue;
+
+    seen.add(metadata.name);
+    discovered.push(metadata);
+  }
+
+  return discovered;
+}
+
 export function resolveCodexHomeDir(appDataDir: string): string {
   return path.join(appDataDir, "codex");
+}
+
+function resolveAppUserSkillsDir(appDataDir: string): string {
+  return path.join(appDataDir, ".agents", "skills");
 }
 
 function resolveBundledSkillSource(options: {
@@ -365,25 +428,31 @@ export function setupSkillRuntime(options: {
   settingsPaths?: string[];
   projectRoot?: string;
 }): SkillRuntimeSetup {
+  const homeDir = path.resolve(options.appDataDir);
   const codexHomeDir = resolveCodexHomeDir(options.appDataDir);
   const appSkillsDir = path.join(codexHomeDir, "skills");
   const bundledSkillsDir = path.join(appSkillsDir, ".system");
-  const userSkillsDir = appSkillsDir;
+  const userSkillsDir = resolveAppUserSkillsDir(options.appDataDir);
 
   ensureBundledSkills({ bundledSkillsDir, projectRoot: options.projectRoot });
   fs.mkdirSync(userSkillsDir, { recursive: true });
 
-  const availableSkills = discoverSkillMetadata([userSkillsDir, bundledSkillsDir]);
   const workspaceDir = path.resolve(options.projectRoot ?? process.cwd());
+  const updatedSettings = syncManagedSkillVisibility({
+    codexHomeDir,
+    workspaceDir
+  });
+  const availableSkills = discoverSkillMetadata([userSkillsDir, bundledSkillsDir]);
 
   return {
+    homeDir,
     codexHomeDir,
     appSkillsDir,
     bundledSkillsDir,
     userSkillsDir,
     workspaceDir,
     availableSkills,
-    updatedSettings: [],
+    updatedSettings,
     removedWorkspaces: []
   };
 }
@@ -472,12 +541,15 @@ export function listSkillsWithSource(options: {
   const result: SkillInfo[] = [];
   const seen = new Set<string>();
 
-  const discoveredUserSkills = discoverSkillMetadata([options.userSkillsDir]);
+  const discoveredUserSkills = discoverUserSkillMetadata({
+    userSkillsDir: options.userSkillsDir,
+    bundledSkillsDir: options.bundledSkillsDir
+  });
   let userNamesFromCli: Set<string> | null = null;
 
   if (isDefaultUserSkillsDir(options.userSkillsDir)) {
     const cliListResult = runSkillsCliSync({
-      args: ["list", "--global", "--agent", "pi"]
+      args: ["list", "--global", "--agent", SKILLS_CLI_AGENT]
     });
 
     if (!cliListResult.ok) {
@@ -518,8 +590,13 @@ export function uninstallUserSkill(options: {
 }): { ok: true } | { ok: false; error: string } {
   const skillDir = path.resolve(path.dirname(options.skillFilePath));
   const userSkillsDir = path.resolve(options.userSkillsDir);
+  const bundledSkillsDir = path.join(userSkillsDir, ".system");
 
   if (!skillDir.startsWith(userSkillsDir + path.sep)) {
+    return { ok: false, error: "Cannot uninstall bundled or system skills" };
+  }
+
+  if (isPathWithin(bundledSkillsDir, skillDir)) {
     return { ok: false, error: "Cannot uninstall bundled or system skills" };
   }
 
@@ -538,7 +615,7 @@ export function uninstallUserSkill(options: {
   }
 
   const cliRemoveResult = runSkillsCliSync({
-    args: ["remove", skillName, "--global", "--agent", "pi", "--yes"]
+    args: ["remove", skillName, "--global", "--agent", SKILLS_CLI_AGENT, "--yes"]
   });
 
   if (!cliRemoveResult.ok) {
@@ -561,6 +638,59 @@ async function extractZip(zipFile: string, destDir: string): Promise<void> {
 }
 
 const SKILL_SOURCE_FILE = ".skill-source.json";
+
+function collectRepoSkillPaths(workspaceDir: string): string[] {
+  const repoSkillRoots = [
+    path.join(workspaceDir, ".codex", "skills"),
+    path.join(workspaceDir, ".agents", "skills")
+  ];
+  return repoSkillRoots.flatMap((rootDir) => collectSkillMarkdownFiles(rootDir));
+}
+
+function renderManagedSkillsConfig(disabledSkillPaths: string[]): string {
+  if (disabledSkillPaths.length === 0) {
+    return "";
+  }
+
+  const body = disabledSkillPaths
+    .sort((a, b) => a.localeCompare(b))
+    .map((skillPath) => `[[skills.config]]\npath = ${JSON.stringify(skillPath)}\nenabled = false`)
+    .join("\n\n");
+
+  return `${MANAGED_SKILLS_CONFIG_START}\n${body}\n${MANAGED_SKILLS_CONFIG_END}\n`;
+}
+
+function syncManagedSkillVisibility(options: {
+  codexHomeDir: string;
+  workspaceDir: string;
+}): string[] {
+  const configPath = path.join(options.codexHomeDir, "config.toml");
+  const managedBlock = renderManagedSkillsConfig(collectRepoSkillPaths(options.workspaceDir));
+  let existing = "";
+  try {
+    if (fs.existsSync(configPath)) {
+      existing = fs.readFileSync(configPath, "utf8");
+    }
+  } catch {
+    existing = "";
+  }
+
+  const managedPattern = new RegExp(
+    `${MANAGED_SKILLS_CONFIG_START}[\\s\\S]*?${MANAGED_SKILLS_CONFIG_END}\\n?`,
+    "g"
+  );
+  const withoutManagedBlock = existing.replace(managedPattern, "").replace(/\n{3,}/g, "\n\n").trim();
+  const nextContent = [withoutManagedBlock, managedBlock.trim()].filter(Boolean).join("\n\n").trim();
+  const finalContent = nextContent ? `${nextContent}\n` : "";
+
+  if (existing === finalContent) {
+    return [];
+  }
+
+  fs.mkdirSync(options.codexHomeDir, { recursive: true });
+  fs.writeFileSync(configPath, finalContent, "utf8");
+  return [configPath];
+}
 
 type SkillSourceRecord = {
   url: string;
@@ -1236,6 +1366,8 @@ export async function installSkillFromSource(options: {
   source: string;
   projectRoot?: string;
   userSkillsDir?: string;
+  homeDir?: string;
+  codexHomeDir?: string;
 }): Promise<{ ok: true; output: string } | { ok: false; error: string }> {
   const source = options.source.trim();
   if (!source) {
@@ -1248,14 +1380,19 @@ export async function installSkillFromSource(options: {
 
   const projectRoot = options.projectRoot ?? process.cwd();
   const userSkillsDir = options.userSkillsDir ?? DEFAULT_CODEX_USER_SKILLS_DIR;
+  const envOverrides = buildManagedSkillEnv({
+    homeDir: options.homeDir,
+    codexHomeDir: options.codexHomeDir
+  });
   const sourceIsHttp = isHttpUrl(source);
   const localSourceSkillInfo = collectLocalSourceSkillInfo(source);
   let namesBeforeInstall: Set<string> | null = null;
   const installStartedAt = Date.now();
 
   const beforeListResult = runSkillsCliSync({
-    args: ["list", "--global", "--agent", "pi"],
-    projectRoot
+    args: ["list", "--global", "--agent", SKILLS_CLI_AGENT],
+    projectRoot,
+    envOverrides
   });
   if (beforeListResult.ok) {
     namesBeforeInstall = parseSkillNamesFromListOutput(beforeListResult.stdout);
@@ -1271,8 +1408,8 @@ export async function installSkillFromSource(options: {
   try {
     const { stdout } = await execFileAsync(
       process.execPath,
-      [skillsCliPath, "add", source, "--global", "--agent", "pi", "--yes"],
-      { timeout: SKILL_INSTALL_TIMEOUT_MS, cwd: projectRoot, env: resolveRuntimeEnv() }
+      [skillsCliPath, "add", source, "--global", "--agent", SKILLS_CLI_AGENT, "--yes"],
+      { timeout: SKILL_INSTALL_TIMEOUT_MS, cwd: projectRoot, env: resolveRuntimeEnv(envOverrides) }
     );
 
     const releaseInfo = parseReleaseUrl(source);
@@ -1286,8 +1423,9 @@ export async function installSkillFromSource(options: {
     }
 
     const afterListResult = runSkillsCliSync({
-      args: ["list", "--global", "--agent", "pi"],
-      projectRoot
+      args: ["list", "--global", "--agent", SKILLS_CLI_AGENT],
+      projectRoot,
+      envOverrides
     });
 
     if (afterListResult.ok) {

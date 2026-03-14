@@ -126,7 +126,7 @@ if (hasSingleInstanceLock) {
       skillRuntime = setupSkillRuntime({
         appDataDir: app.getPath("userData"),
         projectName: path.basename(process.cwd()),
-        workspaceTtlHours: Number(process.env.LILTO_PI_WORKSPACE_TTL_HOURS || 24 * 7)
+        workspaceTtlHours: Number(process.env.LILTO_WORKSPACE_TTL_HOURS || 24 * 7)
       });
       logger.info("skill_runtime_initialized", {
         appSkillsDir: skillRuntime.appSkillsDir,
@@ -141,6 +141,7 @@ if (hasSingleInstanceLock) {
       const message = error instanceof Error ? error.message : String(error);
       logger.error("skill_runtime_init_failed", { message });
       skillRuntime = {
+        homeDir: app.getPath("userData"),
         codexHomeDir: process.env.CODEX_HOME || path.join(app.getPath("userData"), "codex"),
         appSkillsDir: "",
         bundledSkillsDir: "",
@@ -191,6 +192,7 @@ if (hasSingleInstanceLock) {
       authService,
       workspaceDir: skillRuntime.workspaceDir,
       codexHomeDir: skillRuntime.codexHomeDir,
+      homeDir: skillRuntime.homeDir,
       schedulerBridge,
       availableSkills: skillRuntime.availableSkills
     });
@@ -203,6 +205,8 @@ if (hasSingleInstanceLock) {
       modelCatalogService,
       bundledSkillsDir: skillRuntime.bundledSkillsDir,
       userSkillsDir: skillRuntime.userSkillsDir,
+      homeDir: skillRuntime.homeDir,
+      codexHomeDir: skillRuntime.codexHomeDir,
       onSettingsSaved: (settings) => {
         registerAppShortcut(settings.chatSettings.globalShortcut, () => mainWindow);
       }

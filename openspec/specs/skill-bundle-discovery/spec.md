@@ -8,15 +8,15 @@ TBD - created by archiving change agent-browser-skill. Update Purpose after arch
 
 #### Scenario: 組み込みスキルディレクトリの検出
 - **WHEN** スキル探索が実行される
-- **THEN** `<app data>/skills/bundled` が探索対象に含まれる
+- **THEN** `<app userData>/codex/skills/.system` が探索対象に含まれる
 
 #### Scenario: ユーザー生成スキルディレクトリの検出
 - **WHEN** スキル探索が実行される
-- **THEN** `~/.pi/skills` が探索対象に含まれる
+- **THEN** `<app userData>/.agents/skills` が探索対象に含まれる
 
 #### Scenario: 同名スキルの優先順
-- **WHEN** `<app data>/skills/bundled` と `~/.pi/skills` に同名スキルが存在する
-- **THEN** `~/.pi/skills` 側のスキルが優先される
+- **WHEN** `<app userData>/codex/skills/.system` と `<app userData>/.agents/skills` に同名スキルが存在する
+- **THEN** `<app userData>/.agents/skills` 側のスキルが優先される
 
 ### Requirement: SKILL.md のメタデータ読み込み
 システムは発見したスキルの SKILL.md からメタデータを読み込まなければならない（SHALL）。
@@ -31,4 +31,3 @@ TBD - created by archiving change agent-browser-skill. Update Purpose after arch
 #### Scenario: 一覧表示
 - **WHEN** スキル一覧が要求される
 - **THEN** 発見済みスキルが名前と説明付きで返される
-

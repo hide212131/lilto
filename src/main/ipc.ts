@@ -29,6 +29,8 @@ export function registerAgentIpcHandlers({
   providerSettingsService,
   bundledSkillsDir,
   userSkillsDir,
+  homeDir,
+  codexHomeDir,
   notificationService,
   modelCatalogService,
   onSettingsSaved
@@ -38,6 +40,8 @@ export function registerAgentIpcHandlers({
   providerSettingsService: ProviderSettingsService;
   bundledSkillsDir: string;
   userSkillsDir: string;
+  homeDir: string;
+  codexHomeDir: string;
   notificationService: NotificationService;
   modelCatalogService: ModelCatalogService;
   onSettingsSaved?: (settings: import("./provider-settings").ProviderSettings) => void;
@@ -222,7 +226,7 @@ export function registerAgentIpcHandlers({
     if (!p) return { ok: false, error: "payload が必須です" };
 
     if (typeof p.source === "string") {
-      const result = await installSkillFromSource({ source: p.source, userSkillsDir });
+      const result = await installSkillFromSource({ source: p.source, userSkillsDir, homeDir, codexHomeDir });
       if (result.ok) {
         refreshAgentSkills();
       }

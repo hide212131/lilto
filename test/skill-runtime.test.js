@@ -130,6 +130,33 @@ test("listSkillsWithSource は user/bundled を source 付きで返す", () => {
   );
 });
 
+test("listSkillsWithSource は user 配下の .system を bundled として扱う", () => {
+  const root = tempDir("skills-list-system-filter");
+  const userDir = path.join(root, "skills");
+  const bundledDir = path.join(userDir, ".system");
+  fs.mkdirSync(path.join(userDir, "custom-one"), { recursive: true });
+  fs.mkdirSync(path.join(bundledDir, "skill-installer"), { recursive: true });
+  fs.writeFileSync(
+    path.join(userDir, "custom-one", "SKILL.md"),
+    `---\nname: custom-one\ndescription: user custom\n---\n`
+  );
+  fs.writeFileSync(
+    path.join(bundledDir, "skill-installer", "SKILL.md"),
+    `---\nname: skill-installer\ndescription: bundled installer\n---\n`
+  );
+
+  const listed = listSkillsWithSource({ bundledSkillsDir: bundledDir, userSkillsDir: userDir });
+  assert.deepEqual(
+    listed
+      .map((item) => ({ name: item.name, source: item.source }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
+    [
+      { name: "custom-one", source: "user" },
+      { name: "skill-installer", source: "bundled" }
+    ]
+  );
+});
+
 test("uninstallUserSkill は user skill を削除し bundled/system を拒否する", () => {
   const root = tempDir("skills-uninstall");
   const userSkillsDir = path.join(root, "user");
@@ -156,6 +183,22 @@ test("uninstallUserSkill は user skill を削除し bundled/system を拒否す
   }
 });
 
+test("uninstallUserSkill は user 配下の .system を拒否する", () => {
+  const root = tempDir("skills-uninstall-system");
+  const userSkillsDir = path.join(root, "skills");
+  const systemSkillDir = path.join(userSkillsDir, ".system", "skill-installer");
+  fs.mkdirSync(systemSkillDir, { recursive: true });
+  const systemSkillFile = path.join(systemSkillDir, "SKILL.md");
+  fs.writeFileSync(systemSkillFile, `---\nname: skill-installer\ndescription: bundled\n---\n`);
+
+  const result = uninstallUserSkill({ skillFilePath: systemSkillFile, userSkillsDir });
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.match(result.error, /Cannot uninstall bundled or system skills/);
+  }
+  assert.equal(fs.existsSync(systemSkillDir), true);
+});
+
 test("setupSkillRuntime は CODEX_HOME 配下に bundled/user skills を配置し projectRoot を作業ディレクトリにする", () => {
   const root = tempDir("setup-runtime");
   const projectRoot = path.join(root, "project");
@@ -175,10 +218,16 @@ test("setupSkillRuntime は CODEX_HOME 配下に bundled/user skills を配置�
   );
 
   const codexHomeDir = path.join(appDataDir, "codex");
-  fs.mkdirSync(path.join(codexHomeDir, "skills", "custom-one"), { recursive: true });
+  const userSkillsDir = path.join(appDataDir, ".agents", "skills");
+  fs.mkdirSync(path.join(userSkillsDir, "custom-one"), { recursive: true });
   fs.writeFileSync(
-    path.join(codexHomeDir, "skills", "custom-one", "SKILL.md"),
+    path.join(userSkillsDir, "custom-one", "SKILL.md"),
     `---\nname: custom-one\ndescription: user custom\n---\n`
+  );
+  fs.mkdirSync(path.join(projectRoot, ".codex", "skills", "repo-only"), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectRoot, ".codex", "skills", "repo-only", "SKILL.md"),
+    `---\nname: repo-only\ndescription: repo leaked skill\n---\n`
   );
 
   const runtime = setupSkillRuntime({
@@ -187,16 +236,21 @@ test("setupSkillRuntime は CODEX_HOME 配下に bundled/user skills を配置�
     projectRoot
   });
 
+  assert.equal(runtime.homeDir, appDataDir);
   assert.equal(runtime.codexHomeDir, codexHomeDir);
   assert.equal(runtime.bundledSkillsDir, path.join(codexHomeDir, "skills", ".system"));
-  assert.equal(runtime.userSkillsDir, path.join(codexHomeDir, "skills"));
+  assert.equal(runtime.userSkillsDir, userSkillsDir);
   assert.equal(runtime.workspaceDir, projectRoot);
   assert.deepEqual(
     runtime.availableSkills.map((skill) => skill.name).sort(),
     ["agent-browser", "custom-one", "skill-creator"]
   );
-  assert.deepEqual(runtime.updatedSettings, []);
+  assert.deepEqual(runtime.updatedSettings, [path.join(codexHomeDir, "config.toml")]);
   assert.deepEqual(runtime.removedWorkspaces, []);
+  assert.match(
+    fs.readFileSync(path.join(codexHomeDir, "config.toml"), "utf8"),
+    /path = ".+\/\.codex\/skills\/repo-only\/SKILL\.md"\nenabled = false/
+  );
 });
 
 // ─── parseReleaseUrl ─────────────────────────────────────────────────────────
