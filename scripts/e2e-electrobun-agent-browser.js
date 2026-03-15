@@ -13,6 +13,7 @@ const screenshotPath = path.join(rootDir, "test", "artifacts", "electrobun-e2e.p
 const settingsScreenshotPath = path.join(rootDir, "test", "artifacts", "electrobun-e2e-settings.png");
 const providerSettingsPath = path.join(rootDir, ".lilto-provider-settings.json");
 const providerSettingsBackupPath = path.join(rootDir, "test", "artifacts", "e2e-mock-provider-settings.json");
+const buildDir = path.join(rootDir, "build", "dev-win-x64");
 
 function resolveDesktopRuntimeBinary() {
   const binDir = path.join(rootDir, "node_modules", ".bin");
@@ -51,6 +52,34 @@ function sleep(ms) {
 function run(cmd, args, options = {}) {
   const resolvedCmd = resolveCliCommand(cmd);
   const resolvedArgs = normalizeCommandArgs(args);
+  const isWindowsBatchCommand =
+    process.platform === "win32" &&
+    (resolvedCmd.toLowerCase().endsWith(".cmd") || resolvedCmd.toLowerCase().endsWith(".bat"));
+
+  if (isWindowsBatchCommand) {
+    const batchResult = spawnSync(resolvedCmd, resolvedArgs, {
+      cwd: normalizeWorkingDirectory(rootDir),
+      encoding: "utf8",
+      shell: true,
+      ...options
+    });
+
+    if (batchResult.status !== 0) {
+      throw new Error(
+        [
+          `Command failed: ${cmd} ${args.join(" ")}`,
+          batchResult.stdout ? `stdout:\n${batchResult.stdout}` : "",
+          batchResult.stderr ? `stderr:\n${batchResult.stderr}` : "",
+          batchResult.error ? `error:\n${batchResult.error.message}` : ""
+        ]
+          .filter(Boolean)
+          .join("\n\n")
+      );
+    }
+
+    return batchResult.stdout.trim();
+  }
+
   const result = spawnSync(resolvedCmd, resolvedArgs, {
     cwd: normalizeWorkingDirectory(rootDir),
     encoding: "utf8",
@@ -62,7 +91,8 @@ function run(cmd, args, options = {}) {
       [
         `Command failed: ${cmd} ${args.join(" ")}`,
         result.stdout ? `stdout:\n${result.stdout}` : "",
-        result.stderr ? `stderr:\n${result.stderr}` : ""
+        result.stderr ? `stderr:\n${result.stderr}` : "",
+        result.error ? `error:\n${result.error.message}` : ""
       ]
         .filter(Boolean)
         .join("\n\n")
@@ -72,9 +102,54 @@ function run(cmd, args, options = {}) {
   return result.stdout.trim();
 }
 
-async function waitForDriverReady(timeoutMs = 30000) {
+function runDesktopRuntime(args, options = {}) {
+  return run(resolveDesktopRuntimeBinary(), args, options);
+}
+
+function getE2eCefProfileDir() {
+  if (process.platform === "win32") {
+    const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
+    return path.join(localAppData, "sh.hide212131.lilto", "dev", "CEF");
+  }
+  if (process.platform === "darwin") {
+    return path.join(os.homedir(), "Library", "Application Support", "sh.hide212131.lilto", "dev", "CEF");
+  }
+  return path.join(os.homedir(), ".config", "sh.hide212131.lilto", "dev", "CEF");
+}
+
+function ensureCleanDirectory(targetPath) {
+  fs.rmSync(targetPath, { recursive: true, force: true });
+  fs.mkdirSync(targetPath, { recursive: true });
+}
+
+function cleanupWindowsBuildProcesses() {
+  if (process.platform !== "win32") {
+    return;
+  }
+
+  const normalizedBuildDir = `${path.win32.normalize(buildDir)}\\`;
+  const cleanupScript = [
+    "$ErrorActionPreference = 'SilentlyContinue'",
+    "$buildDir = [System.IO.Path]::GetFullPath($args[0])",
+    "$normalized = $buildDir.TrimEnd('\\') + '\\'",
+    "$processes = Get-CimInstance Win32_Process | Where-Object {",
+    "  $_.ExecutablePath -and $_.ExecutablePath.StartsWith($normalized, [System.StringComparison]::OrdinalIgnoreCase)",
+    "}",
+    "foreach ($process in $processes) { Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue }"
+  ].join("; ");
+
+  spawnSync("powershell", ["-NoProfile", "-Command", cleanupScript, normalizedBuildDir], {
+    cwd: normalizeWorkingDirectory(rootDir),
+    stdio: "ignore"
+  });
+}
+
+async function waitForDriverReady(appProcess, timeoutMs = 30000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
+    if (appProcess.exitCode !== null) {
+      throw new Error(`Electrobun app exited before E2E driver was ready (exit code: ${appProcess.exitCode})`);
+    }
     try {
       const response = await fetch(`${driverBaseUrl}/health`);
       if (response.ok) return;
@@ -86,10 +161,13 @@ async function waitForDriverReady(timeoutMs = 30000) {
   throw new Error("Timed out waiting for Electrobun E2E driver");
 }
 
-async function waitForCdpReady(timeoutMs = 30000) {
+async function waitForCdpReady(appProcess, timeoutMs = 30000) {
   const start = Date.now();
   const url = `http://127.0.0.1:${cdpPort}/json/version`;
   while (Date.now() - start < timeoutMs) {
+    if (appProcess.exitCode !== null) {
+      throw new Error(`Electrobun app exited before CDP was ready (exit code: ${appProcess.exitCode})`);
+    }
     try {
       const response = await fetch(url);
       if (response.ok) {
@@ -124,14 +202,7 @@ async function evalJs(script) {
 }
 
 function ensureCefProfileDirs() {
-  const cefDir = path.join(
-    os.homedir(),
-    "Library",
-    "Application Support",
-    "sh.hide212131.lilto",
-    "dev",
-    "CEF"
-  );
+  const cefDir = getE2eCefProfileDir();
   fs.mkdirSync(path.join(cefDir, "Partitions", "default"), { recursive: true });
 }
 
@@ -361,28 +432,21 @@ async function configureProxyFixture(targetUrl, proxyUrl, noProxy = "") {
 
 async function main() {
   fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
+  cleanupWindowsBuildProcesses();
+  ensureCleanDirectory(getE2eCefProfileDir());
   ensureCefProfileDirs();
   const hadOriginalProviderSettings = backupProviderSettings();
-  const electrobunBin = resolveDesktopRuntimeBinary();
   const proxyFixture = await createProxyFixture();
-  const buildResult = spawnSync(electrobunBin, ["build"], {
-    cwd: rootDir,
-    env: {
-      ...process.env,
-      LILTO_E2E_USE_CEF: "1",
-      LILTO_E2E_CDP_PORT: cdpPort
-    },
-    encoding: "utf8"
-  });
-
-  if (buildResult.status !== 0) {
-    throw new Error(
-      [
-        "Electrobun build failed before E2E run.",
-        buildResult.stdout,
-        buildResult.stderr
-      ].filter(Boolean).join("\n")
-    );
+  try {
+    runDesktopRuntime(["build"], {
+      env: {
+        ...process.env,
+        LILTO_E2E_USE_CEF: "1",
+        LILTO_E2E_CDP_PORT: cdpPort
+      }
+    });
+  } catch (error) {
+    throw new Error(`Electrobun build failed before E2E run.\n${error.message}`);
   }
 
   const launcherPath = resolveBuiltLauncherPath();
@@ -409,9 +473,9 @@ async function main() {
 
   try {
     console.log("Waiting for Electrobun E2E driver...");
-    await waitForDriverReady();
+    await waitForDriverReady(appProcess);
     console.log("Waiting for CDP...");
-    await waitForCdpReady();
+    await waitForCdpReady(appProcess);
     await configureProxyFixture(proxyFixture.targetUrl, proxyFixture.proxyUrl);
     await waitForResponse("", 1).catch(() => undefined);
 
@@ -509,7 +573,14 @@ async function main() {
       // ignore
     }
 
-    appProcess.kill("SIGTERM");
+    if (process.platform === "win32") {
+      spawnSync("taskkill", ["/PID", String(appProcess.pid), "/T", "/F"], {
+        cwd: normalizeWorkingDirectory(rootDir),
+        stdio: "ignore"
+      });
+    } else {
+      appProcess.kill("SIGTERM");
+    }
     await Promise.race([
       new Promise((resolve) => appProcess.once("exit", resolve)),
       sleep(3000)

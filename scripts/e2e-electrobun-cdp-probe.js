@@ -4,6 +4,7 @@ const path = require("node:path");
 
 const rootDir = path.resolve(__dirname, "..");
 const cdpPort = process.env.LILTO_E2E_CDP_PORT || "9224";
+const buildDir = path.join(rootDir, "build", "dev-win-x64");
 
 function resolveDesktopRuntimeBinary() {
   const binDir = path.join(rootDir, "node_modules", ".bin");
@@ -34,6 +35,28 @@ function resolveBuiltLauncherPath() {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function cleanupWindowsBuildProcesses() {
+  if (process.platform !== "win32") {
+    return;
+  }
+
+  const normalizedBuildDir = `${path.win32.normalize(buildDir)}\\`;
+  const cleanupScript = [
+    "$ErrorActionPreference = 'SilentlyContinue'",
+    "$buildDir = [System.IO.Path]::GetFullPath($args[0])",
+    "$normalized = $buildDir.TrimEnd('\\') + '\\'",
+    "$processes = Get-CimInstance Win32_Process | Where-Object {",
+    "  $_.ExecutablePath -and $_.ExecutablePath.StartsWith($normalized, [System.StringComparison]::OrdinalIgnoreCase)",
+    "}",
+    "foreach ($process in $processes) { Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue }"
+  ].join("; ");
+
+  spawnSync("powershell", ["-NoProfile", "-Command", cleanupScript, normalizedBuildDir], {
+    cwd: rootDir,
+    stdio: "ignore"
+  });
 }
 
 async function waitForJsonVersion(timeoutMs = 30000) {
@@ -74,6 +97,7 @@ async function waitForPageTarget(timeoutMs = 30000) {
 }
 
 async function main() {
+  cleanupWindowsBuildProcesses();
   const electrobunBin = resolveDesktopRuntimeBinary();
   const buildResult = spawnSync(electrobunBin, ["build"], {
     cwd: rootDir,
@@ -82,7 +106,8 @@ async function main() {
       LILTO_E2E_USE_CEF: "1",
       LILTO_E2E_CDP_PORT: cdpPort
     },
-    encoding: "utf8"
+    encoding: "utf8",
+    shell: process.platform === "win32"
   });
 
   if (buildResult.status !== 0) {

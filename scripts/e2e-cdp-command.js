@@ -1,7 +1,20 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
-async function waitForPageTarget(port, timeoutMs = 10000) {
+function pickPageTarget(targets) {
+  const pageTargets = Array.isArray(targets)
+    ? targets.filter((target) => target.type === "page" && target.webSocketDebuggerUrl)
+    : [];
+
+  return (
+    pageTargets.find((target) => String(target.url || "").startsWith("views://")) ||
+    pageTargets.find((target) => String(target.title || "").toLowerCase().includes("lilt")) ||
+    pageTargets[0] ||
+    null
+  );
+}
+
+async function waitForPageTarget(port, timeoutMs = 30000) {
   const start = Date.now();
   const endpoint = `http://127.0.0.1:${port}/json/list`;
 
@@ -10,7 +23,7 @@ async function waitForPageTarget(port, timeoutMs = 10000) {
       const response = await fetch(endpoint);
       if (response.ok) {
         const targets = await response.json();
-        const pageTarget = targets.find((target) => target.type === "page" && target.webSocketDebuggerUrl);
+        const pageTarget = pickPageTarget(targets);
         if (pageTarget) {
           return pageTarget.webSocketDebuggerUrl;
         }
