@@ -1,5 +1,14 @@
 # Lessons
 
+## 2026-03-15
+
+| 変更内容 | ミス/課題 | 再発防止ルール |
+|---|---|---|
+| Electron `main` 側の proxy ON/OFF E2E シナリオを Electrobun 版へ移植し、`npm run e2e:electrobun` で `test/artifacts/electrobun-e2e.png` 生成まで成功させた。 | `electrobun dev` に E2E 用の `LILTO_*` / proxy 環境変数を渡しても、CLI が `launcher` 起動時に子プロセスへ `env` を引き継がず、Bun 側の mock/proxy 前提が効かなかった。 | Electrobun の E2E で Bun 側環境変数が必要な検証は `electrobun dev` 直起動を前提にせず、「`electrobun build` 後に `launcher` を直接起動する」か「Bun 側の E2E ドライバ API で実行時設定を注入する」方式を先に選ぶ。 |
+| Electrobun 1.15.1 へ更新し、macOS arm64 の core binaries を手動展開して実行可能にした。 | `electrobun` の core 自動ダウンロードは GitHub Releases 自体ではなく Bun `fetch()` 実装で `The socket connection was closed unexpectedly` になり、起動前に止まることがある。 | Electrobun 更新後は最初に core 配布物の取得可否を確認し、自動取得が不安定な環境では `curl | tar` で `node_modules/electrobun/dist-<platform>-<arch>` へ手動展開する回避手順を残してから E2E を回す。 |
+| 最小 CDP プローブを追加し、macOS + CEF + latest Electrobun で `/json/version` と `/json/list` を検証した。 | 初回プローブを `/json/version` 成功直後に 1 回だけ `/json/list` 取得する実装にしたため、page target 生成前の一時的な空配列を「CDP 非対応」と誤判定した。 | Electrobun の CDP 検証は `webSocketDebuggerUrl` だけで合格にせず、`/json/list` に `type=page` target が出るまで数秒ポーリングしてから「アプリ画面を CDP で触れる」と判断する。 |
+| Electrobun E2E 本体を CEF + CDP 経路へ切り替え、proxy シナリオ込みで `npm run e2e:electrobun` を成功させた。 | DOM 操作を Bun 側 `evaluateJavascriptWithResponse` だけで済ませると、CDP の実用可否を検証したことにならず、issue 切り分けと本番 E2E 経路が分断される。 | Electrobun の GUI E2E を「CDP が使える前提」で運用する場合は、アプリ操作とスクリーンショットを CDP に統一し、Bun 側の E2E ドライバは mock/proxy 注入や shutdown など CDP 外の補助用途だけに限定する。 |
+
 ## 2026-03-05
 
 | 変更内容 | ミス/課題 | 再発防止ルール |

@@ -2,12 +2,17 @@ const { spawn, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { createProxyFixture } = require("./e2e-proxy-fixture");
+const { normalizeCommandArgs, normalizeWorkingDirectory, resolveCliCommand } = require("./command-compat");
 
 const rootDir = path.resolve(__dirname, "..");
 const driverPort = "39393";
 const driverBaseUrl = `http://127.0.0.1:${driverPort}`;
+const cdpPort = process.env.LILTO_E2E_CDP_PORT || "9224";
 const screenshotPath = path.join(rootDir, "test", "artifacts", "electrobun-e2e.png");
 const settingsScreenshotPath = path.join(rootDir, "test", "artifacts", "electrobun-e2e-settings.png");
+const providerSettingsPath = path.join(rootDir, ".lilto-provider-settings.json");
+const providerSettingsBackupPath = path.join(rootDir, "test", "artifacts", "e2e-mock-provider-settings.json");
 
 function resolveDesktopRuntimeBinary() {
   const binDir = path.join(rootDir, "node_modules", ".bin");
@@ -26,8 +31,45 @@ function resolveDesktopRuntimeBinary() {
   throw new Error(`Electrobun binary not found. Checked: ${candidates.join(", ")}`);
 }
 
+function resolveBuiltLauncherPath() {
+  if (process.platform === "darwin") {
+    return path.join(rootDir, "build", "dev-macos-arm64", "lilt-o-dev.app", "Contents", "MacOS", "launcher");
+  }
+  if (process.platform === "linux") {
+    return path.join(rootDir, "build", "dev-linux-x64", "lilt-o-dev", "bin", "launcher");
+  }
+  if (process.platform === "win32") {
+    return path.join(rootDir, "build", "dev-win-x64", "lilt-o-dev", "bin", "launcher.exe");
+  }
+  throw new Error(`Unsupported platform for Electrobun E2E: ${process.platform}`);
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function run(cmd, args, options = {}) {
+  const resolvedCmd = resolveCliCommand(cmd);
+  const resolvedArgs = normalizeCommandArgs(args);
+  const result = spawnSync(resolvedCmd, resolvedArgs, {
+    cwd: normalizeWorkingDirectory(rootDir),
+    encoding: "utf8",
+    ...options
+  });
+
+  if (result.status !== 0) {
+    throw new Error(
+      [
+        `Command failed: ${cmd} ${args.join(" ")}`,
+        result.stdout ? `stdout:\n${result.stdout}` : "",
+        result.stderr ? `stderr:\n${result.stderr}` : ""
+      ]
+        .filter(Boolean)
+        .join("\n\n")
+    );
+  }
+
+  return result.stdout.trim();
 }
 
 async function waitForDriverReady(timeoutMs = 30000) {
@@ -44,33 +86,41 @@ async function waitForDriverReady(timeoutMs = 30000) {
   throw new Error("Timed out waiting for Electrobun E2E driver");
 }
 
-async function evalJs(script) {
-  const wrappedScript = `return (${script});`;
-  const response = await fetch(`${driverBaseUrl}/eval`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ script: wrappedScript })
-  });
-
-  const payload = await response.json();
-  if (!response.ok || !payload.ok) {
-    throw new Error(`E2E eval failed: ${payload.error || response.statusText}`);
+async function waitForCdpReady(timeoutMs = 30000) {
+  const start = Date.now();
+  const url = `http://127.0.0.1:${cdpPort}/json/version`;
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const response = await fetch(url);
+      if (response.ok) {
+        const versionPayload = await response.json();
+        if (versionPayload.webSocketDebuggerUrl) {
+          return;
+        }
+      }
+    } catch (_error) {
+      // retry
+    }
+    await sleep(300);
   }
-  return payload.value;
+  throw new Error(`Timed out waiting for CDP endpoint: ${url}`);
 }
 
-function safeCaptureScreenshot(outputPath) {
-  const captureResult = spawnSync("screencapture", ["-x", outputPath], {
-    cwd: rootDir,
-    stdio: "ignore"
-  });
+function cdpCommand(args) {
+  return run(process.execPath, [path.join(__dirname, "e2e-cdp-command.js"), cdpPort, ...args]);
+}
 
-  if (captureResult.status === 0) {
-    return;
+async function evalJs(script) {
+  const output = cdpCommand(["eval", script]);
+  if (output === "true") return true;
+  if (output === "false") return false;
+  if (output === "null") return null;
+  if (output === "") return "";
+  try {
+    return JSON.parse(output);
+  } catch {
+    return output;
   }
-
-  const oneByOnePng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/w8AAgMBgJf6sWQAAAAASUVORK5CYII=";
-  fs.writeFileSync(outputPath, Buffer.from(oneByOnePng, "base64"));
 }
 
 function ensureCefProfileDirs() {
@@ -268,18 +318,87 @@ async function waitForMessagesContaining(expectedTexts, timeoutMs = 20000) {
   throw new Error(`Timed out waiting for messages: ${expectedTexts.join(", ")}`);
 }
 
+function removeFileIfExists(targetPath) {
+  try {
+    fs.unlinkSync(targetPath);
+  } catch (error) {
+    if (!error || error.code !== "ENOENT") {
+      throw error;
+    }
+  }
+}
+
+function backupProviderSettings() {
+  removeFileIfExists(providerSettingsBackupPath);
+  if (!fs.existsSync(providerSettingsPath)) {
+    return false;
+  }
+  fs.copyFileSync(providerSettingsPath, providerSettingsBackupPath);
+  fs.unlinkSync(providerSettingsPath);
+  return true;
+}
+
+function restoreProviderSettings(hadOriginalSettings) {
+  if (hadOriginalSettings && fs.existsSync(providerSettingsBackupPath)) {
+    fs.copyFileSync(providerSettingsBackupPath, providerSettingsPath);
+  } else {
+    removeFileIfExists(providerSettingsPath);
+  }
+  removeFileIfExists(providerSettingsBackupPath);
+}
+
+async function configureProxyFixture(targetUrl, proxyUrl, noProxy = "") {
+  const response = await fetch(`${driverBaseUrl}/configure-proxy-fixture`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ targetUrl, proxyUrl, noProxy })
+  });
+  const payload = await response.json();
+  if (!response.ok || !payload.ok) {
+    throw new Error(`Failed to configure proxy fixture: ${payload.error || response.statusText}`);
+  }
+}
+
 async function main() {
   fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
   ensureCefProfileDirs();
+  const hadOriginalProviderSettings = backupProviderSettings();
   const electrobunBin = resolveDesktopRuntimeBinary();
-
-  const appProcess = spawn(electrobunBin, ["dev"], {
+  const proxyFixture = await createProxyFixture();
+  const buildResult = spawnSync(electrobunBin, ["build"], {
     cwd: rootDir,
+    env: {
+      ...process.env,
+      LILTO_E2E_USE_CEF: "1",
+      LILTO_E2E_CDP_PORT: cdpPort
+    },
+    encoding: "utf8"
+  });
+
+  if (buildResult.status !== 0) {
+    throw new Error(
+      [
+        "Electrobun build failed before E2E run.",
+        buildResult.stdout,
+        buildResult.stderr
+      ].filter(Boolean).join("\n")
+    );
+  }
+
+  const launcherPath = resolveBuiltLauncherPath();
+  if (!fs.existsSync(launcherPath)) {
+    throw new Error(`Electrobun launcher not found after build: ${launcherPath}`);
+  }
+
+  const appProcess = spawn(launcherPath, [], {
+    cwd: path.dirname(launcherPath),
     env: {
       ...process.env,
       LILTO_E2E_DRIVER: "1",
       LILTO_E2E_DRIVER_PORT: driverPort,
-      LILTO_E2E_MOCK: "1"
+      LILTO_E2E_MOCK: "1",
+      LILTO_E2E_USE_CEF: "1",
+      LILTO_E2E_CDP_PORT: cdpPort
     },
     stdio: ["ignore", "pipe", "pipe"]
   });
@@ -291,9 +410,12 @@ async function main() {
   try {
     console.log("Waiting for Electrobun E2E driver...");
     await waitForDriverReady();
+    console.log("Waiting for CDP...");
+    await waitForCdpReady();
+    await configureProxyFixture(proxyFixture.targetUrl, proxyFixture.proxyUrl);
     await waitForResponse("", 1).catch(() => undefined);
 
-    const title = String(await evalJs("document.title || ''"));
+    const title = String(cdpCommand(["get", "title"]));
     if (!title) {
       throw new Error(`Unexpected title: ${title}`);
     }
@@ -310,17 +432,18 @@ async function main() {
 
     await clickSettingsButton();
     await waitForModalOpen();
-    safeCaptureScreenshot(settingsScreenshotPath);
+    cdpCommand(["screenshot", settingsScreenshotPath]);
     console.log(`✓ Settings screenshot: ${settingsScreenshotPath}`);
 
     await switchToCustomProvider();
     await setSettingsInputValue("custom-provider-name", "Proxy E2E Provider");
     await setSettingsInputValue("custom-base-url", "http://127.0.0.1:11434/v1");
     await setSettingsInputValue("custom-model-id", "qwen2.5:0.5b");
-    await setSettingsCheckboxValue("use-proxy", true);
+    await setSettingsInputValue("custom-api-key", "e2e-dummy-key");
+    await setSettingsCheckboxValue("use-proxy", false);
     await clickSaveProviderSettingsButton();
     await waitForCustomSaveStatus("Provider 設定を保存しました。");
-    console.log("✓ Custom Provider saved");
+    console.log("✓ Custom Provider saved with proxy disabled");
 
     await clickSettingsClose();
     await waitForModalClose();
@@ -338,11 +461,28 @@ async function main() {
     }
     console.log("✓ New session button state toggles");
 
-    const message = "E2E mock response check";
-    await fillComposerText(message);
+    const firstMessage = "E2E proxy check without proxy";
+    await fillComposerText(firstMessage);
+    await clickComposerSend();
+    await waitForResponse("PROXY_CONNECTION_FAILED");
+    console.log("✓ Proxy missing failure detected");
+
+    await clickSettingsButton();
+    await waitForModalOpen();
+    await switchToCustomProvider();
+    await setSettingsCheckboxValue("use-proxy", true);
+    await clickSaveProviderSettingsButton();
+    await waitForCustomSaveStatus("Provider 設定を保存しました。");
+    await clickSettingsClose();
+    await waitForModalClose();
+    await waitForSendEnabled();
+    console.log("✓ Proxy usage enabled");
+
+    const secondMessage = "E2E proxy check with proxy";
+    await fillComposerText(secondMessage);
     await clickComposerSend();
 
-    const expectedFinal = `[E2E_MOCK_FINAL] 要求「${message}」を処理し、複数コマンドを実行して回答しました。`;
+    const expectedFinal = `[E2E_MOCK_FINAL] 要求「${secondMessage}」を処理し、複数コマンドを実行して回答しました。`;
     await waitForResponse(expectedFinal);
     console.log("✓ Final response received");
 
@@ -359,7 +499,7 @@ async function main() {
       throw new Error(`Expected cleared messages after new session, got: ${countAfterReset}`);
     }
 
-    safeCaptureScreenshot(screenshotPath);
+    cdpCommand(["screenshot", screenshotPath]);
     console.log(`✓ Final screenshot: ${screenshotPath}`);
     console.log("\nE2E success!");
   } finally {
@@ -379,6 +519,8 @@ async function main() {
       console.log("Electrobun logs:");
       console.log(appLogs);
     }
+    await proxyFixture.close();
+    restoreProviderSettings(hadOriginalProviderSettings);
   }
 }
 

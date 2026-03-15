@@ -206,6 +206,21 @@ async function evalInMainWebview(script: string): Promise<unknown> {
   return evaluator({ script });
 }
 
+function applyE2EProxyFixture(payload: {
+  targetUrl?: unknown;
+  proxyUrl?: unknown;
+  noProxy?: unknown;
+}): void {
+  process.env.LILTO_PROXY_TEST_URL =
+    typeof payload.targetUrl === "string" ? payload.targetUrl : "";
+  process.env.HTTP_PROXY = typeof payload.proxyUrl === "string" ? payload.proxyUrl : "";
+  process.env.http_proxy = process.env.HTTP_PROXY;
+  process.env.HTTPS_PROXY = typeof payload.proxyUrl === "string" ? payload.proxyUrl : "";
+  process.env.https_proxy = process.env.HTTPS_PROXY;
+  process.env.NO_PROXY = typeof payload.noProxy === "string" ? payload.noProxy : "";
+  process.env.no_proxy = process.env.NO_PROXY;
+}
+
 if (e2eDriverEnabled) {
   e2eServer = Bun.serve({
     port: e2eDriverPort,
@@ -231,6 +246,26 @@ if (e2eDriverEnabled) {
 
           const value = await evalInMainWebview(script);
           return new Response(JSON.stringify({ ok: true, value }), {
+            headers: { "content-type": "application/json" }
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return new Response(JSON.stringify({ ok: false, error: message }), {
+            status: 500,
+            headers: { "content-type": "application/json" }
+          });
+        }
+      }
+
+      if (request.method === "POST" && url.pathname === "/configure-proxy-fixture") {
+        try {
+          const payload = await request.json() as {
+            targetUrl?: unknown;
+            proxyUrl?: unknown;
+            noProxy?: unknown;
+          };
+          applyE2EProxyFixture(payload);
+          return new Response(JSON.stringify({ ok: true }), {
             headers: { "content-type": "application/json" }
           });
         } catch (error) {

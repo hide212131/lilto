@@ -127,7 +127,7 @@ export class ProviderSettingsService {
 
   constructor({
     logger = createLogger("providers"),
-    storagePath = path.join(process.cwd(), ".lilto-provider-settings.json")
+    storagePath = process.env.LILTO_PROVIDER_SETTINGS_PATH || path.join(process.cwd(), ".lilto-provider-settings.json")
   }: {
     logger?: Logger;
     storagePath?: string;
