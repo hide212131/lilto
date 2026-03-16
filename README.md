@@ -14,7 +14,7 @@ PC作業を人間の代わりに実行する、軽量なAIアシスタント。
 ## 実装方針
 - AIエージェント機能は [OpenAI Codex TypeScript SDK](https://github.com/openai/codex/tree/main/sdk/typescript) を利用する
 - アプリ基盤は Electron を利用する
-- Electron の Main プロセスで動くAIエージェントは `@openai/codex-sdk` を活用し、`CODEX_HOME` 配下の認証・skill・session を管理する
+- Electron の Main プロセスで動くAIエージェントは `@openai/codex-sdk` を活用し、既定では `~/.codex` を `CODEX_HOME` として認証・skill・session を管理する
 - Electron の Renderer プロセスで動くUIは、過去の [pi-web-ui](https://github.com/badlogic/pi-mono/tree/main/packages/web-ui) / [pi-web-ui-example](https://github.com/badlogic/pi-mono/blob/main/packages/web-ui/example) の責務分割を参考にしつつ、現行の Codex runtime に合わせて Main/Renderer 間 IPC を設計する
 - ファイル入出力、認証、Codex 実行、MCP server 連携など Renderer で直接扱えない処理は Main 側へ集約する
 

@@ -15,7 +15,7 @@ import { ModelCatalogService } from "./model-catalog";
 import { SchedulerService } from "./scheduler";
 import { SchedulerUnavailableError } from "./scheduler";
 import { SchedulerBridgeServer } from "./scheduler-bridge";
-import { setupSkillRuntime } from "./skill-runtime";
+import { resolveCodexHomeDir, setupSkillRuntime } from "./skill-runtime";
 import { WindowsSandboxSetupService } from "./windows-sandbox-setup";
 import { createCliCompatibilityMap } from "./command-compat";
 import { resolveAppIcon, resolveWindowIcon } from "./icon-assets";
@@ -144,7 +144,7 @@ if (hasSingleInstanceLock) {
       logger.error("skill_runtime_init_failed", { message });
       skillRuntime = {
         homeDir: app.getPath("userData"),
-        codexHomeDir: process.env.CODEX_HOME || path.join(app.getPath("userData"), "codex"),
+        codexHomeDir: process.env.CODEX_HOME || resolveCodexHomeDir(app.getPath("userData")),
         appSkillsDir: "",
         bundledSkillsDir: "",
         userSkillsDir: "",

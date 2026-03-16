@@ -8,14 +8,14 @@ TBD - created by archiving change agent-browser-skill. Update Purpose after arch
 
 #### Scenario: 組み込みスキルディレクトリの検出
 - **WHEN** スキル探索が実行される
-- **THEN** `<app userData>/codex/skills/.system` が探索対象に含まれる
+- **THEN** `<CODEX_HOME>/skills/.system` が探索対象に含まれる
 
 #### Scenario: ユーザー生成スキルディレクトリの検出
 - **WHEN** スキル探索が実行される
 - **THEN** `<app userData>/.agents/skills` が探索対象に含まれる
 
 #### Scenario: 同名スキルの優先順
-- **WHEN** `<app userData>/codex/skills/.system` と `<app userData>/.agents/skills` に同名スキルが存在する
+- **WHEN** `<CODEX_HOME>/skills/.system` と `<app userData>/.agents/skills` に同名スキルが存在する
 - **THEN** `<app userData>/.agents/skills` 側のスキルが優先される
 
 ### Requirement: SKILL.md のメタデータ読み込み

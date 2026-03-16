@@ -1,5 +1,12 @@
 # Lessons
 
+## 2026-03-17
+
+| Mistake/Context | Why it mattered | Rule to repeat |
+|---|---|---|
+| Kept an app-specific `CODEX_HOME` for Lilt-o while Codex Windows sandbox was provisioning OS-global local users and persisting their passwords under each `CODEX_HOME`. | A second frontend could rerun sandbox setup, rotate the shared Windows user passwords, and instantly stale out Lilt-o's `sandbox_users.json`, reproducing `CreateProcessWithLogonW failed: 1326`. | When Codex manages OS-global resources like Windows sandbox users, point the app at the canonical `~/.codex` state instead of introducing a second `CODEX_HOME`. |
+| Fixed the runtime to use the canonical `~/.codex` but initially left docs/specs claiming skills lived under `<app userData>/codex`. | Stale docs around `CODEX_HOME` recreate the same misunderstanding later, especially when sandbox state and bundled-skill discovery depend on the canonical Codex home. | After changing a storage root like `CODEX_HOME`, grep README, docs, and active OpenSpec specs in the same turn and update every current-path example to match the implementation. |
+
 ## 2026-03-15
 
 | 変更内容 | ミス/課題 | 再発防止ルール |

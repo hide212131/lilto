@@ -340,11 +340,34 @@ function discoverUserSkillMetadata(options: {
 }
 
 export function resolveCodexHomeDir(appDataDir: string): string {
-  return path.join(appDataDir, "codex");
+  void appDataDir;
+  return process.env.CODEX_HOME || DEFAULT_CODEX_HOME_DIR;
 }
 
 function resolveAppUserSkillsDir(appDataDir: string): string {
   return path.join(appDataDir, ".agents", "skills");
+}
+
+function resolveLegacyAppCodexHomeDir(appDataDir: string): string {
+  return path.join(appDataDir, "codex");
+}
+
+function cleanupLegacySandboxState(options: {
+  appDataDir: string;
+  codexHomeDir: string;
+}): void {
+  const legacyCodexHomeDir = resolveLegacyAppCodexHomeDir(options.appDataDir);
+  if (path.resolve(legacyCodexHomeDir) === path.resolve(options.codexHomeDir)) {
+    return;
+  }
+
+  for (const legacyPath of [
+    path.join(legacyCodexHomeDir, ".sandbox"),
+    path.join(legacyCodexHomeDir, ".sandbox-bin"),
+    path.join(legacyCodexHomeDir, ".sandbox-secrets")
+  ]) {
+    fs.rmSync(legacyPath, { recursive: true, force: true });
+  }
 }
 
 function resolveBundledSkillSource(options: {
@@ -430,6 +453,7 @@ export function setupSkillRuntime(options: {
 }): SkillRuntimeSetup {
   const homeDir = path.resolve(options.appDataDir);
   const codexHomeDir = resolveCodexHomeDir(options.appDataDir);
+  cleanupLegacySandboxState({ appDataDir: options.appDataDir, codexHomeDir });
   const appSkillsDir = path.join(codexHomeDir, "skills");
   const bundledSkillsDir = path.join(appSkillsDir, ".system");
   const userSkillsDir = resolveAppUserSkillsDir(options.appDataDir);

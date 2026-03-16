@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { spawn } from "node:child_process";
 import { normalizeWorkingDirectory } from "./command-compat";
 import { CodexAppServerClient } from "./codex-app-server-client";
@@ -18,6 +20,22 @@ type WindowsSandboxSetupCompletedNotification = {
   success: boolean;
   error?: string | null;
 };
+
+function isCredentialRepairableSetupError(message: string): boolean {
+  const lowered = message.toLowerCase();
+  return (
+    lowered.includes("createprocesswithlogonw failed: 1326") ||
+    lowered.includes("logon failure: unknown user name or bad password")
+  );
+}
+
+function setupArtifactPaths(codexHomeDir: string): string[] {
+  return [
+    path.join(codexHomeDir, ".sandbox", "setup_marker.json"),
+    path.join(codexHomeDir, ".sandbox", "setup_error.json"),
+    path.join(codexHomeDir, ".sandbox-secrets", "sandbox_users.json")
+  ];
+}
 
 function toSetupError(message: string): { code: WindowsSandboxSetupErrorCode; message: string; retryable: boolean } {
   const normalized = message.trim() || "Windows sandbox のセットアップに失敗しました。";
@@ -63,6 +81,30 @@ export class WindowsSandboxSetupService {
   }
 
   async runSetup(mode: Exclude<WindowsSandboxMode, "off">): Promise<WindowsSandboxSetupResult> {
+    const initialResult = await this.attemptSetup(mode);
+    if (!initialResult.ok && isCredentialRepairableSetupError(initialResult.error.message)) {
+      this.logger.info("windows_sandbox_setup_retry_after_cleanup", { mode });
+      this.clearSetupArtifacts();
+      return await this.attemptSetup(mode);
+    }
+
+    return initialResult;
+  }
+
+  private clearSetupArtifacts(): void {
+    for (const artifactPath of setupArtifactPaths(this.options.codexHomeDir)) {
+      try {
+        fs.rmSync(artifactPath, { force: true });
+      } catch (error) {
+        this.logger.error("windows_sandbox_setup_artifact_cleanup_failed", {
+          path: artifactPath,
+          error: String(error)
+        });
+      }
+    }
+  }
+
+  private async attemptSetup(mode: Exclude<WindowsSandboxMode, "off">): Promise<WindowsSandboxSetupResult> {
     if ((this.options.platform ?? process.platform) !== "win32") {
       return {
         ok: false,

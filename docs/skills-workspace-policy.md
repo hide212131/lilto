@@ -1,7 +1,7 @@
 # Skills / Workspace Policy
 
 - Skill directories:
-  - Bundled skills (app managed): `<app userData>/codex/skills/.system`
+  - Bundled skills (Codex managed): `<CODEX_HOME>/skills/.system`
   - User-created skills (persistent): `<app userData>/.agents/skills/<skill-name>`
 - Bundled skills:
   - `agent-browser` (`SKILL.md` + references/templates)
@@ -17,9 +17,9 @@
   - user skill の削除は `skills` ライブラリ管理境界に従って実施する
   - bundled skill は削除対象外（アプリ固有資産）
 - Runtime integration:
-  - `CODEX_HOME` はアプリ専用の `<app userData>/codex` を使う
+  - `CODEX_HOME` は既定で `~/.codex` を使い、必要な場合のみ環境変数で上書きする
   - `HOME` もアプリ専用 `userData` へスコープし、global skill は `<app userData>/.agents/skills` に閉じ込める
-  - skill 一覧は `<app userData>/.agents/skills` と `<app userData>/codex/skills/.system` から構成する
+  - skill 一覧は `<app userData>/.agents/skills` と `<CODEX_HOME>/skills/.system` から構成する
 - Workspace root: project root (`process.cwd()`)
 - Project workspace: project root (`process.cwd()`)
 

@@ -65,7 +65,7 @@ test("API key だけの auth.json では ChatGPT 認証済みにしない", () =
   }
 });
 
-test("legacy ~/.codex の ChatGPT auth を app 用 CODEX_HOME へ移行する", () => {
+test("primary CODEX_HOME に auth.json がなくても fallback ~/.codex から移行する", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "lilto-auth-"));
   const primaryCodexHome = path.join(tempDir, "app-codex");
   const fallbackCodexHome = path.join(tempDir, ".codex");
