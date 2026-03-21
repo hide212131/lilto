@@ -246,6 +246,60 @@ test("同じ conversationId は thread.started 後の session を再利用する
   assert.equal(calls[0].schedulerSessionId, "conv-1");
 });
 
+test("タイマー依頼は cron 使用ルールを内部 prompt に補強する", async () => {
+  let receivedInput = null;
+  const runtime = new AgentRuntime({
+    authService: createAuthService("authenticated"),
+    createSession: async () => ({
+      id: "thread-scheduler",
+      async runStreamed(input) {
+        receivedInput = input;
+        async function* stream() {
+          yield { type: "item.completed", item: { id: "m1", type: "agent_message", text: "done" } };
+        }
+        return { events: stream() };
+      }
+    }),
+    logger: { info() {}, error() {} }
+  });
+
+  const result = await runtime.submitPrompt("30秒後におしえて", createProviderSettings());
+
+  assert.equal(result.ok, true);
+  assert.match(receivedInput, /30秒後におしえて/);
+  assert.match(receivedInput, /MUST use the `cron` MCP tool/);
+  assert.match(receivedInput, /Never use sleep/);
+});
+
+test("scheduler follow-up prompt には cron 強制ルールを再注入しない", async () => {
+  let receivedInput = null;
+  const runtime = new AgentRuntime({
+    authService: createAuthService("authenticated"),
+    createSession: async () => ({
+      id: "thread-follow-up",
+      async runStreamed(input) {
+        receivedInput = input;
+        async function* stream() {
+          yield { type: "item.completed", item: { id: "m1", type: "agent_message", text: "done" } };
+        }
+        return { events: stream() };
+      }
+    }),
+    logger: { info() {}, error() {} }
+  });
+
+  const followUpPrompt = [
+    "以下はこの会話で発火した scheduler 通知です。",
+    "通知文言: 30秒経過しました。",
+    "続きの処理: alpha.co.jp を開く"
+  ].join("\n");
+
+  const result = await runtime.submitPrompt(followUpPrompt, createProviderSettings());
+
+  assert.equal(result.ok, true);
+  assert.equal(receivedInput, followUpPrompt);
+});
+
 test("proxy precheck 失敗は PROXY_CONNECTION_FAILED に正規化する", async () => {
   const server = http.createServer((_req, res) => {
     res.writeHead(403, { "content-type": "text/plain" });

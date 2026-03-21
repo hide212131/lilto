@@ -52,6 +52,7 @@ export async function createCronTool({
     label: "Cron",
     description: [
       "Schedule notifications for the current chat session.",
+      "For timer/reminder requests, always use this tool instead of shell sleep, background jobs, or polling.",
       "Prefer high-level operations: set_timer (afterSeconds), set_reminder_at (date + time + timezone), set_daily_reminder (hour + minute + timezone).",
       "If the user wants the AI to continue with another action after the timer fires, set followUpInstruction to that concrete next step.",
       "Use low-level create/update with runAt or cronExpr only for complex schedules that the high-level operations cannot express."
@@ -192,7 +193,11 @@ function buildTimerInput(
     throw new Error("set_timer requires afterSeconds > 0");
   }
 
-  const runAt = new Date(Date.now() + Math.floor(params.afterSeconds!) * 1000).toISOString();
+  const delayMs = Math.floor(params.afterSeconds!) * 1000;
+  const now = Date.now();
+  const runAtMs = now + delayMs;
+  const runAt = new Date(runAtMs).toISOString();
+
   return {
     title: params.title,
     kind: "one_shot",

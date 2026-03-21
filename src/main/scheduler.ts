@@ -73,6 +73,8 @@ export class SchedulerService implements SchedulerClient {
     }
 
     const binary = this.resolveBinaryPath();
+    this.logger.info("scheduler_start_attempt", { binary, exists: existsSync(binary) });
+
     if (!existsSync(binary)) {
       this.startError = new SchedulerUnavailableError(`scheduler binary not found: ${binary}`);
       this.logger.info("scheduler_unavailable", { reason: "binary_missing", binary });
@@ -80,6 +82,8 @@ export class SchedulerService implements SchedulerClient {
     }
 
     const dbPath = path.join(this.userDataDir, "scheduler.db");
+    this.logger.info("scheduler_config", { binary, dbPath });
+
     this.readyPromise = new Promise<void>((resolve, reject) => {
       this.readyResolve = resolve;
       this.readyReject = reject;
@@ -88,6 +92,8 @@ export class SchedulerService implements SchedulerClient {
     this.process = spawn(binary, [dbPath], {
       stdio: ["pipe", "pipe", "pipe"]
     });
+
+    this.logger.info("scheduler_process_spawned", { pid: this.process.pid });
 
     const stdout = readline.createInterface({ input: this.process.stdout });
     stdout.on("line", (line) => {
@@ -117,7 +123,20 @@ export class SchedulerService implements SchedulerClient {
   }
 
   async createSchedule(input: SchedulerCreateInput): Promise<SchedulerScheduleSummary> {
-    return this.sendCommand<SchedulerScheduleSummary>({ cmd: "create", schedule: this.toDaemonSchedule(input) });
+    const daemonSchedule = this.toDaemonSchedule(input);
+    this.logger.info("create_schedule_request", {
+      title: input.title,
+      kind: input.kind,
+      runAt: input.runAt,
+      cronExpr: input.cronExpr,
+      sessionId: input.notification.sessionId
+    });
+    const response = await this.sendCommand<SchedulerScheduleSummary>({ cmd: "create", schedule: daemonSchedule });
+    this.logger.info("create_schedule_response", {
+      id: response.id,
+      nextRunAt: response.nextRunAt
+    });
+    return response;
   }
 
   async listSchedules(): Promise<SchedulerScheduleSummary[]> {

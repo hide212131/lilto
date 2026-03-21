@@ -4,6 +4,7 @@
 
 | 変更内容 | ミス/課題 | 再発防止ルール |
 |---|---|---|
+| `cron` scheduler があるのに「30秒後におしえて」で model が `sleep 30` を選び、その後 `cron` を使わせると `cron bridge configuration is missing` / handshake timeout で失敗していた不具合を再現し、Codex 互換の JSONL MCP transport と `mcp_servers.<name>.env` 伝播へ修正した。 | 原因を model の判断ミスだけと見て prompt 側へ寄せると、実際の MCP 起動不良を見逃す。今回の Codex MCP は stdio で `Content-Length` ではなく 1 行 1 JSON を送り、bridge 用 env も親プロセスではなく server config の `env` に明示する必要があった。 | LLM が tool を使わない不具合でも、まず 1) 単体 CLI で MCP handshake を確認する、2) transport 形式（JSONL / framed）を実ログで確かめる、3) server が必要とする env が `mcp_servers.<name>.env` まで届いているかを確認する。prompt 調整は transport と起動確認の後に行う。 |
 | Electron UI 検証の標準入口を `live-ui-manual-verification` に寄せ、Playwright 主体の helper CLI と関連ドキュメントを追加した。 | これまで `agent-browser` / 生 CDP eval / 手動E2E の説明が混在し、「障害解析では何を最初に使うべきか」が即断できなかった。方針の一次ソースと実行入口が分かれていると、検証手法が乱立したまま固定化する。 | UI 検証フローを変えるときは、1) 一次ソースの Skill、2) 実行用スクリプト、3) README・手順書・OpenSpec を同一ターンで更新し、「最初に選ぶ手段」「標準ドライバ」「例外時の補助手段」を同じ文言で揃える。 |
 
 ## 2026-03-17

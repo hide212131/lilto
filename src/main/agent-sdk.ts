@@ -57,6 +57,21 @@ type CodexSession = {
 
 const EVENT_LOG_PREVIEW_LIMIT = 160;
 const OAUTH_MODEL_IDS = new Set(["gpt-5.3-codex"]);
+const SCHEDULER_FOLLOW_UP_PROMPT_PREFIX = "以下はこの会話で発火した scheduler 通知です。";
+const SCHEDULER_PROMPT_GUIDANCE = [
+  "[Scheduler execution rule]",
+  "If this request is about reminding/notifying later or on a schedule, you MUST use the `cron` MCP tool.",
+  "The `cron` MCP tool is available in this session, so call it directly.",
+  "Do not check MCP availability with resource-listing tools before calling `cron`.",
+  "Never use sleep, long-running shell commands, background jobs, cron CLI, or polling to wait for time to pass.",
+  "Use `set_timer` for relative times like seconds/minutes/hours later.",
+  "Use `set_reminder_at` for a specific date/time and `set_daily_reminder` for daily repeats.",
+  "After scheduling, briefly confirm what was scheduled."
+].join("\n");
+const JAPANESE_SCHEDULER_PATTERN =
+  /(?:\d+\s*(?:秒|分|時間)後|今日|きょう|明日|あした|毎日|毎週|毎朝|毎晩|\d+\s*時(?:\d+\s*分)?(?:に|から|まで)|リマインド|通知|タイマー|アラーム|おしえて|教えて)/;
+const ENGLISH_SCHEDULER_PATTERN =
+  /\b(?:remind|reminder|notify|notification|timer|alarm|later|after|tomorrow|today|daily|every day|every week|in \d+\s*(?:second|seconds|minute|minutes|hour|hours))\b/i;
 const importEsm = new Function("specifier", "return import(specifier)") as (specifier: string) => Promise<unknown>;
 
 export function standardizeError(
@@ -177,6 +192,23 @@ function mergeCodexConfig(...configs: Array<CodexConfig | undefined>): CodexConf
     }
   }
   return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+function shouldForceCronScheduling(text: string): boolean {
+  if (!text.trim()) {
+    return false;
+  }
+  if (text.includes(SCHEDULER_FOLLOW_UP_PROMPT_PREFIX)) {
+    return false;
+  }
+  return JAPANESE_SCHEDULER_PATTERN.test(text) || ENGLISH_SCHEDULER_PATTERN.test(text);
+}
+
+function augmentPromptForScheduler(text: string): string {
+  if (!shouldForceCronScheduling(text)) {
+    return text;
+  }
+  return `${text}\n\n${SCHEDULER_PROMPT_GUIDANCE}`;
 }
 
 function buildSessionThreadOptions(settings: ProviderSettings, platform: NodeJS.Platform): SessionThreadOptions {
@@ -407,6 +439,16 @@ export async function createCodexThreadFromSdk(options: {
   if (options.codexHomeDir) {
     env.CODEX_HOME = options.codexHomeDir;
   }
+  const bridgeEnv = options.schedulerBridge
+    ? options.schedulerBridge.getBridgeEnv(options.schedulerSessionId ?? "default")
+    : {};
+  if (options.schedulerBridge) {
+    // Pass bridge env vars into the Codex CLI process so MCP subprocesses inherit them
+    Object.assign(env, bridgeEnv);
+    if (process.versions.electron) {
+      env.ELECTRON_RUN_AS_NODE = "1";
+    }
+  }
   const mcpConfig = options.schedulerBridge
     ? {
         mcp_servers: {
@@ -415,8 +457,9 @@ export async function createCodexThreadFromSdk(options: {
             args: [path.join(process.cwd(), "dist", "main", "cron-mcp-server.js")],
             env: {
               ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
-              ...options.schedulerBridge.getBridgeEnv(options.schedulerSessionId ?? "default")
-            }
+              ...bridgeEnv
+            },
+            enabled: true
           }
         }
       }
@@ -712,7 +755,7 @@ export class AgentRuntime {
         });
       }
 
-      const streamed = await session.thread.runStreamed(text, { signal: abortController.signal });
+      const streamed = await session.thread.runStreamed(augmentPromptForScheduler(text), { signal: abortController.signal });
       const state = {
         requestId: hooks?.requestId ?? "request",
         conversationId: hooks?.conversationId,
