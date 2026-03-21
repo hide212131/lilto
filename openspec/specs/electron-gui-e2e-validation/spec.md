@@ -3,11 +3,11 @@
 ## Purpose
 TBD - created by archiving change add-electron-agent-browser-e2e-gate. Update Purpose after archive.
 ## Requirements
-### Requirement: Electron GUI を agent-browser で E2E 検証できる
-システムは `agent-browser` を利用して Electron アプリの主要 GUI フローを E2E として実行できなければならない（MUST）。また、Proxy 必須の擬似ネットワーク条件でも同フローを実行できなければならない（MUST）。
+### Requirement: Electron GUI を Playwright 主体で E2E 検証できる
+システムは Playwright を主要な UI 操作ドライバとして Electron アプリの主要 GUI フローを E2E 実行できなければならない（MUST）。また、Proxy 必須の擬似ネットワーク条件でも同フローを実行できなければならない（MUST）。
 
 #### Scenario: 最小スモークフローを実行できる
-- **WHEN** 開発者が定義済みの E2E 実行手順で `agent-browser` シナリオを実行する
+- **WHEN** 開発者が定義済みの Playwright ベース E2E シナリオを実行する
 - **THEN** Electron アプリの起動、主要操作、正常終了を自動で検証できる
 
 #### Scenario: 擬似 Proxy 必須条件でフローを実行できる
@@ -25,3 +25,9 @@ TBD - created by archiving change add-electron-agent-browser-e2e-gate. Update Pu
 - **WHEN** 擬似 Proxy 必須条件で `useProxy` を無効化したシナリオを実行する
 - **THEN** 実行結果から Proxy 未設定による失敗を識別できる
 
+### Requirement: Electron 固有 UI は補助ドライバへ切り分けられる
+システムは、主要なユーザー操作を Playwright で扱い、Electron 固有 UI に限って補助ドライバへ切り分ける方針を示さなければならない（MUST）。
+
+#### Scenario: Electron 固有 UI に遭遇した場合
+- **WHEN** 開発者が `BrowserWindow` 切り替え、ネイティブダイアログ、アプリメニュー、特殊な `webview` 制御などへ遭遇する
+- **THEN** 主要フロー全体を作り直さず、その箇所だけ WebdriverIO Electron Service などの補助ドライバへ切り替えられる

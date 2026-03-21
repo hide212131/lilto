@@ -1,12 +1,16 @@
-const { spawn, spawnSync } = require("node:child_process");
+const { spawn } = require("node:child_process");
 const net = require("node:net");
 const fs = require("node:fs");
 const path = require("node:path");
-const { normalizeCommandArgs, normalizeWorkingDirectory, resolveCliCommand } = require("./command-compat");
 const { createProxyFixture } = require("./e2e-proxy-fixture");
+const {
+  collectMessages,
+  connectToElectronApp,
+  resolveNamedLocator,
+  waitForAppReady
+} = require("./electron-playwright");
 
 const rootDir = path.resolve(__dirname, "..");
-const sessionName = "lilto-electron-e2e";
 let cdpPort = "9222";
 const screenshotPath = path.join(rootDir, "test", "artifacts", "electron-e2e.png");
 const mockProviderSettingsPath = path.join(rootDir, "test", "artifacts", "e2e-mock-provider-settings.json");
@@ -39,60 +43,6 @@ function shouldUseShellForCommand(commandPath) {
   return lower.endsWith(".cmd") || lower.endsWith(".bat");
 }
 
-function resolveAgentBrowserCommand() {
-  return { cmd: resolveCliCommand("npx"), prefixArgs: ["agent-browser"] };
-
-  if (process.platform === "win32") {
-    const binDir = path.join(rootDir, "node_modules", "agent-browser", "bin");
-    const arch = process.arch === "arm64" ? "arm64" : "x64";
-    const candidates = [
-      path.join(binDir, `agent-browser-win32-${arch}.exe`),
-      path.join(binDir, "agent-browser-win32-x64.exe"),
-      path.join(binDir, "agent-browser-win32-arm64.exe")
-    ];
-
-    for (const candidate of candidates) {
-      try {
-        const stat = fs.statSync(candidate);
-        if (stat.isFile() && stat.size > 0) {
-          return { cmd: candidate, prefixArgs: [] };
-        }
-      } catch {
-        // try next candidate
-      }
-    }
-  }
-
-  return { cmd: resolveCliCommand("npx"), prefixArgs: ["agent-browser"] };
-}
-
-const agentBrowserCommand = resolveAgentBrowserCommand();
-
-function run(cmd, args, options = {}) {
-  const resolvedCmd = resolveCliCommand(cmd);
-  const resolvedArgs = normalizeCommandArgs(args);
-  const result = spawnSync(resolvedCmd, resolvedArgs, {
-    cwd: normalizeWorkingDirectory(rootDir),
-    shell: shouldUseShellForCommand(resolvedCmd),
-    encoding: "utf8",
-    ...options
-  });
-
-  if (result.status !== 0) {
-    throw new Error(
-      [
-        `Command failed: ${cmd} ${args.join(" ")}`,
-        result.stdout ? `stdout:\n${result.stdout}` : "",
-        result.stderr ? `stderr:\n${result.stderr}` : ""
-      ]
-        .filter(Boolean)
-        .join("\n\n")
-    );
-  }
-
-  return result.stdout.trim();
-}
-
 async function waitForCdpReady(timeoutMs = 30000) {
   const start = Date.now();
   const url = `http://127.0.0.1:${cdpPort}/json/version`;
@@ -100,7 +50,7 @@ async function waitForCdpReady(timeoutMs = 30000) {
     try {
       const response = await fetch(url);
       if (response.ok) return;
-    } catch (_error) {
+    } catch {
       // not ready yet
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
@@ -108,266 +58,174 @@ async function waitForCdpReady(timeoutMs = 30000) {
   throw new Error(`Timed out waiting for CDP endpoint: ${url}`);
 }
 
-function agentBrowser(args) {
-  return run(process.execPath, [path.join(__dirname, "e2e-cdp-command.js"), cdpPort, ...args]);
+async function getStatusText(page) {
+  return ((await resolveNamedLocator(page, "status").textContent()) ?? "").trim();
 }
 
-function evalJs(js) {
-  return agentBrowser(["eval", js]);
+async function getCustomSaveStatusText(page) {
+  const statuses = resolveNamedLocator(page, "app")
+    .locator("lilt-settings-modal")
+    .locator(".provider-actions .status");
+  const count = await statuses.count();
+  if (count === 0) {
+    return "";
+  }
+  return ((await statuses.nth(count - 1).textContent()) ?? "").trim();
 }
 
-function getStatusText() {
-  return evalJs(
-    "(() => { const topBar = document.querySelector('lilt-app')?.shadowRoot?.querySelector('lilt-top-bar'); const shadowText = topBar?.shadowRoot?.querySelector('.status')?.textContent?.trim(); const attrText = topBar?.getAttribute('statustext')?.trim(); return shadowText || attrText || ''; })()"
-  );
+async function getMessagesText(page) {
+  return (await collectMessages(page))
+    .map((message) => message.trim())
+    .filter(Boolean)
+    .join("\n");
 }
 
-function getAuthStatusText() {
-  return evalJs(
-    "document.querySelector('lilt-app')?.shadowRoot?.querySelector('lilt-settings-modal')?.shadowRoot?.querySelector('.provider-section .auth-row .status')?.textContent?.trim() ?? ''"
-  );
-}
-
-function getCustomSaveStatusText() {
-  return evalJs(
-    `(() => {
-      const statuses = Array.from(
-        document.querySelector('lilt-app')
-          ?.shadowRoot?.querySelector('lilt-settings-modal')
-          ?.shadowRoot?.querySelectorAll('.provider-actions .status') || []
-      );
-      return statuses.at(-1)?.textContent?.trim() ?? '';
-    })()`
-  );
-}
-
-function isSettingsModalOpen() {
-  const result = evalJs(
-    "document.querySelector('lilt-app')?.shadowRoot?.querySelector('lilt-settings-modal')?.shadowRoot?.querySelector('.modal-backdrop')?.classList?.contains('open') ?? false"
-  );
-  return result === "true";
-}
-
-function getMessagesText() {
-  return evalJs(
-    "Array.from(document.querySelector('lilt-app')?.shadowRoot?.querySelector('lilt-message-list')?.shadowRoot?.querySelectorAll('.msg') ?? []).map(el => el.textContent?.trim()).join('\\n')"
-  );
-}
-
-function injectSchedulerNotification(messageText, followUpInstruction) {
-  evalJs(
-    `(() => {
-      const app = document.querySelector('lilt-app');
-      if (!app || !app.activeSessionId) return 'missing-session';
-      app._bindBackendSession?.(app.activeSessionId, 'agent-session-e2e');
+async function injectSchedulerNotification(page, messageText, followUpInstruction) {
+  await page.evaluate(
+    ({ message, followUp }) => {
+      const app = document.querySelector("lilt-app");
+      if (!app || !app.activeSessionId) return "missing-session";
+      app._bindBackendSession?.(app.activeSessionId, "agent-session-e2e");
       app._onSchedulerNotification?.({
-        id: 'schedule-e2e-1',
-        sessionId: 'agent-session-e2e',
-        message: ${JSON.stringify(messageText)},
-        followUpInstruction: ${JSON.stringify(followUpInstruction ?? null)},
+        id: "schedule-e2e-1",
+        sessionId: "agent-session-e2e",
+        message,
+        followUpInstruction: followUp,
         firedAt: new Date().toISOString()
       });
-      return 'ok';
-    })()`
+      return "ok";
+    },
+    { message: messageText, followUp: followUpInstruction ?? null }
   );
 }
 
-function clickSettingsButton() {
-  evalJs(
-    "document.querySelector('lilt-app')?.shadowRoot?.querySelector('lilt-top-bar')?.shadowRoot?.querySelector('button[title=\"Settings\"]')?.click()"
-  );
+async function clickSettingsButton(page) {
+  await resolveNamedLocator(page, "settingsButton").click();
 }
 
-function clickNewSessionButton() {
-  evalJs(
-    "document.querySelector('lilt-app')?.shadowRoot?.querySelector('lilt-top-bar')?.shadowRoot?.querySelector('button[title=\"New\"]')?.click()"
-  );
+async function clickNewSessionButton(page) {
+  await resolveNamedLocator(page, "newSessionButton").click();
 }
 
-function clickSettingsClose() {
-  evalJs(
-    "document.querySelector('lilt-app')?.shadowRoot?.querySelector('lilt-settings-modal')?.shadowRoot?.querySelector('button[title=\"Close\"]')?.click()"
-  );
+async function clickSettingsClose(page) {
+  await resolveNamedLocator(page, "settingsClose").click();
 }
 
-function switchToClaudeProvider() {
-  evalJs(
-    "document.querySelector('lilt-app')?.shadowRoot?.querySelector('lilt-settings-modal')?.shadowRoot?.querySelector('input[value=\"claude\"]')?.click()"
-  );
+async function switchToCustomProvider(page) {
+  await resolveNamedLocator(page, "app")
+    .locator("lilt-settings-modal")
+    .locator('input[value="custom-openai-completions"]')
+    .check();
 }
 
-function switchToCustomProvider() {
-  evalJs(
-    "document.querySelector('lilt-app')?.shadowRoot?.querySelector('lilt-settings-modal')?.shadowRoot?.querySelector('input[value=\"custom-openai-completions\"]')?.click()"
-  );
+async function setSettingsInputValue(page, id, value) {
+  const field = resolveNamedLocator(page, "app")
+    .locator("lilt-settings-modal")
+    .locator(`#${id}`);
+  const tagName = await field.evaluate((element) => element.tagName);
+  if (tagName === "SELECT") {
+    await field.evaluate((element, nextValue) => {
+      element.value = nextValue;
+      element.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    }, value);
+    return;
+  }
+  await field.fill(value);
 }
 
-function clickClaudeOauthButton() {
-  evalJs(
-    "document.querySelector('lilt-app')?.shadowRoot?.querySelector('lilt-settings-modal')?.shadowRoot?.querySelector('.provider-section .auth-row button')?.click()"
-  );
+async function setSettingsCheckboxValue(page, id, checked) {
+  await resolveNamedLocator(page, "app")
+    .locator("lilt-settings-modal")
+    .locator(`#${id}`)
+    .setChecked(checked);
 }
 
-function setSettingsInputValue(id, value) {
-  evalJs(
-    `(() => {
-      const input = document.querySelector('lilt-app')
-        ?.shadowRoot?.querySelector('lilt-settings-modal')
-        ?.shadowRoot?.querySelector('#${id}');
-      if (!input) return 'missing';
-      input.value = ${JSON.stringify(value)};
-      input.dispatchEvent(new Event(input.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true, composed: true }));
-      return 'ok';
-    })()`
-  );
+async function clickSaveProviderSettingsButton(page) {
+  await resolveNamedLocator(page, "app")
+    .locator("lilt-settings-modal")
+    .getByRole("button", { name: "Save Settings" })
+    .click();
 }
 
-function setSettingsCheckboxValue(id, checked) {
-  evalJs(
-    `(() => {
-      const input = document.querySelector('lilt-app')
-        ?.shadowRoot?.querySelector('lilt-settings-modal')
-        ?.shadowRoot?.querySelector('#${id}');
-      if (!input) return 'missing';
-      input.checked = ${checked ? "true" : "false"};
-      input.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
-      return 'ok';
-    })()`
-  );
+async function fillComposerText(page, value) {
+  await resolveNamedLocator(page, "composerInput").fill(value);
 }
 
-function clickSaveProviderSettingsButton() {
-  evalJs(
-    `(() => {
-      const buttons = Array.from(
-        document.querySelector('lilt-app')
-          ?.shadowRoot?.querySelector('lilt-settings-modal')
-          ?.shadowRoot?.querySelectorAll('.provider-actions button') || []
-      );
-      const button = buttons.find((candidate) => candidate.textContent?.includes('Save Settings'));
-      button?.click();
-    })()`
-  );
+async function clickComposerSend(page) {
+  await resolveNamedLocator(page, "composerSend").click();
 }
 
-function fillComposerText(value) {
-  evalJs(
-    `(() => {
-      const input = document.querySelector('lilt-app')?.shadowRoot?.querySelector('lilt-composer')?.shadowRoot?.querySelector('textarea');
-      if (!input) return;
-      input.value = ${JSON.stringify(value)};
-      input.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
-    })()`
-  );
+async function isSendDisabled(page) {
+  return await resolveNamedLocator(page, "composerSend").isDisabled();
 }
 
-function clickComposerSend() {
-  evalJs(
-    "document.querySelector('lilt-app')?.shadowRoot?.querySelector('lilt-composer')?.shadowRoot?.querySelector('button')?.click()"
-  );
+async function isNewSessionDisabled(page) {
+  return await resolveNamedLocator(page, "newSessionButton").isDisabled();
 }
 
-function isSendDisabled() {
-  const result = evalJs(
-    "document.querySelector('lilt-app')?.shadowRoot?.querySelector('lilt-composer')?.shadowRoot?.querySelector('button')?.disabled ?? true"
-  );
-  return result === "true";
+async function getMessageCount(page) {
+  return await resolveNamedLocator(page, "messages").count();
 }
 
-function isNewSessionDisabled() {
-  const result = evalJs(
-    "document.querySelector('lilt-app')?.shadowRoot?.querySelector('lilt-top-bar')?.shadowRoot?.querySelector('button[title=\"New\"]')?.disabled ?? true"
-  );
-  return result === "true";
+async function setAppSendingState(page, isSending) {
+  await page.evaluate((sending) => {
+    const app = document.querySelector("lilt-app");
+    if (!app) return;
+    app.isSending = sending;
+    app.requestUpdate?.();
+  }, isSending);
 }
 
-function getMessageCount() {
-  const result = evalJs(
-    "String(document.querySelector('lilt-app')?.shadowRoot?.querySelector('lilt-message-list')?.shadowRoot?.querySelectorAll('.msg')?.length ?? 0)"
-  );
-  const normalized = String(result).replaceAll("\"", "").trim();
-  return Number.parseInt(normalized, 10);
-}
-
-function setAppSendingState(isSending) {
-  evalJs(
-    `(() => {
-      const app = document.querySelector('lilt-app');
-      if (!app) return;
-      app.isSending = ${isSending ? "true" : "false"};
-      app.requestUpdate?.();
-    })()`
-  );
-}
-
-async function waitForStatus(expected, timeoutMs = 15000) {
+async function waitForStatus(page, expected, timeoutMs = 15000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    const text = getStatusText();
-    if (expected.some((s) => text.includes(s))) return text;
+    const text = await getStatusText(page);
+    if (expected.some((status) => text.includes(status))) return text;
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  throw new Error(`Timed out waiting for status. Expected one of: ${expected.join(", ")}. Last: "${getStatusText()}"`);
+  throw new Error(
+    `Timed out waiting for status. Expected one of: ${expected.join(", ")}. Last: "${await getStatusText(page)}"`
+  );
 }
 
-async function waitForModalOpen(timeoutMs = 5000) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    if (isSettingsModalOpen()) return;
-    await new Promise((resolve) => setTimeout(resolve, 200));
-  }
-  throw new Error("Timed out waiting for settings modal to open");
+async function waitForModalOpen(page, timeoutMs = 5000) {
+  await resolveNamedLocator(page, "settingsModal").waitFor({ state: "visible", timeout: timeoutMs });
 }
 
-async function waitForModalClose(timeoutMs = 5000) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    if (!isSettingsModalOpen()) return;
-    await new Promise((resolve) => setTimeout(resolve, 200));
-  }
-  throw new Error("Timed out waiting for settings modal to close");
+async function waitForModalClose(page, timeoutMs = 5000) {
+  await resolveNamedLocator(page, "settingsModal").waitFor({ state: "hidden", timeout: timeoutMs });
 }
 
-async function waitForSendEnabled(timeoutMs = 8000) {
+async function waitForSendEnabled(page, timeoutMs = 8000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    if (!isSendDisabled()) return;
+    if (!(await isSendDisabled(page))) return;
     await new Promise((resolve) => setTimeout(resolve, 300));
   }
   throw new Error("Timed out waiting for send button to be enabled");
 }
 
-async function waitForCustomSaveStatus(expectedText, timeoutMs = 5000) {
+async function waitForCustomSaveStatus(page, expectedText, timeoutMs = 5000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    const text = getCustomSaveStatusText();
+    const text = await getCustomSaveStatusText(page);
     if (text.includes(expectedText)) return text;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  throw new Error(`Timed out waiting for custom save status: "${expectedText}". Last: "${getCustomSaveStatusText()}"`);
+  throw new Error(
+    `Timed out waiting for custom save status: "${expectedText}". Last: "${await getCustomSaveStatusText(page)}"`
+  );
 }
 
-async function waitForResponse(expectedText, timeoutMs = 15000) {
+async function waitForResponse(page, expectedText, timeoutMs = 15000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    const msgs = getMessagesText();
-    if (msgs.includes(expectedText)) return msgs;
-    await new Promise((resolve) => setTimeout(resolve, 500));
-  }
-  throw new Error(`Timed out waiting for response. Expected: "${expectedText}". Messages: "${getMessagesText()}"`);
-}
-
-async function waitForMessagesContaining(expectedTexts, timeoutMs = 15000) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const msgs = getMessagesText();
-    if (expectedTexts.every((text) => msgs.includes(text))) {
-      return msgs;
-    }
+    const messages = await getMessagesText(page);
+    if (messages.includes(expectedText)) return messages;
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
   throw new Error(
-    `Timed out waiting for messages: ${expectedTexts.join(", ")}. Messages: "${getMessagesText()}"`
+    `Timed out waiting for response. Expected: "${expectedText}". Messages: "${await getMessagesText(page)}"`
   );
 }
 
@@ -380,51 +238,59 @@ async function main() {
       throw error;
     }
   }
+
   cdpPort = await getFreePort();
   const proxyFixture = await createProxyFixture();
 
   const electronBin =
     process.platform === "win32"
       ? path.join(rootDir, "node_modules", "electron", "dist", "electron.exe")
-      : path.join(rootDir, "node_modules", ".bin", "electron");
+      : process.platform === "darwin"
+        ? path.join(rootDir, "node_modules", "electron", "dist", "Electron.app", "Contents", "MacOS", "Electron")
+        : path.join(rootDir, "node_modules", "electron", "dist", "electron");
+  const electronEnv = {
+    ...process.env,
+    LILTO_E2E_MOCK: "1",
+    LILTO_PROVIDER_SETTINGS_PATH: mockProviderSettingsPath,
+    LILTO_PROXY_TEST_URL: proxyFixture.targetUrl,
+    HTTP_PROXY: proxyFixture.proxyUrl,
+    HTTPS_PROXY: proxyFixture.proxyUrl,
+    NO_PROXY: ""
+  };
+  delete electronEnv.ELECTRON_RUN_AS_NODE;
 
   const electron = spawn(electronBin, [".", `--remote-debugging-port=${cdpPort}`], {
     cwd: rootDir,
     shell: shouldUseShellForCommand(electronBin),
-    env: {
-      ...process.env,
-      LILTO_E2E_MOCK: "1",
-      LILTO_PROVIDER_SETTINGS_PATH: mockProviderSettingsPath,
-      LILTO_PROXY_TEST_URL: proxyFixture.targetUrl,
-      HTTP_PROXY: proxyFixture.proxyUrl,
-      HTTPS_PROXY: proxyFixture.proxyUrl,
-      NO_PROXY: ""
-    },
+    env: electronEnv,
     stdio: ["ignore", "pipe", "pipe"]
   });
 
   let electronLogs = "";
-  electron.stdout.on("data", (chunk) => { electronLogs += chunk.toString(); });
-  electron.stderr.on("data", (chunk) => { electronLogs += chunk.toString(); });
+  electron.stdout.on("data", (chunk) => {
+    electronLogs += chunk.toString();
+  });
+  electron.stderr.on("data", (chunk) => {
+    electronLogs += chunk.toString();
+  });
 
+  let browser;
+  let page;
   try {
     console.log("Waiting for CDP...");
     await waitForCdpReady();
     console.log("CDP endpoint ready");
 
-    // 1. タイトル確認
-    const title = agentBrowser(["get", "title"]);
+    ({ browser, page } = await connectToElectronApp(cdpPort));
+    await waitForAppReady(page);
+
+    const title = await page.title();
     if (!title.includes("Lilt-o")) throw new Error(`Unexpected title: ${title}`);
     console.log(`✓ Title: "${title}"`);
 
-    // 2. lilt-app レンダリング確認
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    const appExists = evalJs("!!document.querySelector('lilt-app')");
-    if (appExists !== "true") throw new Error("lilt-app element not found in DOM");
     console.log("✓ lilt-app rendered");
 
-    // 3. 初期ステータス確認
-    const initialStatus = await waitForStatus([
+    const initialStatus = await waitForStatus(page, [
       "待機中",
       "認証が必要",
       "Claude 認証が必要",
@@ -433,110 +299,105 @@ async function main() {
     ]);
     console.log(`✓ Initial status: "${initialStatus}"`);
 
-    // 4. 設定モーダルを開く
     console.log("Opening settings modal...");
-    clickSettingsButton();
-    await waitForModalOpen();
+    await clickSettingsButton(page);
+    await waitForModalOpen(page);
     console.log("✓ Settings modal opened");
 
-    // 5. 設定画面スクリーンショット
     const ssSettings = path.join(rootDir, "test", "artifacts", "electron-e2e-settings.png");
-    agentBrowser(["screenshot", ssSettings]);
+    await page.screenshot({ path: ssSettings, fullPage: true });
     console.log(`✓ Settings screenshot: ${ssSettings}`);
 
-    // 6. E2E 用に Custom Provider を保存（Proxy は UI で OFF）
-    switchToCustomProvider();
-    setSettingsInputValue("custom-provider-name", "Proxy E2E Provider");
-    setSettingsInputValue("custom-base-url", "http://127.0.0.1:11434/v1");
-    setSettingsInputValue("custom-api-key", "e2e-dummy-key");
-    setSettingsInputValue("custom-model-id", "qwen2.5:0.5b");
-    setSettingsCheckboxValue("use-proxy", false);
-    clickSaveProviderSettingsButton();
-    await waitForCustomSaveStatus("設定を保存しました。");
+    await switchToCustomProvider(page);
+    await setSettingsInputValue(page, "custom-provider-name", "Proxy E2E Provider");
+    await setSettingsInputValue(page, "custom-base-url", "http://127.0.0.1:11434/v1");
+    await setSettingsInputValue(page, "custom-api-key", "e2e-dummy-key");
+    await setSettingsInputValue(page, "custom-model-id", "qwen2.5:0.5b");
+    await setSettingsCheckboxValue(page, "use-proxy", false);
+    await clickSaveProviderSettingsButton(page);
+    await waitForCustomSaveStatus(page, "設定を保存しました。");
     console.log("✓ Custom Provider saved with proxy usage disabled");
 
-    // 7. 設定モーダルを閉じる
-    clickSettingsClose();
-    await waitForModalClose();
+    await clickSettingsClose(page);
+    await waitForModalClose(page);
     console.log("✓ Settings modal closed");
 
-    // 8. 送信ボタン有効化待ち
-    await waitForSendEnabled();
-    const statusAfterSwitch = getStatusText();
+    await waitForSendEnabled(page);
+    const statusAfterSwitch = await getStatusText(page);
     console.log(`✓ Status after provider switch: "${statusAfterSwitch}"`);
 
-    // 9. isSending 連動で New ボタンが無効化されることを確認
-    setAppSendingState(true);
+    await setAppSendingState(page, true);
     await new Promise((resolve) => setTimeout(resolve, 200));
-    if (!isNewSessionDisabled()) throw new Error("New session button should be disabled when app isSending=true");
-    setAppSendingState(false);
+    if (!(await isNewSessionDisabled(page))) {
+      throw new Error("New session button should be disabled when app isSending=true");
+    }
+    await setAppSendingState(page, false);
     await new Promise((resolve) => setTimeout(resolve, 200));
-    if (isNewSessionDisabled()) throw new Error("New session button should be enabled when app isSending=false");
+    if (await isNewSessionDisabled(page)) {
+      throw new Error("New session button should be enabled when app isSending=false");
+    }
     console.log("✓ New session button enable/disable state toggles with isSending");
 
-    // 10. Proxy 未設定で送信し、失敗を確認
     const firstMessage = "E2E proxy check without proxy";
     console.log(`Sending without proxy: "${firstMessage}"...`);
-    fillComposerText(firstMessage);
-    clickComposerSend();
-    await waitForResponse("PROXY_CONNECTION_FAILED");
+    await fillComposerText(page, firstMessage);
+    await clickComposerSend(page);
+    await waitForResponse(page, "PROXY_CONNECTION_FAILED");
     console.log("✓ Proxy missing failure detected");
 
-    // 11. Settings で Proxy 利用を有効化して保存（環境変数を利用）
-    clickSettingsButton();
-    await waitForModalOpen();
-    switchToCustomProvider();
-    setSettingsCheckboxValue("use-proxy", true);
-    clickSaveProviderSettingsButton();
-    await waitForCustomSaveStatus("設定を保存しました。");
-    clickSettingsClose();
-    await waitForModalClose();
-    await waitForSendEnabled();
+    await clickSettingsButton(page);
+    await waitForModalOpen(page);
+    await switchToCustomProvider(page);
+    await setSettingsCheckboxValue(page, "use-proxy", true);
+    await clickSaveProviderSettingsButton(page);
+    await waitForCustomSaveStatus(page, "設定を保存しました。");
+    await clickSettingsClose(page);
+    await waitForModalClose(page);
+    await waitForSendEnabled(page);
     console.log("✓ Proxy usage enabled");
 
-    // 12. Proxy 設定ありで送信し、成功を確認
     const secondMessage = "E2E proxy check with proxy";
     console.log(`Sending with proxy: "${secondMessage}"...`);
-    fillComposerText(secondMessage);
-    clickComposerSend();
+    await fillComposerText(page, secondMessage);
+    await clickComposerSend(page);
 
     const expectedFinal = `[E2E_MOCK_FINAL] 要求「${secondMessage}」を処理し、複数コマンドを実行して回答しました。`;
-    await waitForResponse(expectedFinal);
+    await waitForResponse(page, expectedFinal);
     console.log(`✓ Mock final response received: "${expectedFinal}"`);
 
-    // 13. scheduler notification と follow-up assistant 実行を確認
     const schedulerMessage = "3分たちました。";
     const schedulerFollowUp = "alpha.co.jp を開きます";
-    injectSchedulerNotification(schedulerMessage, schedulerFollowUp);
-    await waitForResponse(schedulerMessage);
-    await waitForResponse(`続きの処理: ${schedulerFollowUp}`);
+    await injectSchedulerNotification(page, schedulerMessage, schedulerFollowUp);
+    await waitForResponse(page, schedulerMessage);
+    await waitForResponse(page, `続きの処理: ${schedulerFollowUp}`);
     const schedulerFinal = "[E2E_MOCK_FINAL] 要求「以下はこの会話で発火した scheduler 通知です。";
-    await waitForResponse(schedulerFinal);
+    await waitForResponse(page, schedulerFinal);
     console.log(`✓ Scheduler notification + follow-up rendered: "${schedulerMessage}" / "${schedulerFollowUp}"`);
 
-    // 14. 最終ステータス確認
-    const finalStatus = await waitForStatus(["待機中"]);
+    const finalStatus = await waitForStatus(page, ["待機中"]);
     console.log(`✓ Final status: "${finalStatus}"`);
 
-    // 15. 新規セッション開始で会話履歴を初期化
-    const countBeforeReset = getMessageCount();
+    const countBeforeReset = await getMessageCount(page);
     if (countBeforeReset < 4) throw new Error(`Unexpected message count before reset: ${countBeforeReset}`);
-    clickNewSessionButton();
+    await clickNewSessionButton(page);
     await new Promise((resolve) => setTimeout(resolve, 300));
-    const countAfterReset = getMessageCount();
+    const countAfterReset = await getMessageCount(page);
     if (countAfterReset !== 0) throw new Error(`Expected cleared messages after new session, got: ${countAfterReset}`);
-    if (isNewSessionDisabled()) throw new Error("New session button should be enabled after sending");
+    if (await isNewSessionDisabled(page)) throw new Error("New session button should be enabled after sending");
     console.log("✓ New session reset cleared conversation");
 
-    // 16. 最終スクリーンショット
-    agentBrowser(["screenshot", screenshotPath]);
+    await page.screenshot({ path: screenshotPath, fullPage: true });
     console.log(`✓ Final screenshot: ${screenshotPath}`);
 
-    const messages = getMessagesText();
+    const messages = await getMessagesText(page);
     console.log("\nE2E success!");
     console.log("Conversation:");
-    messages.split("\n").forEach((m) => { if (m) console.log(`  - ${m}`); });
+    messages.split("\n").forEach((message) => {
+      if (message) console.log(`  - ${message}`);
+    });
   } finally {
+    await browser?.close().catch(() => {});
+
     electron.kill("SIGTERM");
     await new Promise((resolve) => {
       electron.once("exit", () => resolve());

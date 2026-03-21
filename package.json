@@ -9,6 +9,7 @@
     "build:native": "node scripts/build-native.js",
     "build": "tsc -p tsconfig.json && vite build",
     "start": "npm run build:native && npm run build && electron .",
+    "live-ui:manual": "node scripts/live-ui-manual-verification.js",
     "test": "npm run build && node --test",
     "test:windows-sandbox-live": "npm run build && node --test scripts/windows-sandbox-live-test.js",
     "e2e:electron": "npm run build && node scripts/e2e-electron-agent-browser.js",

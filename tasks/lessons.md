@@ -1,5 +1,11 @@
 # Lessons
 
+## 2026-03-22
+
+| 変更内容 | ミス/課題 | 再発防止ルール |
+|---|---|---|
+| Electron UI 検証の標準入口を `live-ui-manual-verification` に寄せ、Playwright 主体の helper CLI と関連ドキュメントを追加した。 | これまで `agent-browser` / 生 CDP eval / 手動E2E の説明が混在し、「障害解析では何を最初に使うべきか」が即断できなかった。方針の一次ソースと実行入口が分かれていると、検証手法が乱立したまま固定化する。 | UI 検証フローを変えるときは、1) 一次ソースの Skill、2) 実行用スクリプト、3) README・手順書・OpenSpec を同一ターンで更新し、「最初に選ぶ手段」「標準ドライバ」「例外時の補助手段」を同じ文言で揃える。 |
+
 ## 2026-03-17
 
 | Mistake/Context | Why it mattered | Rule to repeat |

@@ -6,6 +6,23 @@
 - scheduler 機能を実バイナリで確認する場合は `npm run build:native` を実行する
 - GUI 変更がある場合は `npm run e2e:electron` を実行できる状態にする
 
+## Electron UI の第一選択
+1. 障害解析、仕様確認、回帰切り分けでは `live-ui-manual-verification` を最初に選ぶ
+2. 主要なユーザー操作は `npm run live-ui:manual -- <cdp-port> <command>` で Playwright ベースに操作する
+3. Electron 固有の難所だけ WebdriverIO Electron Service を補助的に使う
+4. GUI 変更時は `/live-ui-manual-verification` 完了後に、最後のリグレッション確認として `npm run e2e:electron` を回す
+
+## live-ui-manual-verification の最小手順
+1. `npm start -- --remote-debugging-port=9222` でアプリを起動する
+2. `npm run live-ui:manual -- 9222 wait-app` で接続可能になるまで待つ
+3. `npm run live-ui:manual -- 9222 status-text` で初期状態を確認する
+4. 必要に応じて以下を使い分ける
+   - `npm run live-ui:manual -- 9222 open-settings`
+   - `npm run live-ui:manual -- 9222 send-prompt "Example Domain のタイトルを教えて"`
+   - `npm run live-ui:manual -- 9222 messages`
+   - `npm run live-ui:manual -- 9222 screenshot test/artifacts/live-ui-manual.png`
+5. Playwright で扱いにくい Electron 固有 UI に当たったときだけ、別途 WebdriverIO Electron Service に切り替える
+
 ## Windows OpenSpec 互換確認
 1. PowerShell で `openspec.cmd --version` が成功することを確認する
 2. `openspec.cmd new change "windows-compat-smoke"` を実行する
@@ -45,9 +62,10 @@
 5. アプリ非フォーカス時は OS 通知と未読バッジも更新されることを確認する
 
 ## GUI 変更時の必須チェック
-1. `npm run e2e:electron` を実行する
-2. コマンドが成功終了することを確認する
-3. `test/artifacts/electron-e2e.png` が生成されることを確認する
+1. `/live-ui-manual-verification` を先に実施し、修正箇所の操作と期待結果を確認する
+2. `npm run e2e:electron` を実行する
+3. コマンドが成功終了することを確認する
+4. `test/artifacts/electron-e2e.png` が生成されることを確認する
 
 ## Agent Skills (Live) E2E
 1. 事前にアプリで Claude OAuth を完了し、`.lilto-auth.json` が作成されていることを確認する

@@ -1,17 +1,17 @@
 ---
 name: live-ui-manual-verification
-description: ElectronアプリのライブUI検証を、まずelectronスキルの接続フローで起動・接続してから実施する手順。
+description: ElectronアプリのライブUI検証を、Playwright 主体で素早く進め、Electron 固有の難所だけ別手段へ切り替えるための標準手順。
 license: MIT
-compatibility: Requires npm.cmd start and npx.cmd agent-browser on Windows.
+compatibility: Requires npm start and the local Playwright helper script. On Windows, prefer npm.cmd.
 metadata:
   author: lilto
-  version: "1.3"
+  version: "1.4"
 ---
 
-この Skill は、`electron` Skill（`.github/skills/electron/SKILL.md`）の手順を前提として、
-対象アプリで「要求→回答→任意UI操作→検証」をライブ実行する。
+この Skill は、障害解析、仕様確認、回帰切り分けで **最初に選ぶ** 手段である。
+対象アプリで「要求→回答→任意 UI 操作→検証」を、その場で観測しながら進める。
 
-この Skill は **専用 E2E プログラムを新規作成しない**。その場で状態を見ながら操作と検証を進める。
+この Skill は **専用 E2E プログラムを新規作成しない**。既存のローカル補助 CLI を使い、Playwright 主体でライブ検証する。
 
 ---
 
@@ -20,7 +20,7 @@ metadata:
 次をライブ環境で確実に完了する:
 
 1. アプリ起動
-2. `agent-browser` 接続
+2. Playwright 接続
 3. 任意要求の入力
 4. AI回答の確認
 5. 任意 UI 操作（例: リンククリック / 設定画面の開閉 / 入力保存）
@@ -28,60 +28,78 @@ metadata:
 
 ---
 
-## 必須方針（electron Skill を使う）
+## 第一選択の理由
 
-この Skill を呼ばれたら、最初に `electron` Skill の「Core Workflow」を実行する。
-
-1. CDP 付き起動（`--remote-debugging-port`）
-2. `agent-browser connect`
-3. `tab list` と `tab <index>` で対象タブ選択
-4. `snapshot` または `eval` で状態観測
-
-`electron` Skill で接続が安定するまで、UI 検証手順に進まない。
+- GUI の障害解析では、まずライブ画面を観測しながら原因を狭める
+- 主要なユーザー操作は Playwright で十分に扱える
+- Electron 固有の難所だけを後段へ追い出すと、通常ケースの手順がぶれない
+- よって、この Skill を Electron UI 問題の標準入口にする
 
 ---
 
-## Windows 実行ルール
+## 基本方針
 
-- PowerShell 実行ポリシー回避のため、`npm.cmd` / `npx.cmd` を使う。
-- 例:
+1. 主要なユーザー操作は Playwright で行う
+2. Playwright で扱いにくい Electron 固有 UI だけ WebdriverIO Electron Service で補う
+3. それでも不要なら素直に使わない。Electron Service を標準経路にしない
+4. 変更完了後の最終リグレッション確認は `npm run e2e:electron` で行う
+
+---
+
+## 実行手順
+
+1. 既にアプリが起動中なら終了する
+2. CDP 付きで起動する
+3. ローカル Playwright helper で `wait-app` を通す
+4. `status-text` / `open-settings` / `send-prompt` / `messages` / `screenshot` を必要な順で実行する
+5. Playwright で到達不能な Electron 固有 UI に当たった場合だけ、WebdriverIO Electron Service の利用を検討する
+
+### macOS / Linux
+
+```bash
+npm start -- --remote-debugging-port=9222
+npm run live-ui:manual -- 9222 wait-app
+npm run live-ui:manual -- 9222 status-text
+npm run live-ui:manual -- 9222 open-settings
+npm run live-ui:manual -- 9222 screenshot test/artifacts/live-ui-manual.png
+```
+
+### Windows
 
 ```powershell
 npm.cmd start -- --remote-debugging-port=9222
-npx.cmd agent-browser connect 9222
-npx.cmd agent-browser tab list
-npx.cmd agent-browser tab 0
+npm.cmd run live-ui:manual -- 9222 wait-app
+npm.cmd run live-ui:manual -- 9222 status-text
+npm.cmd run live-ui:manual -- 9222 open-settings
+npm.cmd run live-ui:manual -- 9222 screenshot test/artifacts/live-ui-manual.png
 ```
 
-- 既にアプリが起動中なら一度終了してから、CDP フラグ付きで再起動する。
-
 ---
 
-## ライブUI検証フロー（接続後）
+## 代表コマンド
 
-1. 検証対象を固定する（対象操作 / 観測点 / 成功条件）。
-2. `agent-browser eval` で初期状態を取得する。
-3. 要求送信または UI 操作を 1 手ずつ実行する。
-4. 各手の直後に観測結果を返し、次手に進む。
-5. 最終的に成功条件を満たしたことを確認する。
-
----
-
-## 代表コマンド（Windows）
-
-```powershell
-npx.cmd agent-browser get title
-npx.cmd agent-browser eval "(() => !!document.querySelector('lilt-app'))()"
-npx.cmd agent-browser screenshot test/artifacts/live-ui-manual.png
+```bash
+npm run live-ui:manual -- 9222 title
+npm run live-ui:manual -- 9222 status-text
+npm run live-ui:manual -- 9222 open-settings
+npm run live-ui:manual -- 9222 close-settings
+npm run live-ui:manual -- 9222 send-prompt "Example Domain のタイトルを教えて"
+npm run live-ui:manual -- 9222 messages
+npm run live-ui:manual -- 9222 text status
+npm run live-ui:manual -- 9222 click "input[value='custom-openai-completions']"
+npm run live-ui:manual -- 9222 fill "#custom-base-url" "https://api.openai.com/v1"
+npm run live-ui:manual -- 9222 wait-for-text status "待機中" 15000
+npm run live-ui:manual -- 9222 screenshot test/artifacts/live-ui-manual.png
 ```
 
 ---
 
 ## 完了条件
 
-- `electron` Skill の接続手順で対象 Electron アプリへ接続済み。
+- CDP 付きで起動した対象 Electron アプリへ Playwright helper で接続済み。
 - 要求送信または対象 UI 操作を実行済み。
 - 観測点で成功条件を確認済み。
+- Electron 固有 UI が原因なら、それを Playwright ではなく Electron Service 側の課題として切り分け済み。
 
 ---
 
@@ -92,20 +110,8 @@ npx.cmd agent-browser screenshot test/artifacts/live-ui-manual.png
 - 最終判定（目的を満たしたか）
 - 失敗時は次の一手
 
-## Windows Practical Learnings (2026-03-10)
+## 切り替え基準
 
-- On some Windows environments, `npx.cmd agent-browser ...` can fail with `spawn EFTYPE` when Node reports `process.arch=arm64` but the usable binary is x64.
-- If this happens, run the x64 binary directly:
-
-```powershell
-& .\node_modules\agent-browser\bin\agent-browser-win32-x64.exe --help
-```
-
-- If `agent-browser` fails to start daemon with a socket-like path error, continue manual verification via CDP using Playwright:
-
-```js
-const { chromium } = require("playwright-core");
-const browser = await chromium.connectOverCDP("http://127.0.0.1:9222");
-```
-
-- For Japanese prompt verification on Windows, avoid piping multi-line scripts into `node` from PowerShell; use a UTF-8 `.js` file to prevent mojibake.
+- 画面内の通常ボタン、入力、メッセージ確認、設定保存は Playwright のまま進める
+- `BrowserWindow` をまたぐ制御、ネイティブダイアログ、アプリメニュー、`webview` の特殊切り替えなどに当たったら WebdriverIO Electron Service を検討する
+- 原因分析の初手としてはいきなり Electron Service に飛ばない

@@ -34,6 +34,13 @@ PC作業を人間の代わりに実行する、軽量なAIアシスタント。
 
 詳細な検証手順は `docs/manual-test.md` を参照。
 
+## Electron UI 検証方針
+- 障害解析や仕様確認では、まず `live-ui-manual-verification` を使ってライブ UI を観測する
+- 主要なユーザー操作は Playwright ベースで扱う
+- Electron 固有の難所（複数 `BrowserWindow`、ネイティブダイアログ、メニュー、`webview` 切り替えなど）だけ WebdriverIO Electron Service を補助的に使う
+- 手動検証の補助 CLI は `npm run live-ui:manual -- <cdp-port> <command>` で実行できる
+- `node` が直接使えない環境では `ELECTRON_RUN_AS_NODE=1 ./node_modules/electron/dist/Electron.app/Contents/MacOS/Electron scripts/live-ui-manual-verification.js <cdp-port> <command>` でもよい
+
 ## 現在の実装スコープ（初期）
 - Electron の Main/Renderer 最小構成
 - Renderer から Main への IPC 経由で Codex runtime を呼び出す Agent Bridge
