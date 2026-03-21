@@ -1,26 +1,27 @@
 # skill-authoring-assistant Specification
 
 ## Purpose
-TBD - created by archiving change add-bundled-skill-creator-skill. Update Purpose after archive.
+ lilto がユーザー作成 skill をどのように生成し、永続化するかを定義する。
+
 ## Requirements
-### Requirement: スキル化依頼時の `skill-creator` 優先選択
-システムは、ユーザー入力がスキル作成・再利用化を要求する意図を含む場合、`skill-creator` を優先して選択しなければならない（SHALL）。
+### Requirement: `skill-creator` の優先利用
+アプリは、ユーザーが skill 作成を求めたとき、bundled の `skill-creator` フローを優先して利用しなければならない（SHALL）。
 
-#### Scenario: スキル化依頼の自動優先
-- **WHEN** ユーザーが「この手順をスキルにして」などの依頼を送信する
-- **THEN** 実行入力は `skill-creator` を使う形に補正される
+#### Scenario: skill 作成依頼
+- **WHEN** ユーザーが skill の作成を依頼する
+- **THEN** アプリはその依頼を `skill-creator` 経由で処理できる
 
-#### Scenario: 明示スキル指定の尊重
-- **WHEN** ユーザー入力が `/skill:<name>` で明示指定されている
-- **THEN** システムは自動補正を行わず明示指定を優先する
+#### Scenario: 明示的な skill ファイル作成
+- **WHEN** ユーザーが `/skill:<name>` を手動で作成するよう依頼する
+- **THEN** アプリは要求された skill 構造を直接作成できる
 
-### Requirement: 生成スキルの永続保存
-システムは、`skill-creator` が生成したスキルを次回セッションで再利用可能な永続領域に保存しなければならない（MUST）。
+### Requirement: 生成した skill を workspace に保存する
+アプリは、生成した skill を現在の workspace に永続化し、Codex が起動ディレクトリから検出できるようにしなければならない（MUST）。
 
-#### Scenario: 生成スキルの保存先
-- **WHEN** `skill-creator` が新規スキルを生成する
-- **THEN** 生成物は `<app userData>/.agents/skills/<skill-name>/SKILL.md` を含む構造で保存される
+#### Scenario: 生成 skill の保存
+- **WHEN** `skill-creator` またはアプリが新しい skill を作成する
+- **THEN** 生成物には `<workspace>/.agents/skills/<skill-name>/SKILL.md` が含まれる
 
-#### Scenario: 次回起動での再発見
-- **WHEN** アプリを再起動してスキル一覧を生成する
-- **THEN** 前回作成した `<app userData>/.agents/skills` 配下のスキルが一覧に含まれる
+#### Scenario: 次回起動時の再検出
+- **WHEN** アプリが同じ workspace で再起動する
+- **THEN** `<workspace>/.agents/skills` 配下の既存 skill が再び一覧に含まれる

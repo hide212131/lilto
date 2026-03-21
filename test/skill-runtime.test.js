@@ -14,6 +14,7 @@ const {
   ensureBundledSkills,
   setupSkillRuntime,
   resolveCodexHomeDir,
+  resolveCliListedSkillPath,
   parseReleaseUrl,
   computeContentHash,
   checkSkillUpdates
@@ -99,6 +100,13 @@ test("Codex home は CODEX_HOME 環境変数で上書きできる", { concurrenc
       process.env.CODEX_HOME = previousCodexHome;
     }
   }
+});
+
+test("resolveCliListedSkillPath は ~\\\\ をホームディレクトリへ展開する", () => {
+  assert.equal(
+    resolveCliListedSkillPath("~\\lilto\\.agents\\skills\\find-skills"),
+    path.join(os.homedir(), "lilto", ".agents", "skills", "find-skills")
+  );
 });
 
 test("同名スキルがある場合は user skills を優先する", () => {
@@ -255,7 +263,7 @@ test("setupSkillRuntime は CODEX_HOME 配下に bundled/user skills を配置�
     `---\nname: skill-creator\ndescription: bundled skill creator\n---\n`
   );
 
-  const userSkillsDir = path.join(appDataDir, ".agents", "skills");
+  const userSkillsDir = path.join(projectRoot, ".agents", "skills");
   fs.mkdirSync(path.join(userSkillsDir, "custom-one"), { recursive: true });
   fs.writeFileSync(
     path.join(userSkillsDir, "custom-one", "SKILL.md"),
@@ -288,6 +296,7 @@ test("setupSkillRuntime は CODEX_HOME 配下に bundled/user skills を配置�
     const configToml = fs.readFileSync(path.join(codexHomeDir, "config.toml"), "utf8");
     assert.equal(configToml.includes("repo-only\\\\SKILL.md"), true);
     assert.match(configToml, /enabled = false/);
+    assert.equal(configToml.includes(".agents\\\\skills"), false);
     assert.equal(fs.existsSync(path.join(legacyCodexHomeDir, ".sandbox-secrets", "sandbox_users.json")), false);
   } finally {
     if (previousCodexHome === undefined) {

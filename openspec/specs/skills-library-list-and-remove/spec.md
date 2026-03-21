@@ -1,38 +1,38 @@
 # skills-library-list-and-remove Specification
 
 ## Purpose
-TBD - synced from change extend-skill-management-list-and-delete-via-skills-library.
+ lilto から管理する Codex skill の一覧取得と削除の振る舞いを定義する。
 
 ## Requirements
-### Requirement: Skills ライブラリ準拠の一覧取得
-アプリは Skill 一覧を取得する際、`skills` ライブラリ管理状態と整合した結果を返さなければならない（SHALL）。一覧には少なくとも Skill 名・ソース種別（bundled/user）・参照可能な Skill 定義パスを含めなければならない（MUST）。
+### Requirement: 一貫した skill 一覧
+アプリは、workspace ローカルな Codex skill について `skills` ライブラリの管理状態と整合した一覧を返さなければならず（SHALL）、一覧には少なくとも skill 名、source 種別、参照可能なパスを含めなければならない（MUST）。
 
 #### Scenario: 一覧取得が成功する
-- **WHEN** ユーザーが Agent Skills の一覧表示を要求する
-- **THEN** `skills` ライブラリ管理状態と矛盾しない Skill 一覧が返される
+- **WHEN** ユーザーが Agent Skills 一覧を要求する
+- **THEN** アプリは `skills` ライブラリの状態と bundled skill を合わせた整合的な一覧を返す
 
-#### Scenario: symlink 形式の user skill が存在する
-- **WHEN** `<app userData>/.agents/skills` 配下に symlink 形式で Skill が配置されている
-- **THEN** 一覧に当該 Skill が `source=user` として含まれる
+#### Scenario: symlink 形式の workspace skill が存在する
+- **WHEN** `<workspace>/.agents/skills` 配下に symlink 形式の skill が存在する
+- **THEN** その skill は `source=user` として一覧に含まれる
 
-### Requirement: Skills ライブラリ準拠の削除
-アプリは user skill 削除時に `skills` ライブラリの管理境界を尊重し、bundled/system skill を削除対象として扱ってはならない（MUST NOT）。削除成功時は次回送信から反映されるようランタイム側状態を同期しなければならない（SHALL）。
+### Requirement: user skill のみ削除する
+アプリは、workspace ローカル skill を削除するとき `skills` ライブラリの管理境界を尊重しなければならず（MUST）、bundled または system skill を削除対象として扱ってはならない（MUST NOT）。
 
-#### Scenario: user skill の削除成功
-- **WHEN** ユーザーが user skill を削除する
-- **THEN** 対象 skill が管理ディレクトリから除去され、次回送信時のランタイムに反映される
+#### Scenario: user skill を削除する
+- **WHEN** ユーザーが workspace ローカルな user skill を削除する
+- **THEN** その skill は削除され、次回ランタイム更新に変更が反映される
 
-#### Scenario: bundled skill の削除要求
-- **WHEN** ユーザーが bundled/system skill の削除を要求する
-- **THEN** 削除は拒否され、エラー理由が UI に返される
+#### Scenario: bundled skill の削除を拒否する
+- **WHEN** ユーザーが bundled または system skill の削除を試みる
+- **THEN** アプリはその要求を拒否し、エラーを返す
 
-### Requirement: 一覧・削除の可観測エラー通知
-一覧または削除処理が失敗した場合、アプリはユーザー操作が継続可能な形でエラーを通知しなければならない（SHALL）。
+### Requirement: エラー伝播
+アプリは、一覧取得と削除の失敗を UI へ伝播しなければならない（SHALL）。
 
 #### Scenario: 一覧取得失敗
-- **WHEN** 一覧取得処理で I/O もしくは解決エラーが発生する
-- **THEN** UI は空状態にフォールバックせず、失敗理由をステータス表示する
+- **WHEN** I/O または `skills` ライブラリ由来の理由で一覧取得が失敗する
+- **THEN** UI はエラーメッセージ付きの失敗結果を受け取る
 
 #### Scenario: 削除失敗
-- **WHEN** 削除対象の判定または削除処理でエラーが発生する
-- **THEN** UI は失敗理由を表示し、既存一覧表示は保持される
+- **WHEN** I/O または `skills` ライブラリ由来の理由で削除処理が失敗する
+- **THEN** UI はエラーメッセージ付きの失敗結果を受け取る

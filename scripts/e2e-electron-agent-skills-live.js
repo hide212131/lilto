@@ -1,6 +1,5 @@
 const { spawn, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
-const os = require("node:os");
 const path = require("node:path");
 const { normalizeCommandArgs, normalizeWorkingDirectory, resolveCliCommand } = require("./command-compat");
 
@@ -69,18 +68,8 @@ function preflightChecks() {
   run(shell, ["agent-browser", "--version"]);
 }
 
-function resolveElectronUserDataDir() {
-  if (process.platform === "darwin") {
-    return path.join(os.homedir(), "Library", "Application Support", "Lilt-o");
-  }
-  if (process.platform === "win32") {
-    return path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), "Lilt-o");
-  }
-  return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "Lilt-o");
-}
-
 function resolveE2ESkillsDir() {
-  return path.join(resolveElectronUserDataDir(), ".agents", "skills");
+  return path.join(rootDir, ".agents", "skills");
 }
 
 function cleanupPriorE2ESkills() {

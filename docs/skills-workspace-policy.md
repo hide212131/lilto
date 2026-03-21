@@ -2,7 +2,7 @@
 
 - Skill directories:
   - Bundled skills (Codex managed): `<CODEX_HOME>/skills/.system`
-  - User-created skills (persistent): `<app userData>/.agents/skills/<skill-name>`
+  - User-created skills (project-local): `<workspace>/.agents/skills/<skill-name>`
 - Bundled skills:
   - `agent-browser` (`SKILL.md` + references/templates)
   - `skill-creator` (`SKILL.md` + references/templates, build 時に GitHub から最新取得)
@@ -18,8 +18,8 @@
   - bundled skill は削除対象外（アプリ固有資産）
 - Runtime integration:
   - `CODEX_HOME` は既定で `~/.codex` を使い、必要な場合のみ環境変数で上書きする
-  - `HOME` もアプリ専用 `userData` へスコープし、global skill は `<app userData>/.agents/skills` に閉じ込める
-  - skill 一覧は `<app userData>/.agents/skills` と `<CODEX_HOME>/skills/.system` から構成する
+  - Codex 向け user skill は workspace 起点の `.agents/skills` に保存し、`skills add --agent codex` の project scope に揃える
+  - skill 一覧は `<workspace>/.agents/skills` と `<CODEX_HOME>/skills/.system` から構成する
 - Workspace root: project root (`process.cwd()`)
 - Project workspace: project root (`process.cwd()`)
 
