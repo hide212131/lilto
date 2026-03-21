@@ -434,10 +434,16 @@ export class LiltMessageList extends LitElement {
       message.text !== "実行開始を待っています..." &&
       message.text !== "実行中...";
 
+    const hasVisibleProgress =
+      progress.statusLines.length > 0 ||
+      Boolean(progress.thinkingText) ||
+      progress.tools.length > 0 ||
+      Boolean(message.pending && progress.pendingLabel);
+
     const stateKey = this._stateKeyForMessage(message);
 
     return html`
-      <div class="assistant-progress">
+      ${hasVisibleProgress ? html`<div class="assistant-progress">
         ${progress.statusLines.length > 0
           ? html`<div class="assistant-status">${progress.statusLines.join("\n")}</div>`
           : ""}
@@ -497,8 +503,8 @@ export class LiltMessageList extends LitElement {
         )}
 
         ${message.pending && progress.pendingLabel ? html`<div class="tool-label">${progress.pendingLabel}</div>` : ""}
-      </div>
-      ${hasAnswer ? html`<div class="assistant-answer">${this._renderMarkdown(message.text!)}</div>` : ""}
+      </div>` : ""}
+      ${hasAnswer ? html`<div class="${hasVisibleProgress ? "assistant-answer" : ""}">${this._renderMarkdown(message.text!)}</div>` : ""}
     `;
   }
 
