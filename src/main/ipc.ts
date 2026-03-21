@@ -86,7 +86,7 @@ export function registerAgentIpcHandlers({
         broadcastLoopEvent({
           type: "run_end",
           requestId,
-          status: "failed",
+          status: result.error.code === "ABORTED" ? "aborted" : "failed",
           errorMessage: `${result.error.code}: ${result.error.message}`
         });
         return result;

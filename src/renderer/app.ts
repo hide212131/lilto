@@ -94,7 +94,7 @@ export class LiltApp extends LitElement {
       overflow: hidden;
     }
     .stage {
-      width: min(980px, calc(100% - 24px));
+      width: 100%;
       height: 100%;
       display: flex;
       flex-direction: column;
@@ -102,11 +102,6 @@ export class LiltApp extends LitElement {
       min-height: 0;
       margin: 0;
       overflow: hidden;
-    }
-    @media (max-width: 720px) {
-      .stage {
-        width: calc(100% - 12px);
-      }
     }
   `;
 
@@ -385,18 +380,22 @@ export class LiltApp extends LitElement {
         return;
       }
       const error = result.error ?? { code: "UNKNOWN", message: "不明なエラー" };
-      this._removePendingMessage(pendingIdx);
-      this._addMessage("error", `${error.code}: ${error.message}`);
-      this._saveCurrentSession();
-      if (
-        error.code === "AUTH_REQUIRED" ||
-        error.code === "PROVIDER_CONFIG_REQUIRED" ||
-        error.code === "WINDOWS_SANDBOX_SETUP_REQUIRED" ||
-        error.code === "WINDOWS_SANDBOX_SETUP_FAILED" ||
-        error.code === "WINDOWS_SANDBOX_UNSUPPORTED_MODE"
-      ) {
-        this.settingsOpen = true;
+      if (error.code === "ABORTED") {
+        this._resolvePendingMessage(pendingIdx, "", this._buildProgress());
+      } else {
+        this._removePendingMessage(pendingIdx);
+        this._addMessage("error", `${error.code}: ${error.message}`);
+        if (
+          error.code === "AUTH_REQUIRED" ||
+          error.code === "PROVIDER_CONFIG_REQUIRED" ||
+          error.code === "WINDOWS_SANDBOX_SETUP_REQUIRED" ||
+          error.code === "WINDOWS_SANDBOX_SETUP_FAILED" ||
+          error.code === "WINDOWS_SANDBOX_UNSUPPORTED_MODE"
+        ) {
+          this.settingsOpen = true;
+        }
       }
+      this._saveCurrentSession();
     } catch (err) {
       this._removePendingMessage(pendingIdx);
       this._addMessage("error", `UNEXPECTED: ${String(err)}`);
@@ -577,7 +576,10 @@ export class LiltApp extends LitElement {
         changed = false;
         break;
       case "run_end":
-        if (event.status === "failed" || event.status === "aborted") {
+        if (event.status === "aborted") {
+          this._statusLines = [...this._statusLines, "中断しました"];
+          changed = true;
+        } else if (event.status === "failed") {
           this._statusLines = [...this._statusLines, `実行失敗: ${event.errorMessage ?? "不明なエラー"}`];
           changed = true;
         }

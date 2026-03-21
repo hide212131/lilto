@@ -32,7 +32,7 @@ export class LiltMessageList extends LitElement {
       align-items: stretch;
     }
     .msg {
-      width: min(680px, calc(100% - 16px));
+      width: calc(100% - 32px);
       box-sizing: border-box;
       padding: 10px 14px;
       border-radius: 10px;
@@ -47,7 +47,7 @@ export class LiltMessageList extends LitElement {
       background: #faf6f2;
       border: 1px solid #f0d8c5;
       width: fit-content;
-      max-width: min(680px, calc(100% - 16px));
+      max-width: min(75%, calc(100% - 16px));
     }
     .msg-assistant {
       margin-right: auto;
@@ -320,7 +320,7 @@ export class LiltMessageList extends LitElement {
       align-items: flex-start;
       gap: 10px;
       width: 100%;
-      max-width: min(740px, 100%);
+      max-width: 100%;
       margin-right: auto;
     }
     .mascot-avatar {
@@ -346,7 +346,7 @@ export class LiltMessageList extends LitElement {
       flex: 1;
       min-width: 0;
       width: auto;
-      max-width: min(680px, calc(100% - 54px));
+      max-width: calc(100% - 54px);
     }
   `;
 
