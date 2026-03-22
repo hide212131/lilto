@@ -9,5 +9,6 @@ test/artifacts/
 skills/bundled/
 build/
 native/scheduler-daemon/target
+native/speech-transcriber/bin/
 skills-lock.json
 .agents/skills/*/.skill-source.json

@@ -28,7 +28,7 @@ function usage() {
     "  screenshot <path>",
     "  eval <javascript-expression>",
     "",
-    "Aliases: app, status, settingsButton, newSessionButton, settingsModal, settingsClose, composerInput, composerSend, messages"
+    "Aliases: app, status, settingsButton, newSessionButton, settingsModal, settingsClose, composerInput, composerSend, composerDictation, composerDictationStatus, messages"
   ].join("\n");
 }
 

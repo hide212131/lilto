@@ -19,6 +19,7 @@ import { resolveCodexHomeDir, setupSkillRuntime } from "./skill-runtime";
 import { WindowsSandboxSetupService } from "./windows-sandbox-setup";
 import { createCliCompatibilityMap } from "./command-compat";
 import { resolveAppIcon, resolveWindowIcon } from "./icon-assets";
+import { SpeechTranscriptionService } from "./speech-transcription";
 import type { SchedulerNotificationEvent } from "../shared/scheduler";
 
 const config = readConfig();
@@ -197,6 +198,7 @@ if (hasSingleInstanceLock) {
       codexHomeDir: skillRuntime.codexHomeDir,
       workspaceDir: skillRuntime.workspaceDir
     });
+    const speechTranscriptionService = new SpeechTranscriptionService();
 
     const agentRuntime = new AgentRuntime({
       logger: createLogger("agent"),
@@ -214,6 +216,7 @@ if (hasSingleInstanceLock) {
       providerSettingsService,
       notificationService,
       modelCatalogService,
+      speechTranscriptionService,
       windowsSandboxSetupService,
       bundledSkillsDir: skillRuntime.bundledSkillsDir,
       userSkillsDir: skillRuntime.userSkillsDir,

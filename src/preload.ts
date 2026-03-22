@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { AgentLoopEvent } from "./shared/agent-loop";
+import type { AudioTranscriptionResult } from "./shared/audio-transcription";
 import type { SchedulerNotificationEvent } from "./shared/scheduler";
 
 const AGENT_LOOP_EVENT_CHANNEL = "agent:loopEvent";
@@ -21,6 +22,8 @@ contextBridge.exposeInMainWorld("lilto", {
   installSkillFromSource: async (source: string) => ipcRenderer.invoke("skills:install", { source }),
   uninstallSkill: async (filePath: string) => ipcRenderer.invoke("skills:uninstall", { filePath }),
   checkSkillUpdates: async () => ipcRenderer.invoke("skills:checkUpdates"),
+  transcribeAudio: async (audioData: Uint8Array): Promise<AudioTranscriptionResult> =>
+    ipcRenderer.invoke("audio:transcribe", { audioData }),
   getPlatform: () => process.platform,
   onAgentLoopEvent: (listener: (event: AgentLoopEvent) => void) => {
     const wrapped = (_event: unknown, event: AgentLoopEvent) => listener(event);

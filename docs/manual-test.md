@@ -19,9 +19,19 @@
 4. 必要に応じて以下を使い分ける
    - `npm run live-ui:manual -- 9222 open-settings`
    - `npm run live-ui:manual -- 9222 send-prompt "Example Domain のタイトルを教えて"`
+   - `npm run live-ui:manual -- 9222 text composerDictationStatus`
    - `npm run live-ui:manual -- 9222 messages`
    - `npm run live-ui:manual -- 9222 screenshot test/artifacts/live-ui-manual.png`
 5. Playwright で扱いにくい Electron 固有 UI に当たったときだけ、別途 WebdriverIO Electron Service に切り替える
+
+## composer-native-dictation-button
+1. macOS または Windows で `npm start -- --remote-debugging-port=9222` を起動する
+2. `npm run live-ui:manual -- 9222 wait-app` を実行し、必要なら Settings で送信可能状態にする
+3. Composer の textarea を空でない任意文字列にせず、そのままマイクボタンが送信ボタン左に表示されることを確認する
+4. マイクボタンを長押しし、押下中だけ Composer に「録音中...」とレベルメーターが表示されることを確認する
+5. 押下したまま話し、ボタンを離すと「文字起こし中...」を経て、認識結果が既存 textarea に追記されることを確認する
+6. macOS では Speech 権限未許可の状態も一度確認し、失敗文言が出ても textarea と送信ボタンを続けて使えることを確認する
+7. Windows では現時点で未対応表示になることを確認する
 
 ## Windows OpenSpec 互換確認
 1. PowerShell で `openspec.cmd --version` が成功することを確認する
@@ -63,9 +73,10 @@
 
 ## GUI 変更時の必須チェック
 1. `/live-ui-manual-verification` を先に実施し、修正箇所の操作と期待結果を確認する
-2. `npm run e2e:electron` を実行する
-3. コマンドが成功終了することを確認する
-4. `test/artifacts/electron-e2e.png` が生成されることを確認する
+2. ネイティブ音声入力を含む場合は `composer-native-dictation-button` の macOS/Windows 手順も確認する
+3. `npm run e2e:electron` を実行する
+4. コマンドが成功終了することを確認する
+5. `test/artifacts/electron-e2e.png` が生成されることを確認する
 
 ## Agent Skills (Live) E2E
 1. 事前にアプリで Claude OAuth を完了し、`.lilto-auth.json` が作成されていることを確認する

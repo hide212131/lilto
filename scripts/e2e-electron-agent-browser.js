@@ -155,6 +155,28 @@ async function clickComposerSend(page) {
   await resolveNamedLocator(page, "composerSend").click();
 }
 
+async function holdComposerDictation(page) {
+  await resolveNamedLocator(page, "composerDictation").dispatchEvent("pointerdown", {
+    bubbles: true,
+    composed: true,
+    pointerId: 1,
+    pointerType: "mouse",
+    isPrimary: true,
+    button: 0
+  });
+}
+
+async function releaseComposerDictation(page) {
+  await resolveNamedLocator(page, "composerDictation").dispatchEvent("pointerup", {
+    bubbles: true,
+    composed: true,
+    pointerId: 1,
+    pointerType: "mouse",
+    isPrimary: true,
+    button: 0
+  });
+}
+
 async function isSendDisabled(page) {
   return await resolveNamedLocator(page, "composerSend").isDisabled();
 }
@@ -165,6 +187,10 @@ async function isNewSessionDisabled(page) {
 
 async function getMessageCount(page) {
   return await resolveNamedLocator(page, "messages").count();
+}
+
+async function getDictationStatusText(page) {
+  return ((await resolveNamedLocator(page, "composerDictationStatus").textContent()) ?? "").trim();
 }
 
 async function setAppSendingState(page, isSending) {
@@ -227,6 +253,28 @@ async function waitForResponse(page, expectedText, timeoutMs = 15000) {
   throw new Error(
     `Timed out waiting for response. Expected: "${expectedText}". Messages: "${await getMessagesText(page)}"`
   );
+}
+
+async function waitForDictationStatus(page, expectedText, timeoutMs = 5000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const text = await getDictationStatusText(page);
+    if (text.includes(expectedText)) return text;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  throw new Error(
+    `Timed out waiting for dictation status "${expectedText}". Last: "${await getDictationStatusText(page)}"`
+  );
+}
+
+async function waitForDictationStatusClear(page, timeoutMs = 5000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const text = await getDictationStatusText(page);
+    if (!text) return;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  throw new Error(`Timed out waiting for dictation status clear. Last: "${await getDictationStatusText(page)}"`);
 }
 
 async function main() {
@@ -337,6 +385,12 @@ async function main() {
       throw new Error("New session button should be enabled when app isSending=false");
     }
     console.log("✓ New session button enable/disable state toggles with isSending");
+
+    await holdComposerDictation(page);
+    await waitForDictationStatus(page, "音声入力中...");
+    await releaseComposerDictation(page);
+    await waitForDictationStatusClear(page);
+    console.log("✓ Dictation button toggles active status only while pressed");
 
     const firstMessage = "E2E proxy check without proxy";
     console.log(`Sending without proxy: "${firstMessage}"...`);

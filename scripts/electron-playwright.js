@@ -62,6 +62,10 @@ function resolveNamedLocator(page, selector) {
       return resolveNamedLocator(page, "app").locator("lilt-composer").locator("textarea").first();
     case "composerSend":
       return resolveNamedLocator(page, "app").locator("lilt-composer").getByRole("button", { name: "送信" }).first();
+    case "composerDictation":
+      return resolveNamedLocator(page, "app").locator("lilt-composer").getByRole("button", { name: "長押しで音声入力" }).first();
+    case "composerDictationStatus":
+      return resolveNamedLocator(page, "app").locator("lilt-composer").locator(".dictation-status").first();
     case "messages":
       return resolveNamedLocator(page, "app").locator("lilt-message-list").locator(".msg");
     default:

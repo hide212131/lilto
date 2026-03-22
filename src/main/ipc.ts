@@ -7,6 +7,7 @@ import { createLogger } from "./logger";
 import type { NotificationService } from "./notifications";
 import type { ProviderSettingsService } from "./provider-settings";
 import type { ModelCatalogService } from "./model-catalog";
+import type { SpeechTranscriptionService } from "./speech-transcription";
 import type { WindowsSandboxSetupService } from "./windows-sandbox-setup";
 import { checkSkillUpdates, installSkillFromSource, installSkillFromUrl, listSkillsWithSource, uninstallUserSkill } from "./skill-runtime";
 import type { AgentLoopEvent } from "../shared/agent-loop";
@@ -34,6 +35,7 @@ export function registerAgentIpcHandlers({
   codexHomeDir,
   notificationService,
   modelCatalogService,
+  speechTranscriptionService,
   windowsSandboxSetupService,
   onSettingsSaved
 }: {
@@ -46,6 +48,7 @@ export function registerAgentIpcHandlers({
   codexHomeDir: string;
   notificationService: NotificationService;
   modelCatalogService: ModelCatalogService;
+  speechTranscriptionService: SpeechTranscriptionService;
   windowsSandboxSetupService: WindowsSandboxSetupService;
   onSettingsSaved?: (settings: import("./provider-settings").ProviderSettings) => void;
 }): void {
@@ -211,6 +214,32 @@ export function registerAgentIpcHandlers({
     }
 
     return await windowsSandboxSetupService.runSetup(mode);
+  });
+
+  ipcMain.handle("audio:transcribe", async (_event, payload: unknown) => {
+    const audioData =
+      payload &&
+      typeof payload === "object" &&
+      (payload as { audioData?: unknown }).audioData instanceof Uint8Array
+        ? (payload as { audioData: Uint8Array }).audioData
+        : payload &&
+            typeof payload === "object" &&
+            (payload as { audioData?: unknown }).audioData instanceof ArrayBuffer
+          ? new Uint8Array((payload as { audioData: ArrayBuffer }).audioData)
+          : null;
+
+    if (!audioData) {
+      return {
+        ok: false as const,
+        error: {
+          code: "INVALID_REQUEST",
+          message: "audioData は必須です。",
+          retryable: false
+        }
+      };
+    }
+
+    return await speechTranscriptionService.transcribeWav(audioData);
   });
 
   ipcMain.handle("app:openExternal", async (_event, payload: unknown) => {

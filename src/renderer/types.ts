@@ -1,4 +1,5 @@
 import type { AgentLoopEvent } from "../shared/agent-loop.js";
+import type { AudioTranscriptionResult } from "../shared/audio-transcription.js";
 import type { ActiveProvider, OAuthProviderId, ProviderSettings } from "../shared/provider-settings.js";
 import type { SchedulerNotificationEvent } from "../shared/scheduler.js";
 
@@ -136,6 +137,7 @@ declare global {
       installSkillFromSource: (source: string) => Promise<{ ok: true; output: string } | { ok: false; error: string }>;
       uninstallSkill: (filePath: string) => Promise<{ ok: true } | { ok: false; error: string }>;
       checkSkillUpdates: () => Promise<SkillUpdateInfo[]>;
+      transcribeAudio: (audioData: Uint8Array) => Promise<AudioTranscriptionResult>;
       getPlatform: () => string;
       onAgentLoopEvent: (listener: (event: AgentLoopEvent) => void) => () => void;
       onSchedulerNotification: (listener: (event: SchedulerNotificationEvent) => void) => () => void;

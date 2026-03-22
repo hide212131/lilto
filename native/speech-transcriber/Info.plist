@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>ja</string>
+  <key>CFBundleName</key>
+  <string>speech-transcriber</string>
+  <key>CFBundleIdentifier</key>
+  <string>dev.lilto.speech-transcriber</string>
+  <key>CFBundleExecutable</key>
+  <string>speech-transcriber</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>CFBundleShortVersionString</key>
+  <string>1.0</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>長押し録音した音声を文字起こしするために音声認識を使用します。</string>
+</dict>
+</plist>
