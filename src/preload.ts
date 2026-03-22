@@ -24,6 +24,9 @@ contextBridge.exposeInMainWorld("lilto", {
   checkSkillUpdates: async () => ipcRenderer.invoke("skills:checkUpdates"),
   transcribeAudio: async (audioData: Uint8Array): Promise<AudioTranscriptionResult> =>
     ipcRenderer.invoke("audio:transcribe", { audioData }),
+  startNativeDictation: async () => ipcRenderer.invoke("audio:startNativeDictation"),
+  finishNativeDictation: async (): Promise<AudioTranscriptionResult> => ipcRenderer.invoke("audio:finishNativeDictation"),
+  cancelNativeDictation: async () => ipcRenderer.invoke("audio:cancelNativeDictation"),
   getPlatform: () => process.platform,
   onAgentLoopEvent: (listener: (event: AgentLoopEvent) => void) => {
     const wrapped = (_event: unknown, event: AgentLoopEvent) => listener(event);

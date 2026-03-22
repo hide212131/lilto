@@ -1,28 +1,24 @@
 ## Why
 
-テキスト入力だけでは短い指示や移動中の入力に手間がかかり、チャット送信までの操作負荷が高い。既存 Composer に長押し録音から音声認識まで完結する入力経路を追加し、離した瞬間に確定テキストを textarea へ戻せるようにする。
+The composer already supports keyboard-first prompting, but short dictated prompts are still faster for many users. We want the microphone button to behave consistently across desktop platforms instead of stopping at the macOS implementation.
 
 ## What Changes
 
-- Composer の送信ボタン左側にマイクアイコンのボタンを追加する。
-- マイクボタンの長押し中はアプリ内で録音状態に入り、波形または録音中 UI を表示する。
-- ボタンを離した時点で録音を停止し、macOS は Speech framework で文字起こしして結果を既存 textarea へ反映する。
-- 未対応 OS や認識失敗時は、既存のテキスト送信フローを壊さずに失敗を UI から認識できるようにする。
+- Keep the existing press-and-hold composer microphone UI.
+- Record audio in the renderer and continue sending WAV data through the preload/main bridge.
+- Use the existing macOS Speech helper on macOS.
+- Add a Windows native dictation path using a Rust helper with `Windows.Media.SpeechRecognition`.
+- Surface transcription failures in the composer status area without sending or overwriting text.
 
 ## Capabilities
 
-### New Capabilities
-
-なし
-
 ### Modified Capabilities
 
-- `renderer-chat-ui`: Composer でテキスト入力に加えて押下中だけ録音し、離した時点で音声認識結果を反映する操作を提供するよう要求を拡張する
+- `renderer-chat-ui`: the composer microphone flow now supports both macOS and Windows native transcription paths.
 
 ## Impact
 
-- Renderer の Composer UI と入力状態管理
-- Renderer の録音制御と波形/録音状態 UI
-- Main process の macOS Speech helper bridge と一時ファイル管理
-- preload / IPC contract による Renderer-Main 間の音声認識操作追加
-- GUI 検証手順と関連テストケース
+- Renderer composer audio capture and feedback UI.
+- Main-process speech transcription service.
+- Native helper assets for Windows.
+- Verification docs and tests for cross-platform behavior.

@@ -7,6 +7,7 @@
   "scripts": {
     "prebuild": "node scripts/sync-skill-creator.js",
     "build:native": "node scripts/build-native.js",
+    "install:vs-build-tools": "powershell -ExecutionPolicy Bypass -File scripts/install-vs-build-tools.ps1",
     "build": "tsc -p tsconfig.json && vite build",
     "start": "npm run build:native && npm run build && electron .",
     "live-ui:manual": "node scripts/live-ui-manual-verification.js",
@@ -18,11 +19,18 @@
   "build": {
     "extraResources": [
       {
-        "from": "native/scheduler-daemon/target/release",
+        "from": "native/scheduler-daemon/bin",
         "to": "bin",
         "filter": [
           "scheduler-daemon",
           "scheduler-daemon.exe"
+        ]
+      },
+      {
+        "from": "native/speech-transcriber/bin",
+        "to": "bin",
+        "filter": [
+          "speech-transcriber.exe"
         ]
       }
     ]

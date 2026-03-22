@@ -88,7 +88,12 @@ function computeLevel(samples: Float32Array): number {
 }
 
 function encodeWav(chunks: Float32Array[], sampleRate: number): Uint8Array {
-  const sampleCount = chunks.reduce((total, chunk) => total + chunk.length, 0);
+  const targetSampleRate = 16000;
+  const merged = mergeChunks(chunks);
+  const resampled = sampleRate === targetSampleRate
+    ? merged
+    : resamplePcm(merged, sampleRate, targetSampleRate);
+  const sampleCount = resampled.length;
   const bytesPerSample = 2;
   const dataLength = sampleCount * bytesPerSample;
   const buffer = new ArrayBuffer(44 + dataLength);
@@ -101,23 +106,52 @@ function encodeWav(chunks: Float32Array[], sampleRate: number): Uint8Array {
   view.setUint32(16, 16, true);
   view.setUint16(20, 1, true);
   view.setUint16(22, 1, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * bytesPerSample, true);
+  view.setUint32(24, targetSampleRate, true);
+  view.setUint32(28, targetSampleRate * bytesPerSample, true);
   view.setUint16(32, bytesPerSample, true);
   view.setUint16(34, 16, true);
   writeAscii(view, 36, "data");
   view.setUint32(40, dataLength, true);
 
   let offset = 44;
-  for (const chunk of chunks) {
-    for (let index = 0; index < chunk.length; index += 1) {
-      const sample = Math.max(-1, Math.min(1, chunk[index]));
-      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
-      offset += 2;
-    }
+  for (let index = 0; index < resampled.length; index += 1) {
+    const sample = Math.max(-1, Math.min(1, resampled[index]));
+    view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+    offset += 2;
   }
 
   return new Uint8Array(buffer);
+}
+
+function mergeChunks(chunks: Float32Array[]): Float32Array {
+  const length = chunks.reduce((total, chunk) => total + chunk.length, 0);
+  const merged = new Float32Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return merged;
+}
+
+function resamplePcm(samples: Float32Array, sourceRate: number, targetRate: number): Float32Array {
+  if (samples.length === 0) {
+    return samples;
+  }
+
+  const ratio = sourceRate / targetRate;
+  const outputLength = Math.max(1, Math.round(samples.length / ratio));
+  const output = new Float32Array(outputLength);
+
+  for (let index = 0; index < outputLength; index += 1) {
+    const sourceIndex = index * ratio;
+    const leftIndex = Math.floor(sourceIndex);
+    const rightIndex = Math.min(samples.length - 1, leftIndex + 1);
+    const fraction = sourceIndex - leftIndex;
+    output[index] = samples[leftIndex] * (1 - fraction) + samples[rightIndex] * fraction;
+  }
+
+  return output;
 }
 
 function writeAscii(view: DataView, offset: number, value: string): void {

@@ -138,6 +138,12 @@ declare global {
       uninstallSkill: (filePath: string) => Promise<{ ok: true } | { ok: false; error: string }>;
       checkSkillUpdates: () => Promise<SkillUpdateInfo[]>;
       transcribeAudio: (audioData: Uint8Array) => Promise<AudioTranscriptionResult>;
+      startNativeDictation: () => Promise<
+        | { ok: true }
+        | { ok: false; error: { code: string; message: string; retryable: boolean } }
+      >;
+      finishNativeDictation: () => Promise<AudioTranscriptionResult>;
+      cancelNativeDictation: () => Promise<{ ok: true }>;
       getPlatform: () => string;
       onAgentLoopEvent: (listener: (event: AgentLoopEvent) => void) => () => void;
       onSchedulerNotification: (listener: (event: SchedulerNotificationEvent) => void) => () => void;

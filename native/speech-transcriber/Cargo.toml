@@ -1,0 +1,18 @@
+[package]
+name = "speech-transcriber"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pollster = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+windows = { version = "0.62.2", features = [
+  "Foundation",
+  "Foundation_Collections",
+  "Globalization",
+  "Media_SpeechRecognition",
+  "Win32_System_WinRT",
+] }
+windows-collections = "0.3.2"
+windows-future = "0.3.2"

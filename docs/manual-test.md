@@ -25,6 +25,7 @@
 5. Playwright で扱いにくい Electron 固有 UI に当たったときだけ、別途 WebdriverIO Electron Service に切り替える
 
 ## composer-native-dictation-button
+Windows note: confirm the local `System.Speech` path appends recognized text into the composer instead of showing an unsupported-platform error.
 1. macOS または Windows で `npm start -- --remote-debugging-port=9222` を起動する
 2. `npm run live-ui:manual -- 9222 wait-app` を実行し、必要なら Settings で送信可能状態にする
 3. Composer の textarea を空でない任意文字列にせず、そのままマイクボタンが送信ボタン左に表示されることを確認する

@@ -21,6 +21,7 @@ export class LiltComposer extends LitElement {
   private _compositionEndAt = 0;
   private _lastSentText = "";
   private _recorder: AudioRecorder | null = null;
+  private readonly _platform = window.lilto.getPlatform();
 
   static styles = css`
     :host {
@@ -333,6 +334,20 @@ export class LiltComposer extends LitElement {
     this._dictationStatusKind = "idle";
     this._recordingLevel = 0;
 
+    if (this._platform === "win32") {
+      const result = await window.lilto.startNativeDictation();
+      if (!result.ok) {
+        this._dictationStatus = result.error.message;
+        this._dictationStatusKind = "error";
+        return;
+      }
+
+      this._isRecording = true;
+      this._dictationStatus = "Listening...";
+      this._dictationStatusKind = "active";
+      return;
+    }
+
     try {
       this._recorder = new AudioRecorder({
         onLevel: (level) => {
@@ -353,6 +368,37 @@ export class LiltComposer extends LitElement {
   }
 
   private async _stopRecordingAndTranscribe(): Promise<void> {
+    if (this._platform === "win32") {
+      if (!this._isRecording) {
+        return;
+      }
+
+      this._isRecording = false;
+      this._isTranscribing = true;
+      this._dictationStatus = "Transcribing...";
+      this._dictationStatusKind = "active";
+
+      try {
+        const result = await window.lilto.finishNativeDictation();
+        if (!result.ok) {
+          this._dictationStatus = result.error.message;
+          this._dictationStatusKind = "error";
+          return;
+        }
+
+        this._appendTranscribedText(result.text);
+        this._dictationStatus = "";
+        this._dictationStatusKind = "idle";
+      } catch (error) {
+        this._dictationStatus = error instanceof Error ? error.message : "Transcription failed.";
+        this._dictationStatusKind = "error";
+      } finally {
+        this._isTranscribing = false;
+        this._recordingLevel = 0;
+      }
+      return;
+    }
+
     if (!this._recorder || !this._isRecording) {
       return;
     }
@@ -387,6 +433,18 @@ export class LiltComposer extends LitElement {
   }
 
   private async _cancelRecording(): Promise<void> {
+    if (this._platform === "win32") {
+      this._isRecording = false;
+      this._isTranscribing = false;
+      this._recordingLevel = 0;
+      await window.lilto.cancelNativeDictation();
+      if (this._dictationStatusKind === "active") {
+        this._dictationStatus = "";
+        this._dictationStatusKind = "idle";
+      }
+      return;
+    }
+
     if (!this._recorder) {
       this._isRecording = false;
       this._isTranscribing = false;

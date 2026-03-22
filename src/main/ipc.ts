@@ -242,6 +242,19 @@ export function registerAgentIpcHandlers({
     return await speechTranscriptionService.transcribeWav(audioData);
   });
 
+  ipcMain.handle("audio:startNativeDictation", async () => {
+    return await speechTranscriptionService.startNativeDictation();
+  });
+
+  ipcMain.handle("audio:finishNativeDictation", async () => {
+    return await speechTranscriptionService.finishNativeDictation();
+  });
+
+  ipcMain.handle("audio:cancelNativeDictation", async () => {
+    await speechTranscriptionService.cancelNativeDictation();
+    return { ok: true as const };
+  });
+
   ipcMain.handle("app:openExternal", async (_event, payload: unknown) => {
     const url = typeof payload === "object" && payload && typeof (payload as { url?: unknown }).url === "string"
       ? (payload as { url: string }).url

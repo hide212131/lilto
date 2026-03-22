@@ -161,18 +161,31 @@ export class SchedulerService implements SchedulerClient {
     if (process.env.LILTO_SCHEDULER_BIN?.trim()) {
       return process.env.LILTO_SCHEDULER_BIN.trim();
     }
-    const developmentBinary = path.join(process.cwd(), "native", "scheduler-daemon", "target", "release", executable);
+    const developmentCandidates = [
+      path.join(process.cwd(), "native", "scheduler-daemon", "bin", executable),
+      path.join(process.cwd(), "native", "scheduler-daemon", "target", "release", executable)
+    ];
+    if (process.platform === "win32") {
+      developmentCandidates.splice(
+        1,
+        0,
+        path.join(process.cwd(), "native", "scheduler-daemon", "target", "aarch64-pc-windows-msvc", "release", executable),
+        path.join(process.cwd(), "native", "scheduler-daemon", "target", "x86_64-pc-windows-msvc", "release", executable)
+      );
+    }
     const packagedBinary = path.join(process.resourcesPath, "bin", executable);
     if (process.env.NODE_ENV === "production") {
       return packagedBinary;
     }
-    if (existsSync(developmentBinary)) {
-      return developmentBinary;
+    for (const candidate of developmentCandidates) {
+      if (existsSync(candidate)) {
+        return candidate;
+      }
     }
     if (existsSync(packagedBinary)) {
       return packagedBinary;
     }
-    return developmentBinary;
+    return developmentCandidates[0];
   }
 
   private toDaemonSchedule(input: SchedulerCreateInput) {
