@@ -1,7 +1,7 @@
 import { LitElement, html, css } from "lit";
 import { live } from "lit/directives/live.js";
 import { customElement, property, state } from "lit/decorators.js";
-import type { AuthState, ActiveProvider, ProviderSettings, SkillInfo, SkillUpdateInfo } from "../types.js";
+import type { AuthState, ActiveProvider, PluginAppInfo, PluginCatalogInfo, PluginInfo, ProviderSettings, SkillInfo, SkillUpdateInfo } from "../types.js";
 import type { OAuthProviderId, WindowsSandboxMode } from "../../shared/provider-settings.js";
 import type { SchedulerScheduleSummary } from "../../shared/scheduler.js";
 
@@ -45,7 +45,8 @@ export class LiltSettingsModal extends LitElement {
       privateDesktop: true
     },
     chatSettings: {
-      enterToSend: false
+      enterToSend: false,
+      globalShortcut: ""
     },
     updatedAt: Date.now()
   };
@@ -80,7 +81,7 @@ export class LiltSettingsModal extends LitElement {
   @state() private _shortcutError = "";
 
   // Tab state
-  @state() private _activeTab: "providers" | "chat" | "skills" | "schedules" = "providers";
+  @state() private _activeTab: "providers" | "chat" | "skills" | "plugins" | "schedules" = "providers";
 
   // Skills state
   @state() private _skills: SkillInfo[] = [];
@@ -96,6 +97,14 @@ export class LiltSettingsModal extends LitElement {
   @state() private _schedulesLoading = false;
   @state() private _scheduleStatus = "";
   @state() private _deletingScheduleId: string | null = null;
+  @state() private _pluginCatalogs: PluginCatalogInfo[] = [];
+  @state() private _marketplacePlugins: PluginInfo[] = [];
+  @state() private _installedPlugins: PluginInfo[] = [];
+  @state() private _pluginsLoading = false;
+  @state() private _pluginListStatus = "";
+  @state() private _pluginActionStatus = "";
+  @state() private _pluginBusyKey: string | null = null;
+  @state() private _pluginAppsById: Record<string, PluginAppInfo[]> = {};
 
   private readonly _isMac = window.lilto.getPlatform() === "darwin";
   private readonly _isWindows = window.lilto.getPlatform() === "win32";
@@ -624,12 +633,18 @@ export class LiltSettingsModal extends LitElement {
                 class="settings-menu-item ${this._activeTab === "skills" ? "active" : ""}"
                 @click=${() => this._switchTab("skills")}
               >Agent Skills</div>
+              <div
+                class="settings-menu-item ${this._activeTab === "plugins" ? "active" : ""}"
+                @click=${() => this._switchTab("plugins")}
+              >Plugins</div>
             </div>
             <div class="settings-main">
               ${this._activeTab === "providers"
                 ? this._renderProviders()
                 : this._activeTab === "chat"
                   ? this._renderChatSection()
+                  : this._activeTab === "plugins"
+                    ? this._renderPlugins()
                   : this._activeTab === "schedules"
                     ? this._renderSchedules()
                   : this._renderSkills()}
@@ -1007,6 +1022,172 @@ export class LiltSettingsModal extends LitElement {
     `;
   }
 
+  private _renderPlugins() {
+    return html`
+      <h3>Plugins</h3>
+      <p>Codex plugin の marketplace 一覧、インストール済み一覧、install、uninstall を管理します。変更は次回の送信または新しい thread から反映されます。</p>
+
+      <section class="provider-section">
+        <h4>
+          Marketplace sources
+          <button style="margin-left: 10px; font-size: 13px; padding: 4px 10px;" @click=${() => this._loadPlugins(true)} .disabled=${this._pluginsLoading || this._pluginBusyKey !== null}>
+            ${this._pluginsLoading ? "同期中..." : "更新"}
+          </button>
+        </h4>
+        ${this._pluginCatalogs.length === 0
+          ? html`<p class="status">利用可能な marketplace はまだありません。</p>`
+          : html`
+            <table class="skills-table">
+              <thead>
+                <tr>
+                  <th>名前</th>
+                  <th>種別</th>
+                  <th>Plugin 数</th>
+                  <th>パス</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${this._pluginCatalogs.map((catalog) => html`
+                  <tr>
+                    <td><strong>${catalog.displayName}</strong></td>
+                    <td>
+                      <span class="skill-badge ${catalog.kind === "bundled" ? "bundled" : "user"}">
+                        ${catalog.kind === "bundled" ? "組み込み" : "Official curated"}
+                      </span>
+                    </td>
+                    <td>${catalog.pluginCount}</td>
+                    <td><span class="skill-filepath">${catalog.marketplacePath}</span></td>
+                  </tr>
+                `)}
+              </tbody>
+            </table>
+          `}
+      </section>
+
+      <section class="provider-section" style="margin-top: 12px;">
+        <h4>Marketplace plugins</h4>
+        ${this._marketplacePlugins.length === 0
+          ? html`<p class="status">表示できる plugin がありません。</p>`
+          : html`
+            <table class="skills-table">
+              <thead>
+                <tr>
+                  <th>Plugin</th>
+                  <th>Marketplace</th>
+                  <th>Category</th>
+                  <th>状態</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                ${this._marketplacePlugins.map((plugin) => {
+                  const busyKey = `install:${plugin.id}`;
+                  const disabled = this._pluginBusyKey !== null || plugin.installed || plugin.installPolicy !== "AVAILABLE";
+                  return html`
+                    <tr>
+                      <td>
+                        <div class="schedule-meta">
+                          <span class="schedule-title">${plugin.displayName}</span>
+                          <span class="schedule-subtle">${plugin.description ?? plugin.name}</span>
+                          <span class="schedule-subtle">ID: ${plugin.id}</span>
+                          ${plugin.featured ? html`<span class="schedule-subtle">featured</span>` : ""}
+                        </div>
+                      </td>
+                      <td>
+                        <div class="schedule-meta">
+                          <span>${plugin.marketplaceName}</span>
+                          <span class="schedule-subtle">${plugin.sourceKind === "bundled" ? "組み込み" : "Official curated"}</span>
+                        </div>
+                      </td>
+                      <td>${plugin.category ?? "-"}</td>
+                      <td>
+                        ${plugin.installed
+                          ? html`<span class="skill-badge user">インストール済み</span>`
+                          : plugin.installPolicy === "NOT_AVAILABLE"
+                            ? html`<span class="skill-badge bundled">利用不可</span>`
+                            : plugin.installPolicy === "INSTALLED_BY_DEFAULT"
+                              ? html`<span class="skill-badge bundled">標準</span>`
+                              : html`<span class="skill-badge bundled">未導入</span>`}
+                      </td>
+                      <td>
+                        <button
+                          .disabled=${disabled}
+                          @click=${() => this._installPlugin(plugin)}
+                        >${this._pluginBusyKey === busyKey ? "インストール中..." : "インストール"}</button>
+                      </td>
+                    </tr>
+                  `;
+                })}
+              </tbody>
+            </table>
+          `}
+      </section>
+
+      <section class="provider-section" style="margin-top: 12px;">
+        <h4>Installed plugins</h4>
+        ${this._installedPlugins.length === 0
+          ? html`<p class="status">インストール済み plugin はありません。</p>`
+          : html`
+            <table class="skills-table">
+              <thead>
+                <tr>
+                  <th>Plugin</th>
+                  <th>Marketplace</th>
+                  <th>有効</th>
+                  <th>導入元</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                ${this._installedPlugins.map((plugin) => {
+                  const busyKey = `uninstall:${plugin.id}`;
+                  return html`
+                    <tr>
+                      <td>
+                        <div class="schedule-meta">
+                          <span class="schedule-title">${plugin.displayName}</span>
+                          <span class="schedule-subtle">${plugin.description ?? plugin.name}</span>
+                          ${this._pluginAppsWithInstallUrl(plugin).length > 0
+                            ? html`<span class="schedule-subtle">app: ${this._pluginAppsWithInstallUrl(plugin).map((app) => app.name).join(", ")}</span>`
+                            : html``}
+                          ${this._pluginAppsNeedingAuth(plugin).length > 0
+                            ? html`<span class="schedule-subtle">接続が必要: ${this._pluginAppsNeedingAuth(plugin).map((app) => app.name).join(", ")}</span>`
+                            : html``}
+                        </div>
+                      </td>
+                      <td>${plugin.marketplaceName}</td>
+                      <td>${this._pluginAppsNeedingAuth(plugin).length > 0 ? "接続待ち" : plugin.enabled ? "yes" : "no"}</td>
+                      <td>${plugin.userInstalled ? "user-installed" : "system"}</td>
+                      <td>
+                        ${this._pluginAppsWithInstallUrl(plugin).length > 0
+                          ? html`<button .disabled=${this._pluginBusyKey !== null} @click=${() => this._connectPlugin(plugin)}>
+                              ${this._pluginBusyKey === `connect:${plugin.id}`
+                                ? "開いています..."
+                                : this._pluginAppsNeedingAuth(plugin).length > 0
+                                  ? "接続"
+                                  : "設定を開く"}
+                            </button>`
+                          : html``}
+                        ${plugin.userInstalled
+                          ? html`<button class="btn-danger" .disabled=${this._pluginBusyKey !== null} @click=${() => this._uninstallPlugin(plugin)}>
+                              ${this._pluginBusyKey === busyKey ? "削除中..." : "削除"}
+                            </button>`
+                          : this._pluginAppsWithInstallUrl(plugin).length === 0
+                            ? html`<span class="status">—</span>`
+                            : html``}
+                      </td>
+                    </tr>
+                  `;
+                })}
+              </tbody>
+            </table>
+          `}
+        ${this._pluginActionStatus ? html`<p class="status">${this._pluginActionStatus}</p>` : ""}
+        ${this._pluginListStatus ? html`<p class="status">${this._pluginListStatus}</p>` : ""}
+      </section>
+    `;
+  }
+
   private _renderSchedules() {
     return html`
       <h3>Schedules</h3>
@@ -1073,10 +1254,13 @@ export class LiltSettingsModal extends LitElement {
     `;
   }
 
-  private _switchTab(tab: "providers" | "chat" | "skills" | "schedules") {
+  private _switchTab(tab: "providers" | "chat" | "skills" | "plugins" | "schedules") {
     this._activeTab = tab;
     if (tab === "skills" && this._skills.length === 0 && !this._skillsLoading) {
       void this._loadSkills();
+    }
+    if (tab === "plugins" && this._pluginCatalogs.length === 0 && !this._pluginsLoading) {
+      void this._loadPlugins(true);
     }
     if (tab === "schedules") {
       void this._loadSchedules();
@@ -1141,6 +1325,151 @@ export class LiltSettingsModal extends LitElement {
       }
     } finally {
       this._skillsLoading = false;
+    }
+  }
+
+  private _applyPluginState(state: {
+    catalogs: PluginCatalogInfo[];
+    marketplacePlugins: PluginInfo[];
+    installedPlugins: PluginInfo[];
+    marketplaceLoadErrors: Array<{ marketplacePath: string; message: string }>;
+    remoteSyncError: string | null;
+  }) {
+    this._pluginCatalogs = state.catalogs;
+    this._marketplacePlugins = state.marketplacePlugins;
+    this._installedPlugins = state.installedPlugins;
+    const notices: string[] = [];
+    if (state.remoteSyncError) {
+      notices.push(`official curated sync error: ${state.remoteSyncError}`);
+    }
+    if (state.marketplaceLoadErrors.length > 0) {
+      notices.push(
+        ...state.marketplaceLoadErrors.map((error) => `${error.marketplacePath}: ${error.message}`)
+      );
+    }
+    this._pluginListStatus = notices.join(" / ");
+  }
+
+  private _pluginAppsNeedingAuth(plugin: PluginInfo): PluginAppInfo[] {
+    return (this._pluginAppsById[plugin.id] ?? []).filter((app) => app.needsAuth);
+  }
+
+  private _pluginAppsWithInstallUrl(plugin: PluginInfo): PluginAppInfo[] {
+    return (this._pluginAppsById[plugin.id] ?? []).filter((app) => Boolean(app.installUrl));
+  }
+
+  private async _loadPluginDetails(plugins: PluginInfo[]) {
+    const entries = await Promise.all(plugins.map(async (plugin) => {
+      const result = await window.lilto.readPlugin({
+        marketplacePath: plugin.marketplacePath,
+        pluginName: plugin.name
+      });
+      return result.ok ? [plugin.id, result.apps] as const : [plugin.id, []] as const;
+    }));
+
+    this._pluginAppsById = Object.fromEntries(entries);
+  }
+
+  private async _loadPlugins(forceRemoteSync = true) {
+    this._pluginsLoading = true;
+    this._pluginListStatus = "";
+    try {
+      const result = await window.lilto.listPlugins({ forceRemoteSync });
+      if (result.ok) {
+        this._applyPluginState(result.state);
+        await this._loadPluginDetails(result.state.installedPlugins);
+      } else {
+        if (result.state) {
+          this._applyPluginState(result.state);
+          await this._loadPluginDetails(result.state.installedPlugins);
+        }
+        this._pluginListStatus = `一覧取得エラー: ${result.error.code}: ${result.error.message}`;
+      }
+    } finally {
+      this._pluginsLoading = false;
+    }
+  }
+
+  private async _installPlugin(plugin: PluginInfo) {
+    this._pluginBusyKey = `install:${plugin.id}`;
+    this._pluginActionStatus = "";
+    try {
+      const result = await window.lilto.installPlugin({
+        marketplacePath: plugin.marketplacePath,
+        pluginName: plugin.name,
+        sourceKind: plugin.sourceKind
+      });
+      if (result.ok) {
+        this._applyPluginState(result.state);
+        await this._loadPluginDetails(result.state.installedPlugins);
+        this._pluginActionStatus = result.message ?? `${plugin.displayName} をインストールしました。`;
+      } else {
+        if (result.state) {
+          this._applyPluginState(result.state);
+          await this._loadPluginDetails(result.state.installedPlugins);
+        }
+        this._pluginActionStatus = result.error.code === "PLUGIN_AUTH_REQUIRED"
+          ? result.error.message
+          : `インストールエラー: ${result.error.code}: ${result.error.message}`;
+      }
+    } finally {
+      this._pluginBusyKey = null;
+    }
+  }
+
+  private async _connectPlugin(plugin: PluginInfo) {
+    const appsWithInstallUrl = this._pluginAppsWithInstallUrl(plugin);
+    if (appsWithInstallUrl.length === 0) {
+      this._pluginActionStatus = `${plugin.displayName} の接続または設定ページを取得できませんでした。`;
+      return;
+    }
+
+    const app = this._pluginAppsNeedingAuth(plugin).find((candidate) => candidate.installUrl) ?? appsWithInstallUrl[0];
+    if (!app.installUrl) {
+      this._pluginActionStatus = `${plugin.displayName} は接続が必要ですが、接続 URL を取得できませんでした。`;
+      return;
+    }
+
+    this._pluginBusyKey = `connect:${plugin.id}`;
+    this._pluginActionStatus = "";
+    try {
+      const result = await window.lilto.openExternalUrl(app.installUrl);
+      this._pluginActionStatus = result.ok
+        ? this._pluginAppsNeedingAuth(plugin).length > 0
+          ? `${app.name} の接続ページを開きました。承認後に「更新」で状態を再取得してください。`
+          : `${app.name} の設定ページを開きました。必要なら接続状態を確認してから「更新」を押してください。`
+        : `接続ページを開けませんでした: ${result.error.code}: ${result.error.message}`;
+    } finally {
+      this._pluginBusyKey = null;
+    }
+  }
+
+  private async _uninstallPlugin(plugin: PluginInfo) {
+    const confirmed = globalThis.confirm(`「${plugin.displayName}」を削除しますか？`);
+    if (!confirmed) {
+      return;
+    }
+
+    this._pluginBusyKey = `uninstall:${plugin.id}`;
+    this._pluginActionStatus = "";
+    try {
+      const result = await window.lilto.uninstallPlugin({
+        pluginId: plugin.id,
+        sourceKind: plugin.sourceKind
+      });
+      if (result.ok) {
+        this._applyPluginState(result.state);
+        await this._loadPluginDetails(result.state.installedPlugins);
+        this._pluginActionStatus = result.message ?? `${plugin.displayName} を削除しました。`;
+      } else {
+        if (result.state) {
+          this._applyPluginState(result.state);
+          await this._loadPluginDetails(result.state.installedPlugins);
+        }
+        this._pluginActionStatus = `削除エラー: ${result.error.code}: ${result.error.message}`;
+      }
+    } finally {
+      this._pluginBusyKey = null;
     }
   }
 

@@ -24,6 +24,63 @@ export type SkillUpdateInfo = {
   updateAvailable: boolean;
 };
 
+export type PluginCatalogSourceKind = "official-curated" | "bundled";
+
+export type PluginCatalogInfo = {
+  kind: PluginCatalogSourceKind;
+  name: string;
+  displayName: string;
+  marketplacePath: string;
+  pluginCount: number;
+};
+
+export type PluginInfo = {
+  id: string;
+  name: string;
+  displayName: string;
+  description: string | null;
+  marketplaceName: string;
+  marketplacePath: string;
+  sourceKind: PluginCatalogSourceKind;
+  sourcePath: string | null;
+  installed: boolean;
+  enabled: boolean;
+  installPolicy: "NOT_AVAILABLE" | "AVAILABLE" | "INSTALLED_BY_DEFAULT";
+  authPolicy: "ON_INSTALL" | "ON_USE";
+  category: string | null;
+  capabilities: string[];
+  featured: boolean;
+  installedVersion: string | null;
+  installedAt: number | null;
+  userInstalled: boolean;
+};
+
+export type PluginAppInfo = {
+  id: string;
+  name: string;
+  description: string | null;
+  installUrl: string | null;
+  needsAuth: boolean;
+};
+
+export type PluginReadInfo = {
+  plugin: PluginInfo;
+  apps: PluginAppInfo[];
+};
+
+export type PluginMarketplaceLoadError = {
+  marketplacePath: string;
+  message: string;
+};
+
+export type PluginListState = {
+  catalogs: PluginCatalogInfo[];
+  marketplacePlugins: PluginInfo[];
+  installedPlugins: PluginInfo[];
+  marketplaceLoadErrors: PluginMarketplaceLoadError[];
+  remoteSyncError: string | null;
+};
+
 export type AuthPhase =
   | "unauthenticated"
   | "auth_in_progress"
@@ -133,6 +190,26 @@ declare global {
       deleteSchedule: (id: string) => Promise<
         | { ok: true }
         | { ok: false; error: { code: string; message: string } }
+      >;
+      listPlugins: (payload?: { forceRemoteSync?: boolean }) => Promise<
+        | { ok: true; state: PluginListState; message?: string }
+        | { ok: false; error: { code: string; message: string }; state?: PluginListState }
+      >;
+      readPlugin: (payload: { marketplacePath: string; pluginName: string }) => Promise<
+        | { ok: true; plugin: PluginInfo; apps: PluginAppInfo[] }
+        | { ok: false; error: { code: string; message: string } }
+      >;
+      installPlugin: (payload: {
+        marketplacePath: string;
+        pluginName: string;
+        sourceKind: PluginCatalogSourceKind;
+      }) => Promise<
+        | { ok: true; state: PluginListState; message?: string }
+        | { ok: false; error: { code: string; message: string }; state?: PluginListState }
+      >;
+      uninstallPlugin: (payload: { pluginId: string; sourceKind?: PluginCatalogSourceKind }) => Promise<
+        | { ok: true; state: PluginListState; message?: string }
+        | { ok: false; error: { code: string; message: string }; state?: PluginListState }
       >;
       setupWindowsSandbox: (
         payload: { mode: "unelevated" | "elevated" }

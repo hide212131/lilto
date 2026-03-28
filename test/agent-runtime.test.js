@@ -246,6 +246,32 @@ test("同じ conversationId は thread.started 後の session を再利用する
   assert.equal(calls[0].schedulerSessionId, "conv-1");
 });
 
+test("refreshPlugins 後は次回送信で session を再作成する", async () => {
+  let sessionCount = 0;
+  const runtime = new AgentRuntime({
+    authService: createAuthService("authenticated"),
+    createSession: async () => {
+      sessionCount += 1;
+      return {
+        id: `thread-${sessionCount}`,
+        async runStreamed() {
+          async function* stream() {
+            yield { type: "item.completed", item: { id: "m1", type: "agent_message", text: "done" } };
+          }
+          return { events: stream() };
+        }
+      };
+    },
+    logger: { info() {}, error() {} }
+  });
+
+  await runtime.submitPrompt("first", createProviderSettings(), { requestId: "req-1", conversationId: "conv-1" });
+  runtime.refreshPlugins();
+  await runtime.submitPrompt("second", createProviderSettings(), { requestId: "req-2", conversationId: "conv-1" });
+
+  assert.equal(sessionCount, 2);
+});
+
 test("タイマー依頼は cron 使用ルールを内部 prompt に補強する", async () => {
   let receivedInput = null;
   const runtime = new AgentRuntime({

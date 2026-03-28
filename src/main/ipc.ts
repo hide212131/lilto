@@ -10,6 +10,8 @@ import type { ModelCatalogService } from "./model-catalog";
 import type { SchedulerClient } from "./scheduler";
 import type { SpeechTranscriptionService } from "./speech-transcription";
 import type { WindowsSandboxSetupService } from "./windows-sandbox-setup";
+import type { PluginService, PluginCatalogSourceKind } from "./plugin-service";
+import { normalizePluginMentionsForPrompt } from "./plugin-mentions";
 import { checkSkillUpdates, installSkillFromSource, installSkillFromUrl, listSkillsWithSource, uninstallUserSkill } from "./skill-runtime";
 import type { AgentLoopEvent } from "../shared/agent-loop";
 
@@ -26,6 +28,19 @@ function broadcastLoopEvent(event: AgentLoopEvent): void {
   }
 }
 
+async function normalizePromptPluginMentions(text: string, pluginService: PluginService): Promise<string> {
+  if (!text.includes("@")) {
+    return text;
+  }
+
+  const plugins = await pluginService.listPlugins({ forceRemoteSync: false });
+  if (!plugins.ok) {
+    return text;
+  }
+
+  return normalizePluginMentionsForPrompt(text, plugins.state.marketplacePlugins);
+}
+
 export function registerAgentIpcHandlers({
   agentRuntime,
   authService,
@@ -36,6 +51,7 @@ export function registerAgentIpcHandlers({
   codexHomeDir,
   notificationService,
   scheduler,
+  pluginService,
   modelCatalogService,
   speechTranscriptionService,
   windowsSandboxSetupService,
@@ -50,6 +66,7 @@ export function registerAgentIpcHandlers({
   codexHomeDir: string;
   notificationService: NotificationService;
   scheduler: SchedulerClient;
+  pluginService: PluginService;
   modelCatalogService: ModelCatalogService;
   speechTranscriptionService: SpeechTranscriptionService;
   windowsSandboxSetupService: WindowsSandboxSetupService;
@@ -65,6 +82,10 @@ export function registerAgentIpcHandlers({
     agentRuntime.refreshSkills(latestSkills);
   };
 
+  const refreshAgentPlugins = () => {
+    agentRuntime.refreshPlugins();
+  };
+
   ipcMain.handle("agent:submitPrompt", async (_event, payload: unknown) => {
     const validation = validatePrompt(payload);
     if (!validation.ok) {
@@ -72,11 +93,12 @@ export function registerAgentIpcHandlers({
       return { ok: false, error: validation };
     }
 
-    const text = (payload as { text: string }).text;
+    const originalText = (payload as { text: string }).text;
     const conversationId =
       typeof (payload as { conversationId?: unknown }).conversationId === "string"
         ? (payload as { conversationId: string }).conversationId
         : undefined;
+    const text = await normalizePromptPluginMentions(originalText, pluginService);
     const requestId = randomUUID();
     broadcastLoopEvent({ type: "run_start", requestId });
     try {
@@ -109,7 +131,7 @@ export function registerAgentIpcHandlers({
 
       return {
         ok: true,
-        request: { text },
+        request: { text: originalText },
         response: { text: result.text }
       };
     } catch (error) {
@@ -363,5 +385,118 @@ export function registerAgentIpcHandlers({
 
   ipcMain.handle("skills:checkUpdates", async () => {
     return checkSkillUpdates({ userSkillsDir, bundledSkillsDir });
+  });
+
+  ipcMain.handle("plugins:list", async (_event, payload: unknown) => {
+    const forceRemoteSync = Boolean(
+      payload &&
+      typeof payload === "object" &&
+      typeof (payload as { forceRemoteSync?: unknown }).forceRemoteSync === "boolean" &&
+      (payload as { forceRemoteSync: boolean }).forceRemoteSync
+    );
+    return await pluginService.listPlugins({ forceRemoteSync });
+  });
+
+  ipcMain.handle("plugins:read", async (_event, payload: unknown) => {
+    if (!payload || typeof payload !== "object") {
+      return {
+        ok: false as const,
+        error: { code: "INVALID_REQUEST", message: "payload が必須です" }
+      };
+    }
+
+    const marketplacePath = typeof (payload as { marketplacePath?: unknown }).marketplacePath === "string"
+      ? (payload as { marketplacePath: string }).marketplacePath
+      : null;
+    const pluginName = typeof (payload as { pluginName?: unknown }).pluginName === "string"
+      ? (payload as { pluginName: string }).pluginName
+      : null;
+
+    if (!marketplacePath || !pluginName) {
+      return {
+        ok: false as const,
+        error: {
+          code: "INVALID_REQUEST",
+          message: "marketplacePath, pluginName は必須です"
+        }
+      };
+    }
+
+    return await pluginService.readPlugin({ marketplacePath, pluginName });
+  });
+
+  ipcMain.handle("plugins:install", async (_event, payload: unknown) => {
+    if (!payload || typeof payload !== "object") {
+      return {
+        ok: false as const,
+        error: { code: "INVALID_REQUEST", message: "payload が必須です" }
+      };
+    }
+
+    const marketplacePath = typeof (payload as { marketplacePath?: unknown }).marketplacePath === "string"
+      ? (payload as { marketplacePath: string }).marketplacePath
+      : null;
+    const pluginName = typeof (payload as { pluginName?: unknown }).pluginName === "string"
+      ? (payload as { pluginName: string }).pluginName
+      : null;
+    const sourceKind = (payload as { sourceKind?: unknown }).sourceKind === "bundled"
+      ? "bundled"
+      : (payload as { sourceKind?: unknown }).sourceKind === "official-curated"
+        ? "official-curated"
+        : null;
+
+    if (!marketplacePath || !pluginName || !sourceKind) {
+      return {
+        ok: false as const,
+        error: {
+          code: "INVALID_REQUEST",
+          message: "marketplacePath, pluginName, sourceKind は必須です"
+        }
+      };
+    }
+
+    const result = await pluginService.installPlugin({
+      marketplacePath,
+      pluginName,
+      sourceKind: sourceKind as PluginCatalogSourceKind
+    });
+    if (result.ok) {
+      refreshAgentPlugins();
+    }
+    return result;
+  });
+
+  ipcMain.handle("plugins:uninstall", async (_event, payload: unknown) => {
+    if (!payload || typeof payload !== "object") {
+      return {
+        ok: false as const,
+        error: { code: "INVALID_REQUEST", message: "payload が必須です" }
+      };
+    }
+
+    const pluginId = typeof (payload as { pluginId?: unknown }).pluginId === "string"
+      ? (payload as { pluginId: string }).pluginId
+      : null;
+    const sourceKind = (payload as { sourceKind?: unknown }).sourceKind === "bundled"
+      ? "bundled"
+      : (payload as { sourceKind?: unknown }).sourceKind === "official-curated"
+        ? "official-curated"
+        : undefined;
+
+    if (!pluginId) {
+      return {
+        ok: false as const,
+        error: { code: "INVALID_REQUEST", message: "pluginId は必須です" }
+      };
+    }
+
+    const result = await pluginService.uninstallPlugin({
+      pluginId,
+      sourceKind: sourceKind as PluginCatalogSourceKind | undefined
+    });
+    if (result.ok) {
+      refreshAgentPlugins();
+    }
+    return result;
   });
 }

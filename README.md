@@ -45,6 +45,7 @@ PC作業を人間の代わりに実行する、軽量なAIアシスタント。
 - Electron の Main/Renderer 最小構成
 - Renderer から Main への IPC 経由で Codex runtime を呼び出す Agent Bridge
 - Codex の ChatGPT OAuth 認証と API key 認証の導線（外部ブラウザ起動 / `codex login` / 状態表示）
+- Settings の `Agent Skills` / `Plugins` タブから Codex skill と plugin marketplace を管理する導線
 - 固定間隔ハートビートと登録ジョブ実行
 - エラーの標準化レスポンスとログ出力
 

@@ -99,3 +99,12 @@ Windows note: confirm the local `System.Speech` path appends recognized text int
    - raw device access が拒否される
 4. `unelevated` を試す場合は PowerShell で `$env:LILTO_WINDOWS_SANDBOX_MODE='unelevated'` を設定してから同じコマンドを実行する
 5. PowerShell の絶対パス書き込みや ADS のような追加ケースは、この live test の成功条件には含めない。現在の保証範囲は [docs/windows-sandbox-security-policy.md](c:\Users\hide\lilto\docs\windows-sandbox-security-policy.md) を基準に確認する
+
+## plugin-management
+1. `npm start -- --remote-debugging-port=9222` でアプリを起動する
+2. `npm run live-ui:manual -- 9222 wait-app` を実行し、`npm run live-ui:manual -- 9222 open-settings` で Settings を開く
+3. `npm run live-ui:manual -- 9222 click "text=Plugins"` を実行し、`Plugins` タブへ切り替える
+4. `npm run live-ui:manual -- 9222 text "text=Marketplace plugins"` が取得できることを確認する
+5. `npm run live-ui:manual -- 9222 text "text=Installed plugins"` が取得できることを確認する
+6. `npm run live-ui:manual -- 9222 click "text=更新"` を実行し、一覧取得後もモーダルが閉じずに状態文言が更新されることを確認する
+7. `test/artifacts/live-ui-manual-plugins.png` へスクリーンショットを保存し、`Plugins` タブの一覧が見えていることを確認する

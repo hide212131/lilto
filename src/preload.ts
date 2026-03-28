@@ -24,6 +24,13 @@ contextBridge.exposeInMainWorld("lilto", {
     | { ok: true }
     | { ok: false; error: { code: string; message: string } }
   > => ipcRenderer.invoke("scheduler:delete", { id }),
+  listPlugins: async (payload?: { forceRemoteSync?: boolean }) => ipcRenderer.invoke("plugins:list", payload ?? {}),
+  readPlugin: async (payload: { marketplacePath: string; pluginName: string }) =>
+    ipcRenderer.invoke("plugins:read", payload),
+  installPlugin: async (payload: { marketplacePath: string; pluginName: string; sourceKind: "official-curated" | "bundled" }) =>
+    ipcRenderer.invoke("plugins:install", payload),
+  uninstallPlugin: async (payload: { pluginId: string; sourceKind?: "official-curated" | "bundled" }) =>
+    ipcRenderer.invoke("plugins:uninstall", payload),
   setupWindowsSandbox: async (payload: unknown) => ipcRenderer.invoke("windowsSandbox:setup", payload),
   listSkills: async () => ipcRenderer.invoke("skills:list"),
   installSkill: async (url: string) => ipcRenderer.invoke("skills:install", { url }),

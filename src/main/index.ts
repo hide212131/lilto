@@ -12,6 +12,7 @@ import { createLogger } from "./logger";
 import { NotificationService } from "./notifications";
 import { ProviderSettingsService } from "./provider-settings";
 import { ModelCatalogService } from "./model-catalog";
+import { CodexPluginService } from "./plugin-service";
 import { SchedulerService } from "./scheduler";
 import { SchedulerUnavailableError } from "./scheduler";
 import { SchedulerBridgeServer } from "./scheduler-bridge";
@@ -193,6 +194,12 @@ if (hasSingleInstanceLock) {
       logger: createLogger("models"),
       codexHomeDir: skillRuntime.codexHomeDir
     });
+    const pluginService = new CodexPluginService({
+      logger: createLogger("plugins"),
+      workspaceDir: skillRuntime.workspaceDir,
+      homeDir: skillRuntime.homeDir,
+      codexHomeDir: skillRuntime.codexHomeDir
+    });
     const windowsSandboxSetupService = new WindowsSandboxSetupService({
       logger: createLogger("windows-sandbox-setup"),
       codexHomeDir: skillRuntime.codexHomeDir,
@@ -216,6 +223,7 @@ if (hasSingleInstanceLock) {
       providerSettingsService,
       notificationService,
       scheduler,
+      pluginService,
       modelCatalogService,
       speechTranscriptionService,
       windowsSandboxSetupService,

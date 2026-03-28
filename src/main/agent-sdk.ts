@@ -558,6 +558,10 @@ export class AgentRuntime {
     this.invalidateSession();
   }
 
+  refreshPlugins(): void {
+    this.invalidateSession();
+  }
+
   refreshProviderSettings(): void {
     this.invalidateSession();
   }

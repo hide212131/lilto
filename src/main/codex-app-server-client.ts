@@ -37,6 +37,7 @@ export class CodexAppServerClient {
 
   constructor(
     private readonly options: {
+      homeDir?: string;
       codexHomeDir: string;
       codexCommand?: string;
       logger?: Logger;
@@ -57,6 +58,10 @@ export class CodexAppServerClient {
       env: {
         ...process.env,
         ...(invocation.env ?? {}),
+        ...(this.options.homeDir ? {
+          HOME: this.options.homeDir,
+          USERPROFILE: this.options.homeDir
+        } : {}),
         CODEX_HOME: this.options.codexHomeDir
       },
       stdio: ["pipe", "pipe", "pipe"]
