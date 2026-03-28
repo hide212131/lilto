@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { AgentLoopEvent } from "./shared/agent-loop";
 import type { AudioTranscriptionResult } from "./shared/audio-transcription";
-import type { SchedulerNotificationEvent } from "./shared/scheduler";
+import type { SchedulerNotificationEvent, SchedulerScheduleSummary } from "./shared/scheduler";
 
 const AGENT_LOOP_EVENT_CHANNEL = "agent:loopEvent";
 const SCHEDULER_NOTIFICATION_CHANNEL = "scheduler:notification";
@@ -16,6 +16,14 @@ contextBridge.exposeInMainWorld("lilto", {
   listModels: async (payload: unknown) => ipcRenderer.invoke("models:list", payload),
   getProviderSettings: async () => ipcRenderer.invoke("providers:getSettings"),
   saveProviderSettings: async (settings: unknown) => ipcRenderer.invoke("providers:saveSettings", settings),
+  listSchedules: async (): Promise<
+    | { ok: true; schedules: SchedulerScheduleSummary[] }
+    | { ok: false; error: { code: string; message: string } }
+  > => ipcRenderer.invoke("scheduler:list"),
+  deleteSchedule: async (id: string): Promise<
+    | { ok: true }
+    | { ok: false; error: { code: string; message: string } }
+  > => ipcRenderer.invoke("scheduler:delete", { id }),
   setupWindowsSandbox: async (payload: unknown) => ipcRenderer.invoke("windowsSandbox:setup", payload),
   listSkills: async () => ipcRenderer.invoke("skills:list"),
   installSkill: async (url: string) => ipcRenderer.invoke("skills:install", { url }),

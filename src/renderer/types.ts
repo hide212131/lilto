@@ -1,7 +1,7 @@
 import type { AgentLoopEvent } from "../shared/agent-loop.js";
 import type { AudioTranscriptionResult } from "../shared/audio-transcription.js";
 import type { ActiveProvider, OAuthProviderId, ProviderSettings } from "../shared/provider-settings.js";
-import type { SchedulerNotificationEvent } from "../shared/scheduler.js";
+import type { SchedulerNotificationEvent, SchedulerScheduleSummary } from "../shared/scheduler.js";
 
 export type SkillSource = "bundled" | "user";
 
@@ -124,6 +124,14 @@ declare global {
         settings: ProviderSettings
       ) => Promise<
         | { ok: true; state: ProviderSettings }
+        | { ok: false; error: { code: string; message: string } }
+      >;
+      listSchedules: () => Promise<
+        | { ok: true; schedules: SchedulerScheduleSummary[] }
+        | { ok: false; error: { code: string; message: string } }
+      >;
+      deleteSchedule: (id: string) => Promise<
+        | { ok: true }
         | { ok: false; error: { code: string; message: string } }
       >;
       setupWindowsSandbox: (

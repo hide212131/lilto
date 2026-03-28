@@ -27,6 +27,9 @@ test("settings-modal が ChatGPT login を先に出し、Model 選択 UI を持�
   assert.match(content, /if \(!this\._oauthModelId\.trim\(\) && result\.models\[0\]\)/);
   assert.match(content, /if \(!this\._customModelId\.trim\(\) && result\.models\[0\]\)/);
   assert.match(content, /class="checkbox-card"/);
+  assert.match(content, />Schedules<\/div>/);
+  assert.match(content, /this\._activeTab === "schedules"/);
+  assert.match(content, /private _renderSchedules\(\)/);
   assert.doesNotMatch(content, /Runtime/);
   assert.doesNotMatch(content, /id="auth-code"/);
   assert.doesNotMatch(content, /_submitCode/);

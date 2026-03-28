@@ -27,7 +27,7 @@ const toolSchema = {
     title: { type: "string", description: "Human-readable label for the schedule" },
     kind: { type: "string", enum: ["one_shot", "cron"], description: "Low-level schedule kind. Required only for create/update." },
     runAt: { type: "string", description: "Low-level RFC3339 timestamp for one-shot schedules. Use only with create/update." },
-    cronExpr: { type: "string", description: "Low-level 6-field cron expression. Use only with create/update." },
+    cronExpr: { type: "string", description: "Low-level cron expression. 5-field input is accepted and normalized to the daemon's 6-field format. Use only with create/update." },
     timezone: { type: "string", description: "IANA timezone, e.g. Asia/Tokyo" },
     notificationMessage: { type: "string", description: "Message delivered when the schedule fires" },
     followUpInstruction: { type: "string", description: "Optional concrete action for the AI to continue after the notification fires" },

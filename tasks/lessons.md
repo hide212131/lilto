@@ -1,5 +1,14 @@
 # Lessons
 
+## 2026-03-28
+
+| 変更内容 | ミス/課題 | 再発防止ルール |
+|---|---|---|
+| `manage-cron-schedules-in-settings` の OpenSpec proposal/design/specs/tasks を新規作成し、Settings から schedule 一覧確認と削除を行う境界を整理した。 | Settings 画面の機能追加で既存タブへ何でも押し込む前提にすると、provider 設定・運用管理・ランタイム操作の責務が混ざり、proposal の capability と design の IPC 境界がぶれやすい。 | Settings に新しい運用機能を足す OpenSpec では、最初に「既存タブへ統合するのか」「独立タブにするのか」を決め、UI 導線と Main/preload IPC の責務を proposal と design の両方で明示する。 |
+| `manage-cron-schedules-in-settings` の apply で Settings の `Schedules` タブを実装し、ライブ UI で一覧表示と再取得を確認した。 | GUI 変更後の最終 E2E が失敗するとき、変更箇所を疑ってすぐ実装へ戻ると、今回のような既存 dictation ステータス文言の期待値ずれまで自分の差分として抱え込みやすい。 | GUI change の最終 E2E が失敗したら、まず失敗アサーションの期待文字列を現行 UI 実装の文字列と照合し、「今回の変更範囲」か「既存回帰/既存テストずれ」かを切り分けてから対応方針を決める。 |
+| `1分ごとに「こんちは！」と言って` のような要求で model が低水準 `create` に 5 フィールド cron (`*/1 * * * *`) を渡し、scheduler daemon が 6 フィールド前提で拒否する不具合を修正した。 | tool schema に 6 フィールドと書いていても、LLM は一般的な 5 フィールド cron を自然に出しやすい。低水準 API を「そのまま通す」実装だと、daemon 側の厳密仕様との差で実用上の失敗が出る。 | LLM が cron 式を直接出しうる tool では、バックエンドが要求する cron 方言を tool 側で正規化する。特に 5 フィールドと 6 フィールドの差は model 任せにせず、受け口で吸収して回帰テストを追加する。 |
+| `manage-cron-schedules-in-settings` の最終 E2E で proxy 必須シナリオを通すため、Electron 起動環境に lowercase の `http_proxy` / `https_proxy` を渡し、`no_proxy` も明示的に空へ揃えた。 | Proxy 系の実装やテストは uppercase 環境変数だけ見れば十分と思い込みやすいが、実ランタイムや依存は lowercase を優先することがあり、`NO_PROXY` だけ空にしても localhost が bypass されて E2E が偽失敗する。 | Proxy 必須テストや実装で環境変数を上書きするときは、`HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` だけでなく lowercase の `http_proxy` / `https_proxy` / `no_proxy` も同時に揃える。特に bypass 無効化は uppercase・lowercase の両方を空へ固定してから検証する。 |
+
 ## 2026-03-22
 
 | 変更内容 | ミス/課題 | 再発防止ルール |

@@ -143,6 +143,26 @@ test("cron tool create は低水準 API をフォールバックとして残す"
   assert.equal(schedulerDouble.received.notification.sessionId, "session-c");
 });
 
+test("cron tool create は 5 field cron を 6 field へ正規化する", async () => {
+  const schedulerDouble = createSchedulerDouble();
+  const tool = await createCronTool({
+    scheduler: schedulerDouble.scheduler,
+    logger: { info() {}, error() {} }
+  });
+
+  await tool.execute("call-4b", {
+    operation: "create",
+    title: "毎分こんちは",
+    kind: "cron",
+    cronExpr: "*/1 * * * *",
+    timezone: "Asia/Tokyo"
+  }, undefined, undefined, createCtx("session-d"));
+
+  assert.equal(schedulerDouble.received.kind, "cron");
+  assert.equal(schedulerDouble.received.cronExpr, "0 */1 * * * *");
+  assert.equal(schedulerDouble.received.notification.sessionId, "session-d");
+});
+
 test("cron tool list はデフォルトで現在 session の予定だけ返す", async () => {
   const tool = await createCronTool({
     scheduler: {

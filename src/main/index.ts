@@ -215,6 +215,7 @@ if (hasSingleInstanceLock) {
       authService,
       providerSettingsService,
       notificationService,
+      scheduler,
       modelCatalogService,
       speechTranscriptionService,
       windowsSandboxSetupService,

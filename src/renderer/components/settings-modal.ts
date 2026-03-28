@@ -3,6 +3,7 @@ import { live } from "lit/directives/live.js";
 import { customElement, property, state } from "lit/decorators.js";
 import type { AuthState, ActiveProvider, ProviderSettings, SkillInfo, SkillUpdateInfo } from "../types.js";
 import type { OAuthProviderId, WindowsSandboxMode } from "../../shared/provider-settings.js";
+import type { SchedulerScheduleSummary } from "../../shared/scheduler.js";
 
 type ListedModel = {
   id: string;
@@ -79,7 +80,7 @@ export class LiltSettingsModal extends LitElement {
   @state() private _shortcutError = "";
 
   // Tab state
-  @state() private _activeTab: "providers" | "chat" | "skills" = "providers";
+  @state() private _activeTab: "providers" | "chat" | "skills" | "schedules" = "providers";
 
   // Skills state
   @state() private _skills: SkillInfo[] = [];
@@ -91,6 +92,10 @@ export class LiltSettingsModal extends LitElement {
   @state() private _skillUpdates: SkillUpdateInfo[] = [];
   @state() private _skillUpdatesChecking = false;
   @state() private _skillUpdatesChecked = false;
+  @state() private _schedules: SchedulerScheduleSummary[] = [];
+  @state() private _schedulesLoading = false;
+  @state() private _scheduleStatus = "";
+  @state() private _deletingScheduleId: string | null = null;
 
   private readonly _isMac = window.lilto.getPlatform() === "darwin";
   private readonly _isWindows = window.lilto.getPlatform() === "win32";
@@ -462,6 +467,24 @@ export class LiltSettingsModal extends LitElement {
       background: #d1fae5;
       color: #065f46;
     }
+    .schedule-meta {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 180px;
+    }
+    .schedule-title {
+      font-weight: 700;
+      color: #111827;
+    }
+    .schedule-subtle {
+      color: #6b7280;
+      font-size: 12px;
+      word-break: break-word;
+    }
+    .schedule-action {
+      white-space: nowrap;
+    }
     .skill-filepath {
       font-family: monospace;
       font-size: 11px;
@@ -594,6 +617,10 @@ export class LiltSettingsModal extends LitElement {
                 @click=${() => this._switchTab("chat")}
               >Chat</div>
               <div
+                class="settings-menu-item ${this._activeTab === "schedules" ? "active" : ""}"
+                @click=${() => this._switchTab("schedules")}
+              >Schedules</div>
+              <div
                 class="settings-menu-item ${this._activeTab === "skills" ? "active" : ""}"
                 @click=${() => this._switchTab("skills")}
               >Agent Skills</div>
@@ -603,6 +630,8 @@ export class LiltSettingsModal extends LitElement {
                 ? this._renderProviders()
                 : this._activeTab === "chat"
                   ? this._renderChatSection()
+                  : this._activeTab === "schedules"
+                    ? this._renderSchedules()
                   : this._renderSkills()}
             </div>
           </div>
@@ -978,10 +1007,125 @@ export class LiltSettingsModal extends LitElement {
     `;
   }
 
-  private _switchTab(tab: "providers" | "chat" | "skills") {
+  private _renderSchedules() {
+    return html`
+      <h3>Schedules</h3>
+      <p>現在設定されている cron スケジュールを確認し、不要な予定を削除できます。</p>
+
+      <section class="provider-section active">
+        <h4>
+          スケジュール一覧
+          <button style="margin-left: 10px; font-size: 13px; padding: 4px 10px;" @click=${this._loadSchedules} .disabled=${this._schedulesLoading || this._deletingScheduleId !== null}>
+            ${this._schedulesLoading ? "読み込み中..." : "更新"}
+          </button>
+        </h4>
+        ${this._schedulesLoading
+          ? html`<p class="status">読み込み中...</p>`
+          : this._schedules.length === 0 && !this._scheduleStatus
+            ? html`<p class="status">現在有効なスケジュールはありません。</p>`
+            : this._schedules.length > 0
+              ? html`
+                <table class="skills-table">
+                  <thead>
+                    <tr>
+                      <th>Schedule</th>
+                      <th>種別</th>
+                      <th>次回実行 / 条件</th>
+                      <th>通知</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${this._schedules.map((schedule) => html`
+                      <tr>
+                        <td>
+                          <div class="schedule-meta">
+                            <span class="schedule-title">${schedule.title?.trim() || schedule.id}</span>
+                            <span class="schedule-subtle">ID: ${schedule.id}</span>
+                            <span class="schedule-subtle">sessionId: ${schedule.sessionId}</span>
+                          </div>
+                        </td>
+                        <td>${schedule.kind === "one_shot" ? "One-shot" : "Recurring"}</td>
+                        <td>${this._formatScheduleTiming(schedule)}</td>
+                        <td>
+                          <div class="schedule-meta">
+                            <span>${schedule.notificationMessage}</span>
+                            ${schedule.followUpInstruction
+                              ? html`<span class="schedule-subtle">follow-up: ${schedule.followUpInstruction}</span>`
+                              : html``}
+                          </div>
+                        </td>
+                        <td class="schedule-action">
+                          <button
+                            class="btn-danger"
+                            .disabled=${this._deletingScheduleId !== null}
+                            @click=${() => this._deleteSchedule(schedule.id, schedule.title?.trim() || schedule.id)}
+                          >${this._deletingScheduleId === schedule.id ? "削除中..." : "削除"}</button>
+                        </td>
+                      </tr>
+                    `)}
+                  </tbody>
+                </table>
+              `
+              : html``}
+        ${this._scheduleStatus ? html`<p class="status">${this._scheduleStatus}</p>` : ""}
+      </section>
+    `;
+  }
+
+  private _switchTab(tab: "providers" | "chat" | "skills" | "schedules") {
     this._activeTab = tab;
     if (tab === "skills" && this._skills.length === 0 && !this._skillsLoading) {
       void this._loadSkills();
+    }
+    if (tab === "schedules") {
+      void this._loadSchedules();
+    }
+  }
+
+  private _formatScheduleTiming(schedule: SchedulerScheduleSummary): string {
+    if (schedule.nextRunAt) {
+      return schedule.nextRunAt;
+    }
+    if (schedule.kind === "one_shot") {
+      return schedule.runAt ?? "未設定";
+    }
+    return schedule.cronExpr ? `${schedule.cronExpr} (${schedule.timezone})` : `cron 未設定 (${schedule.timezone})`;
+  }
+
+  private async _loadSchedules() {
+    this._schedulesLoading = true;
+    this._scheduleStatus = "";
+    try {
+      const result = await window.lilto.listSchedules();
+      if (result.ok) {
+        this._schedules = result.schedules;
+      } else {
+        this._schedules = [];
+        this._scheduleStatus = `一覧取得エラー: ${result.error.code}: ${result.error.message}`;
+      }
+    } finally {
+      this._schedulesLoading = false;
+    }
+  }
+
+  private async _deleteSchedule(id: string, label: string) {
+    const confirmed = globalThis.confirm(`「${label}」を削除しますか？`);
+    if (!confirmed) {
+      return;
+    }
+
+    this._deletingScheduleId = id;
+    try {
+      const result = await window.lilto.deleteSchedule(id);
+      if (!result.ok) {
+        this._scheduleStatus = `削除エラー: ${result.error.code}: ${result.error.message}`;
+        return;
+      }
+      await this._loadSchedules();
+      this._scheduleStatus = `スケジュール ${id} を削除しました。`;
+    } finally {
+      this._deletingScheduleId = null;
     }
   }
 

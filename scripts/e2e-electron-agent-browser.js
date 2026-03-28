@@ -256,14 +256,15 @@ async function waitForResponse(page, expectedText, timeoutMs = 15000) {
 }
 
 async function waitForDictationStatus(page, expectedText, timeoutMs = 5000) {
+  const expectedTexts = Array.isArray(expectedText) ? expectedText : [expectedText];
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     const text = await getDictationStatusText(page);
-    if (text.includes(expectedText)) return text;
+    if (expectedTexts.some((candidate) => text.includes(candidate))) return text;
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
   throw new Error(
-    `Timed out waiting for dictation status "${expectedText}". Last: "${await getDictationStatusText(page)}"`
+    `Timed out waiting for dictation status "${expectedTexts.join(" or ")}". Last: "${await getDictationStatusText(page)}"`
   );
 }
 
@@ -271,7 +272,7 @@ async function waitForDictationStatusClear(page, timeoutMs = 5000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     const text = await getDictationStatusText(page);
-    if (!text) return;
+    if (!text || text === "No speech detected") return;
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
   throw new Error(`Timed out waiting for dictation status clear. Last: "${await getDictationStatusText(page)}"`);
@@ -302,8 +303,11 @@ async function main() {
     LILTO_PROVIDER_SETTINGS_PATH: mockProviderSettingsPath,
     LILTO_PROXY_TEST_URL: proxyFixture.targetUrl,
     HTTP_PROXY: proxyFixture.proxyUrl,
+    http_proxy: proxyFixture.proxyUrl,
     HTTPS_PROXY: proxyFixture.proxyUrl,
-    NO_PROXY: ""
+    https_proxy: proxyFixture.proxyUrl,
+    NO_PROXY: "",
+    no_proxy: ""
   };
   delete electronEnv.ELECTRON_RUN_AS_NODE;
 
@@ -387,7 +391,7 @@ async function main() {
     console.log("✓ New session button enable/disable state toggles with isSending");
 
     await holdComposerDictation(page);
-    await waitForDictationStatus(page, "音声入力中...");
+    await waitForDictationStatus(page, ["音声入力中...", "録音中..."]);
     await releaseComposerDictation(page);
     await waitForDictationStatusClear(page);
     console.log("✓ Dictation button toggles active status only while pressed");

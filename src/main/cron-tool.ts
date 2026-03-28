@@ -70,7 +70,7 @@ export async function createCronTool({
         title: { type: "string", description: "Human-readable label for the schedule" },
         kind: { type: "string", enum: ["one_shot", "cron"], description: "Low-level schedule kind. Required only for create/update." },
         runAt: { type: "string", description: "Low-level RFC3339 timestamp for one-shot schedules. Use only with create/update." },
-        cronExpr: { type: "string", description: "Low-level 6-field cron expression. Use only with create/update." },
+        cronExpr: { type: "string", description: "Low-level cron expression. 5-field input is accepted and normalized to the daemon's 6-field format. Use only with create/update." },
         timezone: { type: "string", description: "IANA timezone, e.g. Asia/Tokyo" },
         notificationMessage: { type: "string", description: "Message delivered when the schedule fires" },
         followUpInstruction: { type: "string", description: "Optional concrete action for the AI to continue after the notification fires" },
@@ -277,12 +277,16 @@ function buildLowLevelInput(
     throw new Error("cron schedule requires cronExpr");
   }
 
+  const normalizedCronExpr = params.kind === "cron"
+    ? normalizeCronExpression(params.cronExpr!)
+    : undefined;
+
   return {
     id: params.id,
     title: params.title,
     kind: params.kind,
     runAt: params.runAt,
-    cronExpr: params.cronExpr,
+    cronExpr: normalizedCronExpr,
     timezone: params.timezone,
     notification: {
       sessionId,
@@ -295,6 +299,20 @@ function buildLowLevelInput(
 function sanitizeFollowUpInstruction(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function normalizeCronExpression(value: string): string {
+  const trimmed = value.trim();
+  const fields = trimmed.split(/\s+/).filter(Boolean);
+
+  if (fields.length === 5) {
+    return `0 ${fields.join(" ")}`;
+  }
+  if (fields.length === 6) {
+    return fields.join(" ");
+  }
+
+  throw new Error("cronExpr must have 5 or 6 fields");
 }
 
 function buildRfc3339FromLocalDateTime(date: string, time: string, timezone: string): string {

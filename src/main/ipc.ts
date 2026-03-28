@@ -7,6 +7,7 @@ import { createLogger } from "./logger";
 import type { NotificationService } from "./notifications";
 import type { ProviderSettingsService } from "./provider-settings";
 import type { ModelCatalogService } from "./model-catalog";
+import type { SchedulerClient } from "./scheduler";
 import type { SpeechTranscriptionService } from "./speech-transcription";
 import type { WindowsSandboxSetupService } from "./windows-sandbox-setup";
 import { checkSkillUpdates, installSkillFromSource, installSkillFromUrl, listSkillsWithSource, uninstallUserSkill } from "./skill-runtime";
@@ -34,6 +35,7 @@ export function registerAgentIpcHandlers({
   homeDir,
   codexHomeDir,
   notificationService,
+  scheduler,
   modelCatalogService,
   speechTranscriptionService,
   windowsSandboxSetupService,
@@ -47,6 +49,7 @@ export function registerAgentIpcHandlers({
   homeDir: string;
   codexHomeDir: string;
   notificationService: NotificationService;
+  scheduler: SchedulerClient;
   modelCatalogService: ModelCatalogService;
   speechTranscriptionService: SpeechTranscriptionService;
   windowsSandboxSetupService: WindowsSandboxSetupService;
@@ -192,6 +195,39 @@ export function registerAgentIpcHandlers({
       }
     }
     return result;
+  });
+
+  ipcMain.handle("scheduler:list", async () => {
+    try {
+      const schedules = await scheduler.listSchedules();
+      return { ok: true as const, schedules };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const code = typeof (error as { code?: unknown })?.code === "string"
+        ? (error as { code: string }).code
+        : "SCHEDULER_LIST_FAILED";
+      return { ok: false as const, error: { code, message } };
+    }
+  });
+
+  ipcMain.handle("scheduler:delete", async (_event, payload: unknown) => {
+    if (!payload || typeof payload !== "object" || typeof (payload as { id?: unknown }).id !== "string") {
+      return {
+        ok: false as const,
+        error: { code: "INVALID_REQUEST", message: "id は必須です" }
+      };
+    }
+
+    try {
+      await scheduler.deleteSchedule((payload as { id: string }).id);
+      return { ok: true as const };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const code = typeof (error as { code?: unknown })?.code === "string"
+        ? (error as { code: string }).code
+        : "SCHEDULER_DELETE_FAILED";
+      return { ok: false as const, error: { code, message } };
+    }
   });
 
   ipcMain.handle("windowsSandbox:setup", async (_event, payload: unknown) => {
