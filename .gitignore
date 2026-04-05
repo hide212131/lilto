@@ -14,3 +14,4 @@ native/speech-transcriber/bin/
 native/speech-transcriber/target/
 skills-lock.json
 .agents/skills/*/.skill-source.json
+HEARTBEAT.md

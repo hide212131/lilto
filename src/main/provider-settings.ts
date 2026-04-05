@@ -6,7 +6,9 @@ import {
   type ChatSettings,
   type CustomProviderSettings,
   DEFAULT_CHAT_SETTINGS,
+  DEFAULT_HEARTBEAT_SETTINGS,
   DEFAULT_WINDOWS_SANDBOX_SETTINGS,
+  type HeartbeatSettings,
   type NetworkProxySettings,
   OAUTH_PROVIDER_IDS,
   type OAuthProviderId,
@@ -19,6 +21,7 @@ export type {
   ActiveProvider,
   ChatSettings,
   CustomProviderSettings,
+  HeartbeatSettings,
   NetworkProxySettings,
   OAuthProviderId,
   WindowsSandboxMode,
@@ -64,6 +67,7 @@ function createDefaultSettings(): ProviderSettings {
     networkProxy: { useProxy: hasProxyEnvironment() },
     windowsSandbox: { ...DEFAULT_WINDOWS_SANDBOX_SETTINGS },
     chatSettings: { ...DEFAULT_CHAT_SETTINGS, globalShortcut: defaultGlobalShortcut() },
+    heartbeatSettings: { ...DEFAULT_HEARTBEAT_SETTINGS },
     updatedAt: Date.now()
   };
 }
@@ -88,6 +92,24 @@ function normalizeChatSettings(value: unknown): ChatSettings {
   return {
     enterToSend: typeof record.enterToSend === "boolean" ? record.enterToSend : DEFAULT_CHAT_SETTINGS.enterToSend,
     globalShortcut: typeof record.globalShortcut === "string" ? record.globalShortcut : defaultGlobalShortcut()
+  };
+}
+
+function normalizeHeartbeatSettings(value: unknown): HeartbeatSettings {
+  const record = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const intervalMinutes =
+    typeof record.intervalMinutes === "number" && Number.isFinite(record.intervalMinutes)
+      ? Math.max(1, Math.min(24 * 60, Math.round(record.intervalMinutes)))
+      : DEFAULT_HEARTBEAT_SETTINGS.intervalMinutes;
+  return {
+    enabled:
+      typeof record.enabled === "boolean" ? record.enabled : DEFAULT_HEARTBEAT_SETTINGS.enabled,
+    filePath: toTrimmedString(record.filePath),
+    intervalMinutes,
+    showDesktopNotifications:
+      typeof record.showDesktopNotifications === "boolean"
+        ? record.showDesktopNotifications
+        : DEFAULT_HEARTBEAT_SETTINGS.showDesktopNotifications
   };
 }
 
@@ -141,6 +163,7 @@ function normalizeSettings(value: unknown): ProviderSettings {
     },
     windowsSandbox: normalizeWindowsSandboxSettings(record.windowsSandbox),
     chatSettings: normalizeChatSettings(record.chatSettings),
+    heartbeatSettings: normalizeHeartbeatSettings(record.heartbeatSettings),
     updatedAt: typeof record.updatedAt === "number" ? record.updatedAt : Date.now()
   };
 }
@@ -153,6 +176,7 @@ function isValidSavePayload(payload: unknown): payload is {
   networkProxy?: NetworkProxySettings;
   windowsSandbox?: WindowsSandboxSettings;
   chatSettings?: ChatSettings;
+  heartbeatSettings?: HeartbeatSettings;
 } {
   if (!payload || typeof payload !== "object") return false;
   const record = payload as Record<string, unknown>;
@@ -204,6 +228,25 @@ function isValidSavePayload(payload: unknown): payload is {
     if (chat.globalShortcut !== undefined && typeof chat.globalShortcut !== "string") return false;
   }
 
+  if (record.heartbeatSettings !== undefined) {
+    if (!record.heartbeatSettings || typeof record.heartbeatSettings !== "object") return false;
+    const heartbeat = record.heartbeatSettings as Record<string, unknown>;
+    if (heartbeat.enabled !== undefined && typeof heartbeat.enabled !== "boolean") return false;
+    if (heartbeat.filePath !== undefined && typeof heartbeat.filePath !== "string") return false;
+    if (
+      heartbeat.intervalMinutes !== undefined &&
+      (typeof heartbeat.intervalMinutes !== "number" || !Number.isFinite(heartbeat.intervalMinutes))
+    ) {
+      return false;
+    }
+    if (
+      heartbeat.showDesktopNotifications !== undefined &&
+      typeof heartbeat.showDesktopNotifications !== "boolean"
+    ) {
+      return false;
+    }
+  }
+
   return true;
 }
 
@@ -247,7 +290,8 @@ export class ProviderSettingsService {
       customProvider: { ...this.state.customProvider },
       networkProxy: { ...this.state.networkProxy },
       windowsSandbox: { ...this.state.windowsSandbox },
-      chatSettings: { ...this.state.chatSettings }
+      chatSettings: { ...this.state.chatSettings },
+      heartbeatSettings: { ...this.state.heartbeatSettings }
     };
   }
 

@@ -1,5 +1,12 @@
 import { LitElement, html, css } from "lit";
 import { customElement, property, query } from "lit/decorators.js";
+import {
+  buildHeartbeatAssistantSessionTitle,
+  heartbeatSessionDateKeyFromSessionId,
+  isHeartbeatAssistantSessionId,
+  HEARTBEAT_ASSISTANT_SESSION_ID,
+  HEARTBEAT_INTERNAL_SCHEDULE_ID
+} from "../shared/heartbeat-assistant.js";
 import type { AuthState, ProviderSettings, Message, AssistantProgress, AssistantToolProgress, Session } from "./types.js";
 import type { OAuthProviderId } from "../shared/provider-settings.js";
 import type { SchedulerNotificationEvent } from "../shared/scheduler.js";
@@ -35,7 +42,14 @@ export class LiltApp extends LitElement {
       privateDesktop: true
     },
     chatSettings: {
-      enterToSend: false
+      enterToSend: false,
+      globalShortcut: "CommandOrControl+L"
+    },
+    heartbeatSettings: {
+      enabled: false,
+      filePath: "",
+      intervalMinutes: 30,
+      showDesktopNotifications: true
     },
     updatedAt: Date.now()
   };
@@ -161,10 +175,13 @@ export class LiltApp extends LitElement {
     const userMessages = this.messages.filter((m) => m.role === "user" || m.role === "assistant");
     if (userMessages.length === 0) return;
 
+    const existingSession = this._currentSessionId
+      ? this.sessions.find((session) => session.id === this._currentSessionId)
+      : null;
     const firstUser = this.messages.find((m) => m.role === "user");
     const title = firstUser
       ? firstUser.text.slice(0, 40) + (firstUser.text.length > 40 ? "…" : "")
-      : "会話";
+      : existingSession?.title ?? "会話";
 
     if (this._currentSessionId) {
       // 既存セッションを更新
@@ -450,6 +467,16 @@ export class LiltApp extends LitElement {
   }
 
   private _onSchedulerNotification(event: SchedulerNotificationEvent) {
+    if (event.id === HEARTBEAT_INTERNAL_SCHEDULE_ID || isHeartbeatAssistantSessionId(event.sessionId)) {
+      const heartbeatSessionId = this._ensureHeartbeatSession(event.sessionId);
+      this._appendMessageToSession(heartbeatSessionId, {
+        id: this._nextMessageId(),
+        role: "assistant",
+        text: event.message
+      });
+      return;
+    }
+
     const targetSession = this.sessions.find((session) =>
       session.backendSessionId === event.sessionId || session.id === event.sessionId
     );
@@ -733,5 +760,28 @@ export class LiltApp extends LitElement {
     if (updated) {
       this._saveSessions();
     }
+  }
+
+  private _ensureHeartbeatSession(requestedSessionId?: string): string {
+    const sessionId =
+      requestedSessionId && isHeartbeatAssistantSessionId(requestedSessionId)
+        ? requestedSessionId
+        : HEARTBEAT_ASSISTANT_SESSION_ID;
+    const existing = this.sessions.find((session) => session.id === sessionId);
+    if (existing) {
+      return existing.id;
+    }
+
+    const dateKey = heartbeatSessionDateKeyFromSessionId(sessionId);
+
+    const session: Session = {
+      id: sessionId,
+      title: dateKey ? buildHeartbeatAssistantSessionTitle(dateKey) : "Heartbeat assistant",
+      createdAt: Date.now(),
+      messages: []
+    };
+    this.sessions = [session, ...this.sessions];
+    this._saveSessions();
+    return session.id;
   }
 }

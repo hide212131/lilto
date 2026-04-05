@@ -31,6 +31,12 @@ test("ProviderSettingsService は保存した設定を再読込できる", () =>
     windowsSandbox: {
       mode: "unelevated",
       privateDesktop: false
+    },
+    heartbeatSettings: {
+      enabled: true,
+      filePath: "/tmp/HEARTBEAT.md",
+      intervalMinutes: 45,
+      showDesktopNotifications: false
     }
   });
 
@@ -51,6 +57,10 @@ test("ProviderSettingsService は保存した設定を再読込できる", () =>
   assert.equal(state.networkProxy.useProxy, true);
   assert.equal(state.windowsSandbox.mode, "unelevated");
   assert.equal(state.windowsSandbox.privateDesktop, false);
+  assert.equal(state.heartbeatSettings.enabled, true);
+  assert.equal(state.heartbeatSettings.filePath, "/tmp/HEARTBEAT.md");
+  assert.equal(state.heartbeatSettings.intervalMinutes, 45);
+  assert.equal(state.heartbeatSettings.showDesktopNotifications, false);
 });
 
 test("ProviderSettingsService は環境変数の保存先を優先する", () => {
@@ -76,6 +86,12 @@ test("ProviderSettingsService は環境変数の保存先を優先する", () =>
       },
       networkProxy: {
         useProxy: false
+      },
+      heartbeatSettings: {
+        enabled: false,
+        filePath: "",
+        intervalMinutes: 30,
+        showDesktopNotifications: true
       }
     });
 
@@ -156,6 +172,45 @@ test("ProviderSettingsService は不正な networkProxy payload を拒否する"
   });
   assert.equal(result.ok, false);
   assert.equal(result.error.code, "INVALID_PROVIDER_SETTINGS");
+});
+
+test("ProviderSettingsService は heartbeat interval を 30 分既定で補完する", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "lilto-provider-"));
+  const storagePath = path.join(tempDir, "providers.json");
+  fs.writeFileSync(
+    storagePath,
+    JSON.stringify({
+      activeProvider: "oauth",
+      oauthProvider: "openai-codex",
+      oauthModelId: "gpt-5.3-codex",
+      customProvider: {
+        name: "legacy",
+        baseUrl: "",
+        apiKey: "",
+        modelId: "gpt-5.3-codex"
+      },
+      networkProxy: {
+        useProxy: false
+      },
+      windowsSandbox: {
+        mode: "off",
+        privateDesktop: true
+      },
+      chatSettings: {
+        enterToSend: false,
+        globalShortcut: "CommandOrControl+L"
+      },
+      updatedAt: 123
+    }),
+    "utf8"
+  );
+
+  const service = new ProviderSettingsService({
+    storagePath,
+    logger: { info() {}, error() {} }
+  });
+  assert.equal(service.getState().heartbeatSettings.intervalMinutes, 30);
+  assert.equal(service.getState().heartbeatSettings.enabled, false);
 });
 
 test("ProviderSettingsService は Proxy 環境変数がある場合 useProxy を既定で ON にする", () => {

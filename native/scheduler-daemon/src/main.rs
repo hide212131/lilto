@@ -117,10 +117,13 @@ async fn main() -> Result<()> {
     }
 
     scheduler.start().await?;
-    print_json(&stdout_lock, json!({
-        "type": "ready",
-        "db_path": db_path.display().to_string()
-    }));
+    print_json(
+        &stdout_lock,
+        json!({
+            "type": "ready",
+            "db_path": db_path.display().to_string()
+        }),
+    );
 
     let stdin = BufReader::new(tokio::io::stdin());
     let mut lines = stdin.lines();
@@ -143,10 +146,17 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn handle_command(state: &SchedulerState, line: &str, stdout_lock: Arc<Mutex<()>>) -> Result<Value> {
+async fn handle_command(
+    state: &SchedulerState,
+    line: &str,
+    stdout_lock: Arc<Mutex<()>>,
+) -> Result<Value> {
     let command: Command = serde_json::from_str(line).context("invalid JSON command")?;
     match command {
-        Command::Create { request_id, schedule } => {
+        Command::Create {
+            request_id,
+            schedule,
+        } => {
             let record = upsert_to_record(&state.db_path, None, schedule)?;
             insert_schedule(&state.db_path, &record)?;
             register_schedule(state, record.clone(), stdout_lock).await?;
@@ -200,12 +210,18 @@ async fn handle_command(state: &SchedulerState, line: &str, stdout_lock: Arc<Mut
     }
 }
 
-fn upsert_to_record(db_path: &Path, existing_id: Option<String>, schedule: UpsertSchedule) -> Result<ScheduleRecord> {
+fn upsert_to_record(
+    db_path: &Path,
+    existing_id: Option<String>,
+    schedule: UpsertSchedule,
+) -> Result<ScheduleRecord> {
     let is_create = existing_id.is_none();
     let id = existing_id
         .or(schedule.id)
         .unwrap_or_else(|| format!("cron-{}", Uuid::new_v4().simple()));
-    let timezone = schedule.timezone.unwrap_or_else(|| "Asia/Tokyo".to_string());
+    let timezone = schedule
+        .timezone
+        .unwrap_or_else(|| "Asia/Tokyo".to_string());
     let _: Tz = timezone
         .parse()
         .with_context(|| format!("invalid timezone: {}", timezone))?;
@@ -275,7 +291,10 @@ async fn build_job(
 
             if run_at <= Utc::now() {
                 disable_schedule(&state.db_path, &record.id)?;
-                return Err(anyhow!("cannot register one_shot schedule in the past: {}", record.id));
+                return Err(anyhow!(
+                    "cannot register one_shot schedule in the past: {}",
+                    record.id
+                ));
             }
 
             let delay = (run_at - Utc::now())
@@ -293,14 +312,20 @@ async fn build_job(
                 let jobs = jobs.clone();
                 let stdout_lock = stdout_lock.clone();
                 Box::pin(async move {
-                    print_json(&stdout_lock, json!({
-                        "type": "fired",
-                        "id": row_id,
-                        "notification": notification,
-                        "fired_at": Utc::now().to_rfc3339()
-                    }));
+                    print_json(
+                        &stdout_lock,
+                        json!({
+                            "type": "fired",
+                            "id": row_id,
+                            "notification": notification,
+                            "fired_at": Utc::now().to_rfc3339()
+                        }),
+                    );
                     let disable_id = row_id.clone();
-                    let _ = tokio::task::spawn_blocking(move || disable_schedule(&db_path, &disable_id)).await;
+                    let _ = tokio::task::spawn_blocking(move || {
+                        disable_schedule(&db_path, &disable_id)
+                    })
+                    .await;
                     jobs.lock().await.remove(&row_id);
                 })
             })
@@ -323,12 +348,15 @@ async fn build_job(
                 let notification = notification.clone();
                 let stdout_lock = stdout_lock.clone();
                 Box::pin(async move {
-                    print_json(&stdout_lock, json!({
-                        "type": "fired",
-                        "id": row_id,
-                        "notification": notification,
-                        "fired_at": Utc::now().to_rfc3339()
-                    }));
+                    print_json(
+                        &stdout_lock,
+                        json!({
+                            "type": "fired",
+                            "id": row_id,
+                            "notification": notification,
+                            "fired_at": Utc::now().to_rfc3339()
+                        }),
+                    );
                 })
             })
             .map_err(Into::into)
@@ -368,6 +396,14 @@ fn insert_schedule(db_path: &Path, record: &ScheduleRecord) -> Result<()> {
         r#"
         INSERT INTO schedules (id, title, kind, run_at_utc, cron_expr, timezone, notification_json, enabled)
         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1)
+        ON CONFLICT(id) DO UPDATE SET
+            title = excluded.title,
+            kind = excluded.kind,
+            run_at_utc = excluded.run_at_utc,
+            cron_expr = excluded.cron_expr,
+            timezone = excluded.timezone,
+            notification_json = excluded.notification_json,
+            enabled = 1
         "#,
         params![
             record.id,
@@ -424,13 +460,14 @@ fn load_enabled_schedules(db_path: &Path) -> Result<Vec<ScheduleRecord>> {
     let rows = stmt.query_map([], |row| {
         let kind: String = row.get(2)?;
         let notification_json: String = row.get(6)?;
-        let notification = serde_json::from_str::<NotificationPayload>(&notification_json).map_err(|error| {
-            rusqlite::Error::FromSqlConversionFailure(
-                notification_json.len(),
-                rusqlite::types::Type::Text,
-                Box::new(error),
-            )
-        })?;
+        let notification = serde_json::from_str::<NotificationPayload>(&notification_json)
+            .map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    notification_json.len(),
+                    rusqlite::types::Type::Text,
+                    Box::new(error),
+                )
+            })?;
         Ok(ScheduleRecord {
             id: row.get(0)?,
             title: row.get(1)?,
@@ -466,8 +503,18 @@ fn has_enabled_schedule(db_path: &Path, id: &str) -> Result<bool> {
     Ok(exists != 0)
 }
 
+fn has_schedule(db_path: &Path, id: &str) -> Result<bool> {
+    let conn = Connection::open(db_path)?;
+    let exists: i64 = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM schedules WHERE id = ?1)",
+        params![id],
+        |row| row.get(0),
+    )?;
+    Ok(exists != 0)
+}
+
 fn ensure_schedule_exists(db_path: &Path, id: &str) -> Result<()> {
-    if has_enabled_schedule(db_path, id)? {
+    if has_schedule(db_path, id)? {
         return Ok(());
     }
     Err(anyhow!("schedule not found: {}", id))
@@ -475,7 +522,10 @@ fn ensure_schedule_exists(db_path: &Path, id: &str) -> Result<()> {
 
 fn disable_schedule(db_path: &Path, id: &str) -> Result<()> {
     let conn = Connection::open(db_path)?;
-    conn.execute("UPDATE schedules SET enabled = 0 WHERE id = ?1", params![id])?;
+    conn.execute(
+        "UPDATE schedules SET enabled = 0 WHERE id = ?1",
+        params![id],
+    )?;
     Ok(())
 }
 
@@ -507,7 +557,10 @@ fn compute_next_run_at(record: &ScheduleRecord) -> Result<Option<String>> {
                 .timezone
                 .parse()
                 .with_context(|| format!("invalid timezone: {}", record.timezone))?;
-            let next = schedule.upcoming(timezone).next().map(|value| value.with_timezone(&Utc).to_rfc3339());
+            let next = schedule
+                .upcoming(timezone)
+                .next()
+                .map(|value| value.with_timezone(&Utc).to_rfc3339());
             Ok(next)
         }
     }

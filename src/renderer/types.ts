@@ -1,5 +1,6 @@
 import type { AgentLoopEvent } from "../shared/agent-loop.js";
 import type { AudioTranscriptionResult } from "../shared/audio-transcription.js";
+import type { HeartbeatAssistantStatus } from "../shared/heartbeat-assistant.js";
 import type { ActiveProvider, OAuthProviderId, ProviderSettings } from "../shared/provider-settings.js";
 import type { SchedulerNotificationEvent, SchedulerScheduleSummary } from "../shared/scheduler.js";
 
@@ -177,6 +178,7 @@ declare global {
         | { ok: false; error: { code: string; message: string } }
       >;
       getProviderSettings: () => Promise<ProviderSettings>;
+      getHeartbeatStatus: () => Promise<HeartbeatAssistantStatus>;
       saveProviderSettings: (
         settings: ProviderSettings
       ) => Promise<

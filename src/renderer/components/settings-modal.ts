@@ -1,6 +1,7 @@
 import { LitElement, html, css } from "lit";
 import { live } from "lit/directives/live.js";
 import { customElement, property, state } from "lit/decorators.js";
+import type { HeartbeatAssistantStatus } from "../../shared/heartbeat-assistant.js";
 import type { AuthState, ActiveProvider, PluginAppInfo, PluginCatalogInfo, PluginInfo, ProviderSettings, SkillInfo, SkillUpdateInfo } from "../types.js";
 import type { OAuthProviderId, WindowsSandboxMode } from "../../shared/provider-settings.js";
 import type { SchedulerScheduleSummary } from "../../shared/scheduler.js";
@@ -48,6 +49,12 @@ export class LiltSettingsModal extends LitElement {
       enterToSend: false,
       globalShortcut: ""
     },
+    heartbeatSettings: {
+      enabled: false,
+      filePath: "",
+      intervalMinutes: 30,
+      showDesktopNotifications: true
+    },
     updatedAt: Date.now()
   };
 
@@ -76,12 +83,18 @@ export class LiltSettingsModal extends LitElement {
   @state() private _enterToSend = false;
   @state() private _globalShortcut = "";
   @state() private _chatSaveStatus = "";
+  @state() private _heartbeatEnabled = false;
+  @state() private _heartbeatFilePath = "";
+  @state() private _heartbeatIntervalMinutes = 30;
+  @state() private _heartbeatShowDesktopNotifications = true;
+  @state() private _heartbeatSaveStatus = "";
+  @state() private _heartbeatStatus: HeartbeatAssistantStatus | null = null;
   @state() private _shortcutDialogOpen = false;
   @state() private _pendingShortcut = "";
   @state() private _shortcutError = "";
 
   // Tab state
-  @state() private _activeTab: "providers" | "chat" | "skills" | "plugins" | "schedules" = "providers";
+  @state() private _activeTab: "providers" | "chat" | "heartbeat" | "skills" | "plugins" | "schedules" = "providers";
 
   // Skills state
   @state() private _skills: SkillInfo[] = [];
@@ -141,6 +154,11 @@ export class LiltSettingsModal extends LitElement {
       this._windowsSandboxPrivateDesktop = this.providerSettings.windowsSandbox?.privateDesktop ?? true;
       this._enterToSend = cs?.enterToSend ?? false;
       this._globalShortcut = cs?.globalShortcut ?? "";
+      this._heartbeatEnabled = this.providerSettings.heartbeatSettings?.enabled ?? false;
+      this._heartbeatFilePath = this.providerSettings.heartbeatSettings?.filePath ?? "";
+      this._heartbeatIntervalMinutes = this.providerSettings.heartbeatSettings?.intervalMinutes ?? 30;
+      this._heartbeatShowDesktopNotifications =
+        this.providerSettings.heartbeatSettings?.showDesktopNotifications ?? true;
       if (this._preserveWindowsSandboxStatusOnce) {
         this._preserveWindowsSandboxStatusOnce = false;
       } else {
@@ -151,6 +169,9 @@ export class LiltSettingsModal extends LitElement {
       void this._loadOauthModels();
       if (this._customApiKey.trim() || this._customBaseUrl.trim()) {
         void this._loadCustomModels();
+      }
+      if (this._activeTab === "heartbeat") {
+        void this._loadHeartbeatStatus();
       }
     }
     if (changedProps.has("authState")) {
@@ -626,6 +647,10 @@ export class LiltSettingsModal extends LitElement {
                 @click=${() => this._switchTab("chat")}
               >Chat</div>
               <div
+                class="settings-menu-item ${this._activeTab === "heartbeat" ? "active" : ""}"
+                @click=${() => this._switchTab("heartbeat")}
+              >Heartbeat</div>
+              <div
                 class="settings-menu-item ${this._activeTab === "schedules" ? "active" : ""}"
                 @click=${() => this._switchTab("schedules")}
               >Schedules</div>
@@ -643,6 +668,8 @@ export class LiltSettingsModal extends LitElement {
                 ? this._renderProviders()
                 : this._activeTab === "chat"
                   ? this._renderChatSection()
+                  : this._activeTab === "heartbeat"
+                    ? this._renderHeartbeatSection()
                   : this._activeTab === "plugins"
                     ? this._renderPlugins()
                   : this._activeTab === "schedules"
@@ -1254,13 +1281,91 @@ export class LiltSettingsModal extends LitElement {
     `;
   }
 
-  private _switchTab(tab: "providers" | "chat" | "skills" | "plugins" | "schedules") {
+  private _renderHeartbeatSection() {
+    const status = this._heartbeatStatus;
+    const statusMessage = status?.message ?? "状態を取得していません。";
+    return html`
+      <h3>Heartbeat assistant</h3>
+      <p>HEARTBEAT.md を巡回手順書として使い、既定では 30 分ごとに background patrol を実行し、問題がある時だけ表面化します。</p>
+
+      <section class="provider-section active">
+        <h4>基本設定</h4>
+        <div class="input-grid">
+          <label>
+            <input
+              id="heartbeat-enabled"
+              type="checkbox"
+              .checked=${this._heartbeatEnabled}
+              @change=${(e: InputEvent) => {
+                this._heartbeatEnabled = (e.target as HTMLInputElement).checked;
+              }}
+            />
+            heartbeat assistant を有効にする
+          </label>
+          <label>
+            HEARTBEAT.md path
+            <input
+              id="heartbeat-file-path"
+              placeholder="/path/to/HEARTBEAT.md"
+              .value=${this._heartbeatFilePath}
+              @input=${(e: InputEvent) => {
+                this._heartbeatFilePath = (e.target as HTMLInputElement).value;
+              }}
+            />
+          </label>
+          <label>
+            巡回間隔（分）
+            <input
+              id="heartbeat-interval-minutes"
+              type="number"
+              min="1"
+              max="1440"
+              .value=${String(this._heartbeatIntervalMinutes)}
+              @input=${(e: InputEvent) => {
+                const next = Number((e.target as HTMLInputElement).value);
+                this._heartbeatIntervalMinutes = Number.isFinite(next) ? next : 30;
+              }}
+            />
+          </label>
+          <label>
+            <input
+              id="heartbeat-show-desktop-notifications"
+              type="checkbox"
+              .checked=${this._heartbeatShowDesktopNotifications}
+              @change=${(e: InputEvent) => {
+                this._heartbeatShowDesktopNotifications = (e.target as HTMLInputElement).checked;
+              }}
+            />
+            アプリ非フォーカス時に OS 通知も出す
+          </label>
+        </div>
+        <div class="provider-actions">
+          <button @click=${this._saveHeartbeatSettings}>Heartbeat 設定を保存</button>
+          <button @click=${this._loadHeartbeatStatus}>状態を更新</button>
+          <span class="status">${this._heartbeatSaveStatus}</span>
+        </div>
+      </section>
+
+      <section class="provider-section" style="margin-top: 12px;">
+        <h4>状態</h4>
+        <p>${statusMessage}</p>
+        <div class="status">level: ${status?.level ?? "unknown"}</div>
+        ${status?.lastRunAt ? html`<div class="status">lastRunAt: ${status.lastRunAt}</div>` : ""}
+        ${status?.lastFindingAt ? html`<div class="status">lastFindingAt: ${status.lastFindingAt}</div>` : ""}
+      </section>
+    `;
+  }
+
+  private _switchTab(tab: "providers" | "chat" | "heartbeat" | "skills" | "plugins" | "schedules") {
     this._activeTab = tab;
     if (tab === "skills" && this._skills.length === 0 && !this._skillsLoading) {
       void this._loadSkills();
     }
     if (tab === "plugins" && this._pluginCatalogs.length === 0 && !this._pluginsLoading) {
       void this._loadPlugins(true);
+    }
+    if (tab === "heartbeat") {
+      void this._loadHeartbeatStatus();
     }
     if (tab === "schedules") {
       void this._loadSchedules();
@@ -1613,6 +1718,32 @@ export class LiltSettingsModal extends LitElement {
     }
   }
 
+  private async _loadHeartbeatStatus() {
+    this._heartbeatStatus = await window.lilto.getHeartbeatStatus();
+  }
+
+  private async _saveHeartbeatSettings() {
+    const intervalMinutes = Math.max(1, Math.min(1440, Math.round(this._heartbeatIntervalMinutes || 30)));
+    this._heartbeatIntervalMinutes = intervalMinutes;
+    const next: ProviderSettings = {
+      ...this.providerSettings,
+      heartbeatSettings: {
+        enabled: this._heartbeatEnabled,
+        filePath: this._heartbeatFilePath.trim(),
+        intervalMinutes,
+        showDesktopNotifications: this._heartbeatShowDesktopNotifications
+      }
+    };
+    const result = await window.lilto.saveProviderSettings(next);
+    if (result.ok) {
+      this._heartbeatSaveStatus = "Heartbeat 設定を保存しました。";
+      this._emitProviderSettingsChanged(result.state, { preserveWindowsSandboxStatus: true });
+      await this._loadHeartbeatStatus();
+      return;
+    }
+    this._heartbeatSaveStatus = `${result.error.code}: ${result.error.message}`;
+  }
+
   private _describeWindowsSandboxStatus(): string {
     if (!this._isWindows) {
       return "Windows sandbox は Windows でのみ利用できます。";
@@ -1640,6 +1771,12 @@ export class LiltSettingsModal extends LitElement {
       windowsSandbox: {
         mode: this._windowsSandboxMode,
         privateDesktop: this._windowsSandboxPrivateDesktop
+      },
+      heartbeatSettings: {
+        enabled: this._heartbeatEnabled,
+        filePath: this._heartbeatFilePath.trim(),
+        intervalMinutes: Math.max(1, Math.min(1440, Math.round(this._heartbeatIntervalMinutes || 30))),
+        showDesktopNotifications: this._heartbeatShowDesktopNotifications
       }
     };
   }

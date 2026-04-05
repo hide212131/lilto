@@ -1,5 +1,12 @@
 # Lessons
 
+## 2026-03-29
+
+| 変更内容 | ミス/課題 | 再発防止ルール |
+|---|---|---|
+| `add-heartbeat-assistant-patrol` の live UI 検証で、`text=Heartbeat` のような単純 selector を使うと Settings メニューではなく非表示の別要素へ当たり、さらに Lit の shadow DOM 内 input 値も通常の `document.querySelector` では直接取れなかった。 | Settings のような Lit component 配下は shadow DOM と同名テキストが混在しやすく、雑な text selector や light DOM 前提の DOM 読み取りは manual verification を偽失敗させる。 | Lit / shadow DOM な Settings UI を live 検証するときは、まず Playwright locator で component 境界を絞り、必要なら shadow-aware な locator や component 内 selector を使う。単純な `text=...` を全画面に打つ前に、対象コンポーネント内へ scope する。 |
+| `add-heartbeat-assistant-patrol` の追修正で、disabled の internal schedule 行が SQLite に残ったまま `id` の PRIMARY KEY 制約だけ生きており、Main 側は `enabled=1` しか見ないため毎回 create へ進んで heartbeat cadence が復旧しなかった。 | scheduler の「一覧対象」と「ID の存在判定」を同じ条件だと決め打ちすると、disabled row を revive したいケースで create/update 両方が不整合になる。結果として UI 保存は成功しても managed schedule が再同期されない。 | 永続 scheduler で disable を soft delete として使うときは、「有効一覧」と「ID の存在確認」を分ける。同じ ID を revive できる upsert 経路を用意し、managed schedule のような予約 ID は disabled row から復旧できることをテストで固定する。 |
+
 ## 2026-03-28
 
 | 変更内容 | ミス/課題 | 再発防止ルール |
@@ -16,6 +23,7 @@
 | `manage-cron-schedules-in-settings` の apply で Settings の `Schedules` タブを実装し、ライブ UI で一覧表示と再取得を確認した。 | GUI 変更後の最終 E2E が失敗するとき、変更箇所を疑ってすぐ実装へ戻ると、今回のような既存 dictation ステータス文言の期待値ずれまで自分の差分として抱え込みやすい。 | GUI change の最終 E2E が失敗したら、まず失敗アサーションの期待文字列を現行 UI 実装の文字列と照合し、「今回の変更範囲」か「既存回帰/既存テストずれ」かを切り分けてから対応方針を決める。 |
 | `1分ごとに「こんちは！」と言って` のような要求で model が低水準 `create` に 5 フィールド cron (`*/1 * * * *`) を渡し、scheduler daemon が 6 フィールド前提で拒否する不具合を修正した。 | tool schema に 6 フィールドと書いていても、LLM は一般的な 5 フィールド cron を自然に出しやすい。低水準 API を「そのまま通す」実装だと、daemon 側の厳密仕様との差で実用上の失敗が出る。 | LLM が cron 式を直接出しうる tool では、バックエンドが要求する cron 方言を tool 側で正規化する。特に 5 フィールドと 6 フィールドの差は model 任せにせず、受け口で吸収して回帰テストを追加する。 |
 | `manage-cron-schedules-in-settings` の最終 E2E で proxy 必須シナリオを通すため、Electron 起動環境に lowercase の `http_proxy` / `https_proxy` を渡し、`no_proxy` も明示的に空へ揃えた。 | Proxy 系の実装やテストは uppercase 環境変数だけ見れば十分と思い込みやすいが、実ランタイムや依存は lowercase を優先することがあり、`NO_PROXY` だけ空にしても localhost が bypass されて E2E が偽失敗する。 | Proxy 必須テストや実装で環境変数を上書きするときは、`HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` だけでなく lowercase の `http_proxy` / `https_proxy` / `no_proxy` も同時に揃える。特に bypass 無効化は uppercase・lowercase の両方を空へ固定してから検証する。 |
+| `add-heartbeat-assistant-patrol` の proposal/design/specs/tasks を起こす際、当初は既存 heartbeat 基盤をそのまま拡張する前提で capability を切りかけたが、ユーザーが「内部は既存 cron/scheduler を使う」方針を選んだため、proposal の Modified Capabilities を `heartbeat-jobs` から `pi-main-agent-runtime` 中心へ補正した。 | heartbeat のようにユーザー向け概念と内部の発火基盤が分かれる機能では、「名前が heartbeat だから heartbeat spec を必ず触る」と早合点すると、設計判断後に capability 境界が proposal と specs でずれやすい。 | OpenSpec で内部実装の再利用方針が重要な変更では、proposal を固定する前に「ユーザー向け概念」と「内部で再利用する基盤」を分けて決める。途中で実装基盤の方針が変わったら、design や specs に進む前に proposal の Capabilities と Impact を先に補正する。 |
 
 ## 2026-03-22
 

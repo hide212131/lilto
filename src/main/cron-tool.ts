@@ -1,4 +1,5 @@
 import type { Logger } from "./logger";
+import { isHeartbeatInternalScheduleId } from "./heartbeat-assistant";
 import type { SchedulerClient } from "./scheduler";
 import type { SchedulerCreateInput, SchedulerScheduleSummary } from "../shared/scheduler";
 const DEFAULT_TIMEZONE = "Asia/Tokyo";
@@ -112,7 +113,7 @@ export function createCronToolExecutor({
     });
 
     if (params.operation === "list") {
-      const items = await scheduler.listSchedules();
+      const items = (await scheduler.listSchedules()).filter((item) => !isHeartbeatInternalScheduleId(item.id));
       const scope = params.scope ?? "current_session";
       const visible = scope === "all" ? items : items.filter((item) => item.sessionId === currentSessionId);
       const lines = visible.length > 0 ? visible.map(formatSchedule).join("\n") : "No schedules found.";

@@ -740,7 +740,12 @@ export class AgentRuntime {
     text: string,
     options: { apiKey: string | null; model?: RuntimeModel; cwd?: string; conversationId?: string },
     providerSettings: ProviderSettings,
-    hooks?: { requestId: string; conversationId?: string; onLoopEvent?: (event: AgentLoopEvent) => void }
+    hooks?: {
+      requestId: string;
+      conversationId?: string;
+      onLoopEvent?: (event: AgentLoopEvent) => void;
+      mode?: "default" | "heartbeat";
+    }
   ): Promise<AgentResult> {
     const restoreProxyEnv = withScopedProxyEnvironment(providerSettings);
     const abortController = new AbortController();
@@ -759,7 +764,8 @@ export class AgentRuntime {
         });
       }
 
-      const streamed = await session.thread.runStreamed(augmentPromptForScheduler(text), { signal: abortController.signal });
+      const prompt = hooks?.mode === "heartbeat" ? text : augmentPromptForScheduler(text);
+      const streamed = await session.thread.runStreamed(prompt, { signal: abortController.signal });
       const state = {
         requestId: hooks?.requestId ?? "request",
         conversationId: hooks?.conversationId,
@@ -803,7 +809,12 @@ export class AgentRuntime {
   async submitPrompt(
     text: string,
     providerSettings: ProviderSettings,
-    hooks?: { requestId: string; conversationId?: string; onLoopEvent?: (event: AgentLoopEvent) => void }
+    hooks?: {
+      requestId: string;
+      conversationId?: string;
+      onLoopEvent?: (event: AgentLoopEvent) => void;
+      mode?: "default" | "heartbeat";
+    }
   ): Promise<AgentResult> {
     try {
       if (process.env.LILTO_E2E_MOCK === "1") {

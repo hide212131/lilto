@@ -27,9 +27,23 @@ export type ChatSettings = {
   globalShortcut: string;
 };
 
+export type HeartbeatSettings = {
+  enabled: boolean;
+  filePath: string;
+  intervalMinutes: number;
+  showDesktopNotifications: boolean;
+};
+
 export const DEFAULT_CHAT_SETTINGS: ChatSettings = {
   enterToSend: false,
   globalShortcut: "CommandOrControl+L"
+};
+
+export const DEFAULT_HEARTBEAT_SETTINGS: HeartbeatSettings = {
+  enabled: false,
+  filePath: "",
+  intervalMinutes: 30,
+  showDesktopNotifications: true
 };
 
 export type ProviderSettings = {
@@ -40,6 +54,7 @@ export type ProviderSettings = {
   networkProxy: NetworkProxySettings;
   windowsSandbox: WindowsSandboxSettings;
   chatSettings: ChatSettings;
+  heartbeatSettings: HeartbeatSettings;
   updatedAt: number;
 };
 

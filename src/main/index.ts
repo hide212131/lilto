@@ -5,6 +5,7 @@ import { AgentRuntime } from "./agent-sdk";
 import { ClaudeAuthService } from "./auth-service";
 import { readConfig } from "./config";
 import { registerAppShortcut, unregisterAppShortcut } from "./global-shortcut";
+import { HeartbeatAssistantService } from "./heartbeat-assistant";
 import { HeartbeatScheduler } from "./heartbeat";
 import { SCHEDULER_NOTIFICATION_CHANNEL } from "./ipc-contract";
 import { registerAgentIpcHandlers } from "./ipc";
@@ -30,6 +31,7 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock();
 let mainWindow: BrowserWindow | null = null;
 let isQuitting = false;
 let schedulerBridge: SchedulerBridgeServer | null = null;
+let heartbeatAssistant: HeartbeatAssistantService | null = null;
 
 const notificationService = new NotificationService();
 
@@ -161,6 +163,19 @@ if (hasSingleInstanceLock) {
       logger: createLogger("scheduler"),
       userDataDir: app.getPath("userData"),
       onNotification: (event) => {
+        if (heartbeatAssistant) {
+          void heartbeatAssistant.handleSchedulerNotification(event).then((handled) => {
+            if (handled) {
+              return;
+            }
+            broadcastSchedulerNotification(event);
+            if (BrowserWindow.getFocusedWindow() === null) {
+              notificationService.notify("lilto - スケジュール通知", event.message);
+              notificationService.incrementBadge();
+            }
+          });
+          return;
+        }
         broadcastSchedulerNotification(event);
         if (BrowserWindow.getFocusedWindow() === null) {
           notificationService.notify("lilto - スケジュール通知", event.message);
@@ -217,12 +232,25 @@ if (hasSingleInstanceLock) {
       availableSkills: skillRuntime.availableSkills
     });
 
+    heartbeatAssistant = new HeartbeatAssistantService({
+      logger: createLogger("heartbeat-assistant"),
+      scheduler,
+      agentRuntime,
+      notificationService,
+      userDataDir: app.getPath("userData"),
+      getProviderSettings: () => providerSettingsService.getState(),
+      broadcastNotification: broadcastSchedulerNotification,
+      getFocusedWindow: () => BrowserWindow.getFocusedWindow()
+    });
+    void heartbeatAssistant.syncManagedSchedule(providerSettingsService.getState());
+
     registerAgentIpcHandlers({
       agentRuntime,
       authService,
       providerSettingsService,
       notificationService,
       scheduler,
+      heartbeatAssistant,
       pluginService,
       modelCatalogService,
       speechTranscriptionService,
@@ -233,6 +261,7 @@ if (hasSingleInstanceLock) {
       codexHomeDir: skillRuntime.codexHomeDir,
       onSettingsSaved: (settings) => {
         registerAppShortcut(settings.chatSettings.globalShortcut, () => mainWindow);
+        void heartbeatAssistant?.syncManagedSchedule(settings);
       }
     });
     createWindow();
@@ -259,6 +288,7 @@ app.on("before-quit", () => {
   heartbeat.stop();
   schedulerBridge?.stop();
   schedulerBridge = null;
+  heartbeatAssistant = null;
   authService?.dispose();
   authService = null;
 });

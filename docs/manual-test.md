@@ -65,6 +65,18 @@ Windows note: confirm the local `System.Speech` path appends recognized text int
 1. Main プロセスログで `heartbeat_tick` が定期出力されることを確認する
 2. 失敗するジョブを追加しても後続ジョブが実行されることをログで確認する
 
+## heartbeat-assistant
+1. `HEARTBEAT.md` を任意の場所に作成し、最小サンプルとして `HEARTBEAT_OK` を返してよい条件だけを書く
+2. `npm start -- --remote-debugging-port=9222` でアプリを起動する
+3. `npm run live-ui:manual -- 9222 wait-app` を実行し、`npm run live-ui:manual -- 9222 open-settings` で Settings を開く
+4. `Heartbeat` タブを開き、`HEARTBEAT.md path` を入力して保存する
+5. 巡回間隔が既定で 30 分として表示され、数値入力で変更できることを確認する
+6. path 未設定時は未設定状態、存在しない path では読込失敗状態、保存直後は保存成功状態が区別されることを確認する
+7. `HEARTBEAT.md` を空にして状態更新し、静かに skip されることを確認する
+8. `HEARTBEAT.md` が `HEARTBEAT_OK` を返す内容のまま patrol が走っても、新しい session や通知が追加されないことを確認する
+9. `HEARTBEAT.md` に `KEY:` / `CHECK:` / `MESSAGE:` 形式の要対応 finding を返す内容を書いた状態では finding が通知経路へ流れ、非フォーカス時は OS 通知も出ることを確認する
+10. 同じ `KEY:` の finding が続く場合、同内容の通知や追加 session message が連打されないことを確認する
+
 ## cron-scheduler-tool
 1. `npm run build:native` 済み、または `LILTO_SCHEDULER_BIN` で scheduler daemon 実行ファイルを指せる状態にする
 2. 認証済みまたは Custom Provider 設定済みの状態で「3分後に知らせて」のような依頼を送る

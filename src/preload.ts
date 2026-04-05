@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { AgentLoopEvent } from "./shared/agent-loop";
 import type { AudioTranscriptionResult } from "./shared/audio-transcription";
+import type { HeartbeatAssistantStatus } from "./shared/heartbeat-assistant";
 import type { SchedulerNotificationEvent, SchedulerScheduleSummary } from "./shared/scheduler";
 
 const AGENT_LOOP_EVENT_CHANNEL = "agent:loopEvent";
@@ -16,6 +17,7 @@ contextBridge.exposeInMainWorld("lilto", {
   listModels: async (payload: unknown) => ipcRenderer.invoke("models:list", payload),
   getProviderSettings: async () => ipcRenderer.invoke("providers:getSettings"),
   saveProviderSettings: async (settings: unknown) => ipcRenderer.invoke("providers:saveSettings", settings),
+  getHeartbeatStatus: async (): Promise<HeartbeatAssistantStatus> => ipcRenderer.invoke("heartbeat:getStatus"),
   listSchedules: async (): Promise<
     | { ok: true; schedules: SchedulerScheduleSummary[] }
     | { ok: false; error: { code: string; message: string } }

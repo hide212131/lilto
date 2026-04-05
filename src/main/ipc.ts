@@ -5,6 +5,8 @@ import type { ClaudeAuthService } from "./auth-service";
 import { AGENT_LOOP_EVENT_CHANNEL, validatePrompt } from "./ipc-contract";
 import { createLogger } from "./logger";
 import type { NotificationService } from "./notifications";
+import type { HeartbeatAssistantService } from "./heartbeat-assistant";
+import { isHeartbeatInternalScheduleId } from "./heartbeat-assistant";
 import type { ProviderSettingsService } from "./provider-settings";
 import type { ModelCatalogService } from "./model-catalog";
 import type { SchedulerClient } from "./scheduler";
@@ -51,6 +53,7 @@ export function registerAgentIpcHandlers({
   codexHomeDir,
   notificationService,
   scheduler,
+  heartbeatAssistant,
   pluginService,
   modelCatalogService,
   speechTranscriptionService,
@@ -66,6 +69,7 @@ export function registerAgentIpcHandlers({
   codexHomeDir: string;
   notificationService: NotificationService;
   scheduler: SchedulerClient;
+  heartbeatAssistant: HeartbeatAssistantService;
   pluginService: PluginService;
   modelCatalogService: ModelCatalogService;
   speechTranscriptionService: SpeechTranscriptionService;
@@ -173,6 +177,10 @@ export function registerAgentIpcHandlers({
     return providerSettingsService.getState();
   });
 
+  ipcMain.handle("heartbeat:getStatus", () => {
+    return heartbeatAssistant.getStatus();
+  });
+
   ipcMain.handle("models:list", async (_event, payload: unknown) => {
     const state = providerSettingsService.getState();
     const record = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
@@ -222,7 +230,10 @@ export function registerAgentIpcHandlers({
   ipcMain.handle("scheduler:list", async () => {
     try {
       const schedules = await scheduler.listSchedules();
-      return { ok: true as const, schedules };
+      return {
+        ok: true as const,
+        schedules: schedules.filter((schedule) => !isHeartbeatInternalScheduleId(schedule.id))
+      };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const code = typeof (error as { code?: unknown })?.code === "string"
