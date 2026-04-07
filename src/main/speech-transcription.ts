@@ -4,6 +4,7 @@ import path from "node:path";
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { promisify } from "node:util";
 import type { AudioTranscriptionResult } from "../shared/audio-transcription";
+import { resolveNativeHelperPath } from "./app-paths";
 
 const execFileAsync = promisify(execFile);
 type ExecRunner = (command: string, args: readonly string[]) => Promise<{ stdout: string; stderr: string }>;
@@ -301,12 +302,24 @@ function defaultExecRunner(command: string, args: readonly string[]): Promise<{ 
 
 function defaultHelperAppPath(platform: NodeJS.Platform): string {
   if (platform === "darwin") {
-    return path.join(process.cwd(), "native", "speech-transcriber", "bin", "speech-transcriber.app");
+    return resolveNativeHelperPath({
+      envVar: "LILTO_SPEECH_TRANSCRIBER_BIN",
+      packagedRelativePath: path.join("bin", "speech-transcriber.app"),
+      developmentCandidates: ["native/speech-transcriber/bin/speech-transcriber.app"]
+    });
   }
   if (platform === "win32") {
-    return path.join(process.cwd(), "native", "speech-transcriber", "bin", "speech-transcriber.exe");
+    return resolveNativeHelperPath({
+      envVar: "LILTO_SPEECH_TRANSCRIBER_BIN",
+      packagedRelativePath: path.join("bin", "speech-transcriber.exe"),
+      developmentCandidates: ["native/speech-transcriber/bin/speech-transcriber.exe"]
+    });
   }
-  return path.join(process.cwd(), "native", "speech-transcriber", "bin", "speech-transcriber");
+  return resolveNativeHelperPath({
+    envVar: "LILTO_SPEECH_TRANSCRIBER_BIN",
+    packagedRelativePath: path.join("bin", "speech-transcriber"),
+    developmentCandidates: ["native/speech-transcriber/bin/speech-transcriber"]
+  });
 }
 
 function parseHelperResponse(stdout: string): HelperResponse {

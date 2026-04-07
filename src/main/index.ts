@@ -20,6 +20,7 @@ import { SchedulerBridgeServer } from "./scheduler-bridge";
 import { resolveCodexHomeDir, setupSkillRuntime } from "./skill-runtime";
 import { WindowsSandboxSetupService } from "./windows-sandbox-setup";
 import { createCliCompatibilityMap } from "./command-compat";
+import { resolvePreloadPath, resolveRendererIndexPath } from "./app-paths";
 import { resolveAppIcon, resolveWindowIcon } from "./icon-assets";
 import { SpeechTranscriptionService } from "./speech-transcription";
 import type { SchedulerNotificationEvent } from "../shared/scheduler";
@@ -36,7 +37,7 @@ let heartbeatAssistant: HeartbeatAssistantService | null = null;
 const notificationService = new NotificationService();
 
 let authService: ClaudeAuthService | null = null;
-const providerSettingsService = new ProviderSettingsService({ logger: createLogger("providers") });
+let providerSettingsService: ProviderSettingsService | null = null;
 
 function broadcastSchedulerNotification(event: SchedulerNotificationEvent): void {
   for (const window of BrowserWindow.getAllWindows()) {
@@ -58,19 +59,20 @@ heartbeat.registerJob({
 });
 
 function createWindow(): void {
+  const appRoot = app.getAppPath();
   mainWindow = new BrowserWindow({
     width: 980,
     height: 720,
     icon: resolveWindowIcon(),
     webPreferences: {
-      preload: path.join(process.cwd(), "dist", "preload.js"),
+      preload: resolvePreloadPath({ appRoot }),
       contextIsolation: true,
       nodeIntegration: false
     },
     title: config.appName
   });
 
-  void mainWindow.loadFile(path.join(process.cwd(), "dist", "renderer", "index.html"));
+  void mainWindow.loadFile(resolveRendererIndexPath({ appRoot }));
 
   mainWindow.on("close", (event) => {
     if (isQuitting) return;
@@ -115,6 +117,9 @@ if (!hasSingleInstanceLock) {
 
 if (hasSingleInstanceLock) {
   void app.whenReady().then(async () => {
+    process.env.LILTO_APP_ROOT = app.getAppPath();
+    process.env.LILTO_RESOURCES_PATH = process.resourcesPath;
+
     if (process.platform === "darwin") {
       const dockIcon = resolveAppIcon(512);
       if (!dockIcon.isEmpty()) {
@@ -126,6 +131,12 @@ if (hasSingleInstanceLock) {
       platform: process.platform,
       commands: createCliCompatibilityMap()
     });
+
+    providerSettingsService = new ProviderSettingsService({
+      logger: createLogger("providers"),
+      storagePath: path.join(app.getPath("userData"), "provider-settings.json")
+    });
+    const initializedProviderSettingsService = providerSettingsService;
 
     let skillRuntime;
     try {
@@ -203,6 +214,7 @@ if (hasSingleInstanceLock) {
 
     authService = new ClaudeAuthService({
       logger: createLogger("auth"),
+      authPath: path.join(app.getPath("userData"), "auth-state.json"),
       codexHome: skillRuntime.codexHomeDir
     });
     const modelCatalogService = new ModelCatalogService({
@@ -238,16 +250,18 @@ if (hasSingleInstanceLock) {
       agentRuntime,
       notificationService,
       userDataDir: app.getPath("userData"),
-      getProviderSettings: () => providerSettingsService.getState(),
+      getProviderSettings: () => {
+        return initializedProviderSettingsService.getState();
+      },
       broadcastNotification: broadcastSchedulerNotification,
       getFocusedWindow: () => BrowserWindow.getFocusedWindow()
     });
-    void heartbeatAssistant.syncManagedSchedule(providerSettingsService.getState());
+    void heartbeatAssistant.syncManagedSchedule(initializedProviderSettingsService.getState());
 
     registerAgentIpcHandlers({
       agentRuntime,
       authService,
-      providerSettingsService,
+      providerSettingsService: initializedProviderSettingsService,
       notificationService,
       scheduler,
       heartbeatAssistant,
@@ -269,7 +283,7 @@ if (hasSingleInstanceLock) {
     heartbeat.start();
 
     // グローバルショートカットを設定
-    const initialShortcut = providerSettingsService.getState().chatSettings.globalShortcut;
+    const initialShortcut = initializedProviderSettingsService.getState().chatSettings.globalShortcut;
     registerAppShortcut(initialShortcut, () => mainWindow);
 
     app.on("activate", () => {

@@ -147,7 +147,7 @@ export function resolveCliListedSkillPath(skillPath: string): string {
   }
 
   if (skillPath.startsWith("~/") || skillPath.startsWith("~\\")) {
-    return path.join(os.homedir(), skillPath.slice(2));
+    return path.join(os.homedir(), skillPath.slice(2).replace(/[\\/]+/g, path.sep));
   }
 
   return path.resolve(skillPath);

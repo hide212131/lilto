@@ -294,7 +294,7 @@ test("setupSkillRuntime は CODEX_HOME 配下に bundled/user skills を配置�
     assert.deepEqual(runtime.updatedSettings, [path.join(codexHomeDir, "config.toml")]);
     assert.deepEqual(runtime.removedWorkspaces, []);
     const configToml = fs.readFileSync(path.join(codexHomeDir, "config.toml"), "utf8");
-    assert.equal(configToml.includes("repo-only\\\\SKILL.md"), true);
+    assert.equal(/repo-only[\\/]+SKILL\.md/.test(configToml), true);
     assert.match(configToml, /enabled = false/);
     assert.equal(configToml.includes(".agents\\\\skills"), false);
     assert.equal(fs.existsSync(path.join(legacyCodexHomeDir, ".sandbox-secrets", "sandbox_users.json")), false);

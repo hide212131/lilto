@@ -53,7 +53,13 @@ export function isWindowsPlatform(platform = process.platform): boolean {
 }
 
 function resolveAppRootDir(baseDir?: string): string {
-  return baseDir ? path.resolve(baseDir) : path.resolve(__dirname, "..", "..");
+  if (!baseDir) {
+    return path.resolve(__dirname, "..", "..");
+  }
+  if (/^[A-Za-z]:[\\/]/.test(baseDir)) {
+    return path.win32.resolve(baseDir);
+  }
+  return path.resolve(baseDir);
 }
 
 function resolveBundledCodexBinPath(
@@ -61,12 +67,18 @@ function resolveBundledCodexBinPath(
   baseDir: string,
   pathExists: (filePath: string) => boolean
 ): string | null {
-  const candidate = path.join(baseDir, "node_modules", ".bin", isWindowsPlatform(platform) ? "codex.cmd" : "codex");
+  const pathModule = isWindowsPlatform(platform) ? path.win32 : path;
+  const candidate = pathModule.join(baseDir, "node_modules", ".bin", isWindowsPlatform(platform) ? "codex.cmd" : "codex");
   return pathExists(candidate) ? candidate : null;
 }
 
-function resolveBundledCodexScriptPath(baseDir: string, pathExists: (filePath: string) => boolean): string | null {
-  const candidate = path.join(baseDir, "node_modules", "@openai", "codex", "bin", "codex.js");
+function resolveBundledCodexScriptPath(
+  platform: NodeJS.Platform,
+  baseDir: string,
+  pathExists: (filePath: string) => boolean
+): string | null {
+  const pathModule = isWindowsPlatform(platform) ? path.win32 : path;
+  const candidate = pathModule.join(baseDir, "node_modules", "@openai", "codex", "bin", "codex.js");
   return pathExists(candidate) ? candidate : null;
 }
 
@@ -118,7 +130,8 @@ export function resolveCliInvocation(
   if (normalized.toLowerCase() === "codex") {
     const baseDir = resolveAppRootDir(options.baseDir);
     const pathExists = options.pathExists ?? fs.existsSync;
-    const bundledScript = resolveBundledCodexScriptPath(baseDir, pathExists);
+    const pathModule = isWindowsPlatform(platform) ? path.win32 : path;
+    const bundledScript = resolveBundledCodexScriptPath(platform, baseDir, pathExists);
     if (bundledScript) {
       return {
         command: process.execPath,
@@ -140,7 +153,7 @@ export function resolveCliInvocation(
     }
 
     throw new Error(
-      `Bundled Codex CLI not found under ${path.join(baseDir, "node_modules")}. Run npm install to restore @openai/codex.`
+      `Bundled Codex CLI not found under ${pathModule.join(baseDir, "node_modules")}. Run npm install to restore @openai/codex.`
     );
   }
 

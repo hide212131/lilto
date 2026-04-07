@@ -1,10 +1,11 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
-import path from "node:path";
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import readline from "node:readline";
 
 import type { Logger } from "./logger";
+import { resolveNativeHelperPath } from "./app-paths";
 import type { SchedulerCreateInput, SchedulerNotificationEvent, SchedulerScheduleSummary } from "../shared/scheduler";
 
 type SchedulerResponse<T> =
@@ -158,34 +159,23 @@ export class SchedulerService implements SchedulerClient {
 
   private resolveBinaryPath(): string {
     const executable = process.platform === "win32" ? "scheduler-daemon.exe" : "scheduler-daemon";
-    if (process.env.LILTO_SCHEDULER_BIN?.trim()) {
-      return process.env.LILTO_SCHEDULER_BIN.trim();
-    }
     const developmentCandidates = [
-      path.join(process.cwd(), "native", "scheduler-daemon", "bin", executable),
-      path.join(process.cwd(), "native", "scheduler-daemon", "target", "release", executable)
+      `native/scheduler-daemon/bin/${executable}`,
+      `native/scheduler-daemon/target/release/${executable}`
     ];
     if (process.platform === "win32") {
       developmentCandidates.splice(
         1,
         0,
-        path.join(process.cwd(), "native", "scheduler-daemon", "target", "aarch64-pc-windows-msvc", "release", executable),
-        path.join(process.cwd(), "native", "scheduler-daemon", "target", "x86_64-pc-windows-msvc", "release", executable)
+        `native/scheduler-daemon/target/aarch64-pc-windows-msvc/release/${executable}`,
+        `native/scheduler-daemon/target/x86_64-pc-windows-msvc/release/${executable}`
       );
     }
-    const packagedBinary = path.join(process.resourcesPath, "bin", executable);
-    if (process.env.NODE_ENV === "production") {
-      return packagedBinary;
-    }
-    for (const candidate of developmentCandidates) {
-      if (existsSync(candidate)) {
-        return candidate;
-      }
-    }
-    if (existsSync(packagedBinary)) {
-      return packagedBinary;
-    }
-    return developmentCandidates[0];
+    return resolveNativeHelperPath({
+      envVar: "LILTO_SCHEDULER_BIN",
+      packagedRelativePath: `bin/${executable}`,
+      developmentCandidates
+    });
   }
 
   private toDaemonSchedule(input: SchedulerCreateInput) {

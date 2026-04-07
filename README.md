@@ -34,6 +34,14 @@ PC作業を人間の代わりに実行する、軽量なAIアシスタント。
 
 詳細な検証手順は `docs/manual-test.md` を参照。
 
+## 配布ビルド
+- 標準の配布コマンドは `npm run dist`
+- macOS だけを明示的に作る場合は `npm run dist:mac`
+- Windows installer を Windows 上で作る場合は `npm run dist:win`
+- 生成物は `release/` 配下に出力される
+- 配布後の成果物と native helper 同梱の確認は `npm run verify:dist`
+- packaging 前提の native helper は `npm run build:native` により `native/**/bin` へ配置され、配布時は `resources/bin` へ同梱される
+
 ## Electron UI 検証方針
 - 障害解析や仕様確認では、まず `live-ui-manual-verification` を使ってライブ UI を観測する
 - 主要なユーザー操作は Playwright ベースで扱う

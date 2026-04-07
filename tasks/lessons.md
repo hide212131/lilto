@@ -1,5 +1,13 @@
 # Lessons
 
+## 2026-04-07
+
+| 変更内容 | ミス/課題 | 再発防止ルール |
+|---|---|---|
+| `package-standard-electron-app` の proposal/design/specs/tasks を作成する際、ユーザーは `proposal.md` / `design.md` / `tasks.md` の3点だけを列挙していたが、OpenSpec の `applyRequires` は `tasks` で、その依存として `specs` も必須だった。 | ユーザーが列挙した artifact 名だけを見て進めると、schema 上の依存 artifact を落として apply-ready にならない change を作ってしまう。 | OpenSpec の提案作成では、ユーザー指定の artifact 一覧より先に `openspec status --change <name> --json` を確認し、`applyRequires` と依存関係を満たす全 artifact を必ず作成する。 |
+| `package-standard-electron-app` の dist 検証で、`extraResources` に `speech-transcriber.app` をファイル名 filter だけで載せると macOS の `.app` bundle 中身が release に入らず、verify で helper 不在になった。 | `.app` は単一ファイルではなくディレクトリ bundle なので、親ディレクトリ + filename filter だけだと期待どおりに bundle 全体がコピーされないことがある。 | Electron packaging で macOS helper `.app` を同梱するときは、bundle ルートを `from` にして `to` を `bin/<name>.app` に固定し、`filter: ["**/*"]` で bundle 全体をコピーする。 |
+| Windows CLI 互換のテストで、`C:/tmp/...` の baseDir を POSIX 上の `path.resolve` / `path.join` へ渡すと `C:\\tmp\\...` ではなく混在パスになり、同梱 codex の検出が偽失敗した。 | Windows 文字列パスを非 Windows 環境の `path` モジュールで正規化すると、期待する区切り文字や drive 解決にならず、pathExists 判定とズレる。 | Windows path を扱う helper では、入力が drive letter 付きなら `path.win32.resolve/join` を使い、テストでも `C:\\...` と一致する文字列を生成してから存在判定する。 |
+
 ## 2026-03-29
 
 | 変更内容 | ミス/課題 | 再発防止ルール |

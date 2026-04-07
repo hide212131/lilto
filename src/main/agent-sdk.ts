@@ -5,6 +5,7 @@ import type { ClaudeAuthService } from "./auth-service";
 import type { ProviderSettings } from "./provider-settings";
 import { isCustomProviderReady } from "./provider-settings";
 import type { SchedulerBridgeServer } from "./scheduler-bridge";
+import { resolveCronMcpServerPath } from "./app-paths";
 import type { AgentLoopEvent } from "../shared/agent-loop";
 
 type CodexConfig = Record<string, unknown>;
@@ -454,7 +455,7 @@ export async function createCodexThreadFromSdk(options: {
         mcp_servers: {
           cron: {
             command: process.execPath,
-            args: [path.join(process.cwd(), "dist", "main", "cron-mcp-server.js")],
+            args: [resolveCronMcpServerPath()],
             env: {
               ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
               ...bridgeEnv

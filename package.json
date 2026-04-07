@@ -2,14 +2,19 @@
   "name": "lilt-o",
   "version": "0.1.0",
   "private": true,
+  "author": "hide",
   "description": "Lilt-o desktop shell with Codex SDK bridge",
   "main": "dist/main/index.js",
   "scripts": {
-    "prebuild": "node scripts/sync-skill-creator.js",
+    "prebuild": "node scripts/prepare-build-assets.js && node scripts/sync-skill-creator.js",
     "build:native": "node scripts/build-native.js",
     "install:vs-build-tools": "powershell -ExecutionPolicy Bypass -File scripts/install-vs-build-tools.ps1",
     "build": "tsc -p tsconfig.json && vite build",
     "start": "npm run build:native && npm run build && electron .",
+    "dist": "npm run build:native && npm run build && electron-builder --publish never",
+    "dist:mac": "npm run build:native && npm run build && electron-builder --mac dmg --publish never",
+    "dist:win": "npm run build:native && npm run build && electron-builder --win nsis --publish never",
+    "verify:dist": "node scripts/verify-dist-artifacts.js",
     "live-ui:manual": "node scripts/live-ui-manual-verification.js",
     "test": "npm run build && node --test",
     "test:windows-sandbox-live": "npm run build && node --test scripts/windows-sandbox-live-test.js",
@@ -17,6 +22,39 @@
     "e2e:electron:skills-live": "npm run build && node scripts/e2e-electron-agent-skills-live.js"
   },
   "build": {
+    "appId": "dev.hide.lilto",
+    "productName": "Lilt-o",
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "asar": true,
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg"
+      ]
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    },
     "extraResources": [
       {
         "from": "native/scheduler-daemon/bin",
@@ -24,6 +62,13 @@
         "filter": [
           "scheduler-daemon",
           "scheduler-daemon.exe"
+        ]
+      },
+      {
+        "from": "native/speech-transcriber/bin/speech-transcriber.app",
+        "to": "bin/speech-transcriber.app",
+        "filter": [
+          "**/*"
         ]
       },
       {
@@ -44,6 +89,7 @@
     "@types/node": "^25.3.5",
     "agent-browser": "^0.13.0",
     "electron": "^31.7.7",
+    "electron-builder": "^26.8.1",
     "lit": "^3.3.2",
     "typescript": "^5.7.3",
     "vite": "^7.3.1"

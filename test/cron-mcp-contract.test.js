@@ -5,7 +5,7 @@ const fs = require("node:fs");
 test("agent runtime は Codex config で cron MCP server を注入する", () => {
   const content = fs.readFileSync("src/main/agent-sdk.ts", "utf8");
   assert.match(content, /mcp_servers/);
-  assert.match(content, /cron-mcp-server\.js/);
+  assert.match(content, /resolveCronMcpServerPath|cron-mcp-server\.js/);
   assert.match(content, /getBridgeEnv/);
 });
 

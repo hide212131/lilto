@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const { SchedulerService } = require("../dist/main/scheduler.js");
 
 // Mock logger for testing
@@ -14,6 +15,7 @@ const mockLogger = {
 
 test("スケジューラーサービスが30秒後のタイマーを作成できる", async () => {
   const notifications = [];
+  fs.mkdirSync("/tmp/lilto-test-scheduler-live", { recursive: true });
   const scheduler = new SchedulerService({
     logger: mockLogger,
     userDataDir: "/tmp/lilto-test-scheduler-live",
@@ -86,5 +88,7 @@ test("スケジューラーサービスが30秒後のタイマーを作成でき
   } catch (error) {
     console.error("Test failed:", error.message);
     throw error;
+  } finally {
+    scheduler.process?.kill();
   }
 });

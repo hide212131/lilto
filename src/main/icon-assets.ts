@@ -1,22 +1,12 @@
 import fs from "node:fs";
-import path from "node:path";
 import { nativeImage, type NativeImage } from "electron";
+import { resolveMascotPngPath as resolveMascotPngPathFromApp } from "./app-paths";
 
 let cachedMascotImage: NativeImage | null = null;
 
 function resolveMascotPngPath(): string | null {
-  const candidates = [
-    path.join(process.cwd(), "dist", "renderer", "mascot.png"),
-    path.join(process.cwd(), "src", "renderer", "public", "mascot.png")
-  ];
-
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-
-  return null;
+  const candidate = resolveMascotPngPathFromApp();
+  return candidate && fs.existsSync(candidate) ? candidate : null;
 }
 
 function loadMascotImage(): NativeImage {
