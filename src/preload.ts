@@ -8,7 +8,8 @@ const AGENT_LOOP_EVENT_CHANNEL = "agent:loopEvent";
 const SCHEDULER_NOTIFICATION_CHANNEL = "scheduler:notification";
 
 contextBridge.exposeInMainWorld("lilto", {
-  submitPrompt: async (text: string, conversationId?: string | null) => ipcRenderer.invoke("agent:submitPrompt", { text, conversationId }),
+  submitPrompt: async (text: string, conversationId?: string | null, backendSessionId?: string | null) =>
+    ipcRenderer.invoke("agent:submitPrompt", { text, conversationId, backendSessionId }),
   abortPrompt: async () => ipcRenderer.invoke("agent:abort"),
   openExternalUrl: async (url: string) => ipcRenderer.invoke("app:openExternal", { url }),
   startClaudeOauth: async () => ipcRenderer.invoke("auth:startClaudeOauth"),

@@ -102,6 +102,10 @@ export function registerAgentIpcHandlers({
       typeof (payload as { conversationId?: unknown }).conversationId === "string"
         ? (payload as { conversationId: string }).conversationId
         : undefined;
+    const backendSessionId =
+      typeof (payload as { backendSessionId?: unknown }).backendSessionId === "string"
+        ? (payload as { backendSessionId: string }).backendSessionId
+        : undefined;
     const text = await normalizePromptPluginMentions(originalText, pluginService);
     const requestId = randomUUID();
     broadcastLoopEvent({ type: "run_start", requestId });
@@ -110,6 +114,7 @@ export function registerAgentIpcHandlers({
       const result = await agentRuntime.submitPrompt(text, providerSettings, {
         requestId,
         conversationId,
+        backendSessionId,
         onLoopEvent: (event) => {
           broadcastLoopEvent(event);
         }

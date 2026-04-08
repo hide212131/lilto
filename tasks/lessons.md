@@ -1,5 +1,11 @@
 # Lessons
 
+## 2026-04-09
+
+| 変更内容 | ミス/課題 | 再発防止ルール |
+|---|---|---|
+| 会話履歴を再表示したあとに送信すると、Renderer が保存済み `backendSessionId` を使わずローカル `session-...` ID だけを Main へ渡していたため、アプリ再起動後は Codex thread を resume できず文脈が失われた。 | UI の会話 ID と backend の thread ID を同じ「conversationId」とみなして実装すると、Main の in-memory map が消える再起動境界でだけ履歴復元が壊れる。表示上の履歴が残っていても、実際の LLM コンテキストは別物になりうる。 | 会話再開機能では「UI セッション ID」と「backend thread ID」を明示的に分けて扱う。送信 IPC には必要なら両方を渡し、再起動後の resume 経路を `threadId` 復元テストで必ず固定する。 |
+
 ## 2026-04-07
 
 | 変更内容 | ミス/課題 | 再発防止ルール |

@@ -150,7 +150,8 @@ declare global {
     lilto: {
       submitPrompt: (
         text: string,
-        conversationId?: string | null
+        conversationId?: string | null,
+        backendSessionId?: string | null
       ) => Promise<
         // 既存契約との互換性維持: submitPrompt の戻り値は変更しない。
         | { ok: true; response: { text: string } }

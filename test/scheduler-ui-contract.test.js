@@ -6,6 +6,7 @@ test("preload は scheduler notification listener を公開する", () => {
   const content = fs.readFileSync("src/preload.ts", "utf8");
   assert.match(content, /onSchedulerNotification:\s*\(listener/);
   assert.match(content, /ipcRenderer\.on\(SCHEDULER_NOTIFICATION_CHANNEL, wrapped\)/);
+  assert.match(content, /backendSessionId/);
   assert.match(content, /listSchedules:\s*async \(\)/);
   assert.match(content, /ipcRenderer\.invoke\("scheduler:list"\)/);
   assert.match(content, /deleteSchedule:\s*async \(id: string\)/);
@@ -21,6 +22,8 @@ test("renderer app は backendSessionId または conversationId で scheduler n
   assert.match(content, /session\.id === event\.sessionId/);
   assert.match(content, /followUpInstruction/);
   assert.match(content, /_runSchedulerFollowUp/);
+  assert.match(content, /activeSession\?\.backendSessionId/);
+  assert.match(content, /session\?\.backendSessionId/);
   assert.match(content, /window\.lilto\.submitPrompt/);
 });
 

@@ -585,10 +585,13 @@ export class AgentRuntime {
     model?: RuntimeModel;
     cwd?: string;
     conversationId?: string;
+    backendSessionId?: string;
     threadOptions: SessionThreadOptions;
   }): Promise<CodexSession> {
     const cwd = options.cwd ?? process.cwd();
-    const threadId = options.conversationId ? this.conversationThreads.get(options.conversationId) : undefined;
+    const threadId =
+      (options.conversationId ? this.conversationThreads.get(options.conversationId) : undefined)
+      ?? options.backendSessionId;
     const signature = JSON.stringify({
       conversationId: options.conversationId ?? "default",
       apiKey: options.apiKey ?? "",
@@ -739,7 +742,7 @@ export class AgentRuntime {
 
   private async runSessionPrompt(
     text: string,
-    options: { apiKey: string | null; model?: RuntimeModel; cwd?: string; conversationId?: string },
+    options: { apiKey: string | null; model?: RuntimeModel; cwd?: string; conversationId?: string; backendSessionId?: string },
     providerSettings: ProviderSettings,
     hooks?: {
       requestId: string;
@@ -813,6 +816,7 @@ export class AgentRuntime {
     hooks?: {
       requestId: string;
       conversationId?: string;
+      backendSessionId?: string;
       onLoopEvent?: (event: AgentLoopEvent) => void;
       mode?: "default" | "heartbeat";
     }
@@ -902,7 +906,7 @@ export class AgentRuntime {
 
         return await this.runSessionPrompt(
           text,
-          { apiKey, model, conversationId: hooks?.conversationId, ...runOptionsBase },
+          { apiKey, model, conversationId: hooks?.conversationId, backendSessionId: hooks?.backendSessionId, ...runOptionsBase },
           providerSettings,
           hooks
         );
@@ -923,7 +927,13 @@ export class AgentRuntime {
 
       return await this.runSessionPrompt(
         text,
-        { apiKey: null, model: buildOauthModel(providerSettings), conversationId: hooks?.conversationId, ...runOptionsBase },
+        {
+          apiKey: null,
+          model: buildOauthModel(providerSettings),
+          conversationId: hooks?.conversationId,
+          backendSessionId: hooks?.backendSessionId,
+          ...runOptionsBase
+        },
         providerSettings,
         hooks
       );

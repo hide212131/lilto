@@ -1,4 +1,8 @@
-export type PromptPayload = { text: string; conversationId?: string | null };
+export type PromptPayload = {
+  text: string;
+  conversationId?: string | null;
+  backendSessionId?: string | null;
+};
 // 既存 submitPrompt の request/response 契約は維持し、loop event は別チャネルで追加する。
 export const AGENT_LOOP_EVENT_CHANNEL = "agent:loopEvent";
 export const SCHEDULER_NOTIFICATION_CHANNEL = "scheduler:notification";
@@ -20,6 +24,11 @@ export function validatePrompt(payload: unknown): PromptValidationResult {
   const conversationId = (payload as Record<string, unknown>).conversationId;
   if (conversationId !== undefined && conversationId !== null && typeof conversationId !== "string") {
     return { ok: false, code: "INVALID_REQUEST", message: "conversationId の形式が不正です" };
+  }
+
+  const backendSessionId = (payload as Record<string, unknown>).backendSessionId;
+  if (backendSessionId !== undefined && backendSessionId !== null && typeof backendSessionId !== "string") {
+    return { ok: false, code: "INVALID_REQUEST", message: "backendSessionId の形式が不正です" };
   }
 
   const text = (payload as Record<string, string>).text;

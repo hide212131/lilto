@@ -246,6 +246,38 @@ test("同じ conversationId は thread.started 後の session を再利用する
   assert.equal(calls[0].schedulerSessionId, "conv-1");
 });
 
+test("backendSessionId が渡されれば再起動後でも既存 thread を resume する", async () => {
+  const calls = [];
+  const runtime = new AgentRuntime({
+    authService: createAuthService("authenticated"),
+    createSession: async (options) => {
+      calls.push(options);
+      return {
+        id: options.threadId || null,
+        async runStreamed() {
+          async function* stream() {
+            yield { type: "item.completed", item: { id: "m1", type: "agent_message", text: "resumed" } };
+          }
+          return { events: stream() };
+        }
+      };
+    },
+    logger: { info() {}, error() {} }
+  });
+
+  const result = await runtime.submitPrompt("again", createProviderSettings(), {
+    requestId: "req-1",
+    conversationId: "conv-1",
+    backendSessionId: "thread-restored-1"
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.text, "resumed");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].threadId, "thread-restored-1");
+  assert.equal(calls[0].schedulerSessionId, "thread-restored-1");
+});
+
 test("refreshPlugins 後は次回送信で session を再作成する", async () => {
   let sessionCount = 0;
   const runtime = new AgentRuntime({

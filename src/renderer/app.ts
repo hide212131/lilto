@@ -76,6 +76,13 @@ export class LiltApp extends LitElement {
   private _pendingLabel = "";
   private _currentSessionId: string | null = null;
 
+  private _getActiveSession(): Session | null {
+    if (!this._currentSessionId) {
+      return null;
+    }
+    return this.sessions.find((session) => session.id === this._currentSessionId) ?? null;
+  }
+
   static styles = css`
     :host {
       display: flex;
@@ -388,7 +395,12 @@ export class LiltApp extends LitElement {
     this.isSending = true;
 
     try {
-      const result = await window.lilto.submitPrompt(text, this._currentSessionId);
+      const activeSession = this._getActiveSession();
+      const result = await window.lilto.submitPrompt(
+        text,
+        this._currentSessionId,
+        activeSession?.backendSessionId ?? null
+      );
       if (result.ok) {
         this._resolvePendingMessage(pendingIdx, result.response.text, this._buildProgress());
         this._saveCurrentSession();
@@ -507,7 +519,12 @@ export class LiltApp extends LitElement {
     });
 
     try {
-      const result = await window.lilto.submitPrompt(this._buildSchedulerFollowUpPrompt(event), conversationId);
+      const session = this.sessions.find((entry) => entry.id === conversationId) ?? null;
+      const result = await window.lilto.submitPrompt(
+        this._buildSchedulerFollowUpPrompt(event),
+        conversationId,
+        session?.backendSessionId ?? null
+      );
       if (result.ok) {
         this._updateSessionMessage(conversationId, pendingMessageId, {
           text: result.response.text,
