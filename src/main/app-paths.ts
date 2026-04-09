@@ -14,6 +14,21 @@ type NativeHelperOptions = AppPathOptions & {
   developmentCandidates: string[];
 };
 
+type PackagedCodexOptions = AppPathOptions & {
+  platform?: NodeJS.Platform;
+  arch?: string;
+  pathExists?: (filePath: string) => boolean;
+};
+
+const CODEX_PLATFORM_PACKAGE_BY_TARGET = {
+  "x86_64-unknown-linux-musl": "codex-linux-x64",
+  "aarch64-unknown-linux-musl": "codex-linux-arm64",
+  "x86_64-apple-darwin": "codex-darwin-x64",
+  "aarch64-apple-darwin": "codex-darwin-arm64",
+  "x86_64-pc-windows-msvc": "codex-win32-x64",
+  "aarch64-pc-windows-msvc": "codex-win32-arm64"
+} as const;
+
 function resolveProjectRoot(projectRoot?: string): string {
   return path.resolve(projectRoot ?? process.cwd());
 }
@@ -103,4 +118,52 @@ export function resolveNativeHelperPath(options: NativeHelperOptions): string {
   }
 
   return packagedCandidate ?? developmentCandidates[0];
+}
+
+function resolveCodexTargetTriple(platform: NodeJS.Platform, arch: string): string | null {
+  switch (platform) {
+    case "linux":
+    case "android":
+      return arch === "x64" ? "x86_64-unknown-linux-musl" : arch === "arm64" ? "aarch64-unknown-linux-musl" : null;
+    case "darwin":
+      return arch === "x64" ? "x86_64-apple-darwin" : arch === "arm64" ? "aarch64-apple-darwin" : null;
+    case "win32":
+      return arch === "x64" ? "x86_64-pc-windows-msvc" : arch === "arm64" ? "aarch64-pc-windows-msvc" : null;
+    default:
+      return null;
+  }
+}
+
+export function resolvePackagedCodexBinary(options: PackagedCodexOptions = {}): { command: string; extraPath?: string } | null {
+  const appRoot = resolveAppRoot(options);
+  if (!appRoot.endsWith(".asar")) {
+    return null;
+  }
+
+  const platform = options.platform ?? process.platform;
+  const arch = options.arch ?? process.arch;
+  const targetTriple = resolveCodexTargetTriple(platform, arch);
+  if (!targetTriple) {
+    return null;
+  }
+
+  const packageDirName = CODEX_PLATFORM_PACKAGE_BY_TARGET[targetTriple as keyof typeof CODEX_PLATFORM_PACKAGE_BY_TARGET];
+  if (!packageDirName) {
+    return null;
+  }
+
+  const pathExists = options.pathExists ?? fs.existsSync;
+  const unpackedRoot = appRoot.replace(/\.asar$/, ".asar.unpacked");
+  const vendorRoot = path.join(unpackedRoot, "node_modules", "@openai", packageDirName, "vendor", targetTriple);
+  const binaryName = platform === "win32" ? "codex.exe" : "codex";
+  const command = path.join(vendorRoot, "codex", binaryName);
+  if (!pathExists(command)) {
+    return null;
+  }
+
+  const extraPath = path.join(vendorRoot, "path");
+  return {
+    command,
+    extraPath: pathExists(extraPath) ? extraPath : undefined
+  };
 }

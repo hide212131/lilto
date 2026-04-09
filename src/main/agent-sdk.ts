@@ -5,7 +5,7 @@ import type { ClaudeAuthService } from "./auth-service";
 import type { ProviderSettings } from "./provider-settings";
 import { isCustomProviderReady } from "./provider-settings";
 import type { SchedulerBridgeServer } from "./scheduler-bridge";
-import { resolveCronMcpServerPath } from "./app-paths";
+import { resolveCronMcpServerPath, resolvePackagedCodexBinary } from "./app-paths";
 import type { AgentLoopEvent } from "../shared/agent-loop";
 
 type CodexConfig = Record<string, unknown>;
@@ -426,6 +426,7 @@ export async function createCodexThreadFromSdk(options: {
       apiKey?: string;
       baseUrl?: string;
       env?: Record<string, string>;
+      codexPathOverride?: string;
       config?: Record<string, unknown>;
     }) => {
       startThread: (options: Record<string, unknown>) => Thread;
@@ -439,6 +440,11 @@ export async function createCodexThreadFromSdk(options: {
   }
   if (options.codexHomeDir) {
     env.CODEX_HOME = options.codexHomeDir;
+  }
+  const packagedCodex = resolvePackagedCodexBinary();
+  if (packagedCodex?.extraPath) {
+    const pathSeparator = process.platform === "win32" ? ";" : ":";
+    env.PATH = [packagedCodex.extraPath, ...(env.PATH ?? "").split(pathSeparator).filter(Boolean)].join(pathSeparator);
   }
   const bridgeEnv = options.schedulerBridge
     ? options.schedulerBridge.getBridgeEnv(options.schedulerSessionId ?? "default")
@@ -469,6 +475,7 @@ export async function createCodexThreadFromSdk(options: {
     apiKey: options.apiKey ?? undefined,
     baseUrl: options.model?.baseUrl,
     env,
+    codexPathOverride: packagedCodex?.command,
     config: mergeCodexConfig(mcpConfig, options.config)
   });
   const threadOptions = {

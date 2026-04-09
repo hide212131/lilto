@@ -8,6 +8,15 @@ const WINDOWS_CLI_SHIMS = {
   openspec: "openspec.cmd"
 } as const;
 
+const CODEX_PLATFORM_PACKAGE_BY_TARGET = {
+  "x86_64-unknown-linux-musl": "codex-linux-x64",
+  "aarch64-unknown-linux-musl": "codex-linux-arm64",
+  "x86_64-apple-darwin": "codex-darwin-x64",
+  "aarch64-apple-darwin": "codex-darwin-arm64",
+  "x86_64-pc-windows-msvc": "codex-win32-x64",
+  "aarch64-pc-windows-msvc": "codex-win32-arm64"
+} as const;
+
 type CliInvocationSource = "explicit" | "local-bin" | "package-script" | "path";
 
 export type CliInvocation = {
@@ -82,6 +91,63 @@ function resolveBundledCodexScriptPath(
   return pathExists(candidate) ? candidate : null;
 }
 
+function resolveCodexTargetTriple(platform: NodeJS.Platform, arch = process.arch): string | null {
+  switch (platform) {
+    case "linux":
+    case "android":
+      return arch === "x64" ? "x86_64-unknown-linux-musl" : arch === "arm64" ? "aarch64-unknown-linux-musl" : null;
+    case "darwin":
+      return arch === "x64" ? "x86_64-apple-darwin" : arch === "arm64" ? "aarch64-apple-darwin" : null;
+    case "win32":
+      return arch === "x64" ? "x86_64-pc-windows-msvc" : arch === "arm64" ? "aarch64-pc-windows-msvc" : null;
+    default:
+      return null;
+  }
+}
+
+function resolvePackagedCodexBinary(
+  platform: NodeJS.Platform,
+  baseDir: string,
+  pathExists: (filePath: string) => boolean
+): { command: string; env?: Record<string, string> } | null {
+  if (!baseDir.endsWith(".asar")) {
+    return null;
+  }
+
+  const targetTriple = resolveCodexTargetTriple(platform);
+  if (!targetTriple) {
+    return null;
+  }
+
+  const packageDirName = CODEX_PLATFORM_PACKAGE_BY_TARGET[targetTriple as keyof typeof CODEX_PLATFORM_PACKAGE_BY_TARGET];
+  if (!packageDirName) {
+    return null;
+  }
+
+  const pathModule = isWindowsPlatform(platform) ? path.win32 : path;
+  const unpackedRoot = baseDir.replace(/\.asar$/, ".asar.unpacked");
+  const vendorRoot = pathModule.join(unpackedRoot, "node_modules", "@openai", packageDirName, "vendor", targetTriple);
+  const binaryName = isWindowsPlatform(platform) ? "codex.exe" : "codex";
+  const command = pathModule.join(vendorRoot, "codex", binaryName);
+  if (!pathExists(command)) {
+    return null;
+  }
+
+  const pathDir = pathModule.join(vendorRoot, "path");
+  const pathSeparator = isWindowsPlatform(platform) ? ";" : ":";
+  const extraPath = pathExists(pathDir) ? pathDir : "";
+  const currentPath = process.env.PATH ?? "";
+  const mergedPath = extraPath ? [extraPath, ...currentPath.split(pathSeparator).filter(Boolean)].join(pathSeparator) : currentPath;
+
+  return {
+    command,
+    env: {
+      PATH: mergedPath,
+      CODEX_MANAGED_BY_NPM: "1"
+    }
+  };
+}
+
 export function resolveCliCommand(command: string, platform = process.platform): string {
   const normalized = normalizeCommandToken(command);
   if (!normalized) return normalized;
@@ -131,6 +197,15 @@ export function resolveCliInvocation(
     const baseDir = resolveAppRootDir(options.baseDir);
     const pathExists = options.pathExists ?? fs.existsSync;
     const pathModule = isWindowsPlatform(platform) ? path.win32 : path;
+    const packagedBinary = resolvePackagedCodexBinary(platform, baseDir, pathExists);
+    if (packagedBinary) {
+      return {
+        command: packagedBinary.command,
+        args: normalizedArgs,
+        env: packagedBinary.env,
+        source: "local-bin"
+      };
+    }
     const bundledScript = resolveBundledCodexScriptPath(platform, baseDir, pathExists);
     if (bundledScript) {
       return {

@@ -6,6 +6,7 @@ const path = require("node:path");
 
 const {
   resolveAppRoot,
+  resolvePackagedCodexBinary,
   resolveNativeHelperPath,
   resolvePreloadPath,
   resolveRendererIndexPath
@@ -49,4 +50,38 @@ test("resolveNativeHelperPath prefers packaged resources for packaged builds", (
   });
 
   assert.equal(resolved, packaged);
+});
+
+test("resolvePackagedCodexBinary returns unpacked codex path for packaged apps", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lilto-app-paths-"));
+  const appRoot = path.join(tempRoot, "Lilt-o.app", "Contents", "Resources", "app.asar");
+  const binary = path.join(
+    tempRoot,
+    "Lilt-o.app",
+    "Contents",
+    "Resources",
+    "app.asar.unpacked",
+    "node_modules",
+    "@openai",
+    "codex-darwin-arm64",
+    "vendor",
+    "aarch64-apple-darwin",
+    "codex",
+    "codex"
+  );
+  const rgDir = path.join(path.dirname(path.dirname(binary)), "path");
+  fs.mkdirSync(path.dirname(binary), { recursive: true });
+  fs.writeFileSync(binary, "binary");
+  fs.mkdirSync(rgDir, { recursive: true });
+
+  const resolved = resolvePackagedCodexBinary({
+    appRoot,
+    platform: "darwin",
+    arch: "arm64"
+  });
+
+  assert.deepEqual(resolved, {
+    command: binary,
+    extraPath: rgDir
+  });
 });

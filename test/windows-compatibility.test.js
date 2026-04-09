@@ -68,6 +68,26 @@ test("codex package script が無い場合は node_modules/.bin ラッパーへ�
   assert.equal(invocation.source, "local-bin");
 });
 
+test("packaged macOS app では unpacked codex binary を直接使う", () => {
+  const baseDir = "/Applications/Lilt-o.app/Contents/Resources/app.asar";
+  const invocation = resolveCliInvocation("codex", ["app-server", "--listen", "stdio://"], {
+    platform: "darwin",
+    baseDir,
+    pathExists: (filePath) =>
+      filePath === "/Applications/Lilt-o.app/Contents/Resources/app.asar.unpacked/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex/codex" ||
+      filePath === "/Applications/Lilt-o.app/Contents/Resources/app.asar.unpacked/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/path"
+  });
+
+  assert.equal(
+    invocation.command,
+    "/Applications/Lilt-o.app/Contents/Resources/app.asar.unpacked/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex/codex"
+  );
+  assert.deepEqual(invocation.args, ["app-server", "--listen", "stdio://"]);
+  assert.equal(invocation.env?.CODEX_MANAGED_BY_NPM, "1");
+  assert.match(invocation.env?.PATH ?? "", /aarch64-apple-darwin\/path/);
+  assert.equal(invocation.source, "local-bin");
+});
+
 test("同梱 codex が無ければ外部 PATH に逃がさず明示エラーにする", () => {
   assert.throws(
     () => resolveCliInvocation("codex", [], { platform: "win32", baseDir: "C:/tmp/lilto", pathExists: () => false }),
