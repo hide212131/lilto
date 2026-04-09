@@ -307,6 +307,45 @@ test("setupSkillRuntime は CODEX_HOME 配下に bundled/user skills を配置�
   }
 });
 
+test("setupSkillRuntime は projectRoot 未指定時のみ process.cwd() を使う", { concurrency: false }, () => {
+  const previousCodexHome = process.env.CODEX_HOME;
+  const previousCwd = process.cwd();
+  const root = tempDir("setup-runtime-cwd");
+  const cwdRoot = path.join(root, "cwd-root");
+  const appDataDir = path.join(root, "app-data");
+  const codexHomeDir = path.join(root, "codex-home");
+  process.env.CODEX_HOME = codexHomeDir;
+  fs.mkdirSync(cwdRoot, { recursive: true });
+  fs.mkdirSync(path.join(cwdRoot, "node_modules", "agent-browser", "skills", "agent-browser"), { recursive: true });
+  fs.writeFileSync(
+    path.join(cwdRoot, "node_modules", "agent-browser", "skills", "agent-browser", "SKILL.md"),
+    `---\nname: agent-browser\ndescription: bundled browser\n---\n`
+  );
+  fs.mkdirSync(path.join(cwdRoot, "skills", "bundled", "skill-creator"), { recursive: true });
+  fs.writeFileSync(
+    path.join(cwdRoot, "skills", "bundled", "skill-creator", "SKILL.md"),
+    `---\nname: skill-creator\ndescription: bundled skill creator\n---\n`
+  );
+
+  try {
+    process.chdir(cwdRoot);
+    const runtime = setupSkillRuntime({
+      appDataDir,
+      projectName: "cwd-fallback"
+    });
+
+    assert.equal(fs.realpathSync(runtime.workspaceDir), fs.realpathSync(cwdRoot));
+    assert.equal(fs.realpathSync(runtime.userSkillsDir), fs.realpathSync(path.join(cwdRoot, ".agents", "skills")));
+  } finally {
+    process.chdir(previousCwd);
+    if (previousCodexHome === undefined) {
+      delete process.env.CODEX_HOME;
+    } else {
+      process.env.CODEX_HOME = previousCodexHome;
+    }
+  }
+});
+
 // ─── parseReleaseUrl ─────────────────────────────────────────────────────────
 
 test("parseReleaseUrl: GitHub releases/download URL は version と ref を返す", () => {

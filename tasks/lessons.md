@@ -4,6 +4,7 @@
 
 | 変更内容 | ミス/課題 | 再発防止ルール |
 |---|---|---|
+| packaged Electron アプリ内の Codex/Skills workspace が `process.cwd()` 依存のままで、AGENTS.md や `.agents/skills` の探索先が macOS/Windows の起動元に引っ張られて不安定だった。 | 「同梱した codex バイナリの解決」と「Codex に渡す workspace/cwd の決定」を別問題として固定しないと、配布版だけ project root が崩れる。 | packaged desktop アプリでエージェントの project root を決める実装では `process.cwd()` を直接使わない。起動時に `app.getPath("userData")` などの安定パスを明示的に `projectRoot/workspaceDir` として渡し、未指定時 fallback のみ `process.cwd()` を許可する。 |
 | 会話履歴を再表示したあとに送信すると、Renderer が保存済み `backendSessionId` を使わずローカル `session-...` ID だけを Main へ渡していたため、アプリ再起動後は Codex thread を resume できず文脈が失われた。 | UI の会話 ID と backend の thread ID を同じ「conversationId」とみなして実装すると、Main の in-memory map が消える再起動境界でだけ履歴復元が壊れる。表示上の履歴が残っていても、実際の LLM コンテキストは別物になりうる。 | 会話再開機能では「UI セッション ID」と「backend thread ID」を明示的に分けて扱う。送信 IPC には必要なら両方を渡し、再起動後の resume 経路を `threadId` 復元テストで必ず固定する。 |
 
 ## 2026-04-07

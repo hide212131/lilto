@@ -119,6 +119,7 @@ if (hasSingleInstanceLock) {
   void app.whenReady().then(async () => {
     process.env.LILTO_APP_ROOT = app.getAppPath();
     process.env.LILTO_RESOURCES_PATH = process.resourcesPath;
+    const defaultWorkspaceDir = app.isPackaged ? app.getPath("userData") : process.cwd();
 
     if (process.platform === "darwin") {
       const dockIcon = resolveAppIcon(512);
@@ -142,7 +143,8 @@ if (hasSingleInstanceLock) {
     try {
       skillRuntime = setupSkillRuntime({
         appDataDir: app.getPath("userData"),
-        projectName: path.basename(process.cwd()),
+        projectName: path.basename(defaultWorkspaceDir),
+        projectRoot: defaultWorkspaceDir,
         workspaceTtlHours: Number(process.env.LILTO_WORKSPACE_TTL_HOURS || 24 * 7)
       });
       logger.info("skill_runtime_initialized", {
@@ -163,7 +165,7 @@ if (hasSingleInstanceLock) {
         appSkillsDir: "",
         bundledSkillsDir: "",
         userSkillsDir: "",
-        workspaceDir: process.cwd(),
+        workspaceDir: defaultWorkspaceDir,
         availableSkills: [],
         updatedSettings: [],
         removedWorkspaces: []
