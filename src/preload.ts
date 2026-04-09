@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld("lilto", {
   submitPrompt: async (text: string, conversationId?: string | null, backendSessionId?: string | null) =>
     ipcRenderer.invoke("agent:submitPrompt", { text, conversationId, backendSessionId }),
   abortPrompt: async () => ipcRenderer.invoke("agent:abort"),
+  getAgentsFile: async () => ipcRenderer.invoke("app:getAgentsFile"),
+  openAgentsFile: async () => ipcRenderer.invoke("app:openAgentsFile"),
   openExternalUrl: async (url: string) => ipcRenderer.invoke("app:openExternal", { url }),
   startClaudeOauth: async () => ipcRenderer.invoke("auth:startClaudeOauth"),
   submitAuthCode: async (code: string) => ipcRenderer.invoke("auth:submitCode", { code }),

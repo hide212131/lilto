@@ -94,7 +94,11 @@ export class LiltSettingsModal extends LitElement {
   @state() private _shortcutError = "";
 
   // Tab state
-  @state() private _activeTab: "providers" | "chat" | "heartbeat" | "skills" | "plugins" | "schedules" = "providers";
+  @state() private _activeTab: "providers" | "chat" | "instructions" | "heartbeat" | "skills" | "plugins" | "schedules" = "providers";
+  @state() private _agentsFilePath = "";
+  @state() private _agentsFileExists = false;
+  @state() private _agentsFileStatus = "";
+  @state() private _agentsFileBusy = false;
 
   // Skills state
   @state() private _skills: SkillInfo[] = [];
@@ -167,6 +171,7 @@ export class LiltSettingsModal extends LitElement {
     }
     if (changedProps.has("open") && this.open) {
       void this._loadOauthModels();
+      void this._loadAgentsFile();
       if (this._customApiKey.trim() || this._customBaseUrl.trim()) {
         void this._loadCustomModels();
       }
@@ -647,6 +652,10 @@ export class LiltSettingsModal extends LitElement {
                 @click=${() => this._switchTab("chat")}
               >Chat</div>
               <div
+                class="settings-menu-item ${this._activeTab === "instructions" ? "active" : ""}"
+                @click=${() => this._switchTab("instructions")}
+              >Instructions</div>
+              <div
                 class="settings-menu-item ${this._activeTab === "heartbeat" ? "active" : ""}"
                 @click=${() => this._switchTab("heartbeat")}
               >Heartbeat</div>
@@ -668,6 +677,8 @@ export class LiltSettingsModal extends LitElement {
                 ? this._renderProviders()
                 : this._activeTab === "chat"
                   ? this._renderChatSection()
+                  : this._activeTab === "instructions"
+                    ? this._renderInstructionsSection()
                   : this._activeTab === "heartbeat"
                     ? this._renderHeartbeatSection()
                   : this._activeTab === "plugins"
@@ -1370,6 +1381,9 @@ export class LiltSettingsModal extends LitElement {
     if (tab === "schedules") {
       void this._loadSchedules();
     }
+    if (tab === "instructions") {
+      void this._loadAgentsFile();
+    }
   }
 
   private _formatScheduleTiming(schedule: SchedulerScheduleSummary): string {
@@ -1695,6 +1709,31 @@ export class LiltSettingsModal extends LitElement {
     `;
   }
 
+  private _renderInstructionsSection() {
+    return html`
+      <h3>Instructions</h3>
+      <p>Agent の全体振る舞いを定義する <code>AGENTS.md</code> を編集します。</p>
+
+      <section class="provider-section active">
+        <h4>Project AGENTS.md</h4>
+        <p>このアプリが Codex に渡している workspace root 配下の <code>AGENTS.md</code> を開きます。ファイルが無ければ最小テンプレートを作成してから標準エディタで開きます。</p>
+        <div class="input-grid">
+          <label>
+            Path
+            <input .value=${this._agentsFilePath} readonly />
+          </label>
+        </div>
+        <div class="provider-actions">
+          <button .disabled=${this._agentsFileBusy} @click=${this._openAgentsFile}>
+            ${this._agentsFileBusy ? "起動中..." : "AGENTS.md を標準エディタで開く"}
+          </button>
+          <button .disabled=${this._agentsFileBusy} @click=${this._loadAgentsFile}>再読み込み</button>
+          <span class="status">${this._agentsFileStatus || (this._agentsFileExists ? "既存の AGENTS.md が見つかりました。" : "AGENTS.md はまだありません。")}</span>
+        </div>
+      </section>
+    `;
+  }
+
   private async _saveChatSettings() {
     const next: ProviderSettings = {
       ...this.providerSettings,
@@ -1715,6 +1754,33 @@ export class LiltSettingsModal extends LitElement {
       );
     } else {
       this._chatSaveStatus = `${result.error.code}: ${result.error.message}`;
+    }
+  }
+
+  private async _loadAgentsFile() {
+    const result = await window.lilto.getAgentsFile();
+    this._agentsFilePath = result.path;
+    this._agentsFileExists = result.exists;
+    if (!this._agentsFileStatus) {
+      this._agentsFileStatus = result.exists ? "既存の AGENTS.md が見つかりました。" : "AGENTS.md はまだありません。";
+    }
+  }
+
+  private async _openAgentsFile() {
+    this._agentsFileBusy = true;
+    try {
+      const result = await window.lilto.openAgentsFile();
+      this._agentsFilePath = result.path;
+      if (result.ok) {
+        this._agentsFileExists = true;
+        this._agentsFileStatus = result.created
+          ? "AGENTS.md を作成して標準エディタで開きました。"
+          : "AGENTS.md を標準エディタで開きました。";
+        return;
+      }
+      this._agentsFileStatus = `起動エラー: ${result.error.code}: ${result.error.message}`;
+    } finally {
+      this._agentsFileBusy = false;
     }
   }
 

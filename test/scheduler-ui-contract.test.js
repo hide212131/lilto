@@ -30,9 +30,14 @@ test("renderer app は backendSessionId または conversationId で scheduler n
 test("settings-modal は Schedules タブから schedule 一覧取得と削除を行える", () => {
   const content = fs.readFileSync("src/renderer/components/settings-modal.ts", "utf8");
   assert.match(content, />Heartbeat<\/div>/);
+  assert.match(content, />Instructions<\/div>/);
   assert.match(content, /既定では 30 分ごとに background patrol を実行し、問題がある時だけ表面化します/);
   assert.match(content, /id="heartbeat-interval-minutes"/);
   assert.match(content, /Heartbeat 設定を保存/);
+  assert.match(content, /Project AGENTS\.md/);
+  assert.match(content, /window\.lilto\.getAgentsFile\(\)/);
+  assert.match(content, /window\.lilto\.openAgentsFile\(\)/);
+  assert.match(content, /AGENTS\.md を標準エディタで開く/);
   assert.match(content, /window\.lilto\.getHeartbeatStatus\(\)/);
   assert.match(content, />Schedules<\/div>/);
   assert.match(content, /現在設定されている cron スケジュール/);

@@ -158,6 +158,11 @@ declare global {
         | { ok: false; error?: { code?: string; message?: string; retryable?: boolean } }
       >;
       abortPrompt: () => Promise<{ ok: boolean }>;
+      getAgentsFile: () => Promise<{ ok: true; path: string; exists: boolean }>;
+      openAgentsFile: () => Promise<
+        | { ok: true; path: string; created: boolean }
+        | { ok: false; error: { code: string; message: string }; path: string }
+      >;
       openExternalUrl: (
         url: string
       ) => Promise<

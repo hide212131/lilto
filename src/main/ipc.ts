@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { BrowserWindow, ipcMain, shell } from "electron";
 import { randomUUID } from "node:crypto";
 import type { AgentRuntime } from "./agent-sdk";
@@ -49,6 +51,7 @@ export function registerAgentIpcHandlers({
   providerSettingsService,
   bundledSkillsDir,
   userSkillsDir,
+  workspaceDir,
   homeDir,
   codexHomeDir,
   notificationService,
@@ -65,6 +68,7 @@ export function registerAgentIpcHandlers({
   providerSettingsService: ProviderSettingsService;
   bundledSkillsDir: string;
   userSkillsDir: string;
+  workspaceDir: string;
   homeDir: string;
   codexHomeDir: string;
   notificationService: NotificationService;
@@ -77,6 +81,7 @@ export function registerAgentIpcHandlers({
   onSettingsSaved?: (settings: import("./provider-settings").ProviderSettings) => void;
 }): void {
   const logger = createLogger("ipc");
+  const agentsFilePath = path.join(workspaceDir, "AGENTS.md");
   authService.subscribe(() => {
     broadcastAuthState(authService);
   });
@@ -327,6 +332,36 @@ export function registerAgentIpcHandlers({
   ipcMain.handle("audio:cancelNativeDictation", async () => {
     await speechTranscriptionService.cancelNativeDictation();
     return { ok: true as const };
+  });
+
+  ipcMain.handle("app:getAgentsFile", () => {
+    return {
+      ok: true as const,
+      path: agentsFilePath,
+      exists: fs.existsSync(agentsFilePath)
+    };
+  });
+
+  ipcMain.handle("app:openAgentsFile", async () => {
+    try {
+      fs.mkdirSync(path.dirname(agentsFilePath), { recursive: true });
+      const exists = fs.existsSync(agentsFilePath);
+      if (!exists) {
+        fs.writeFileSync(
+          agentsFilePath,
+          "# AGENTS.md\n\n## Project Instructions\n\n- Add project-specific instructions here.\n",
+          "utf8"
+        );
+      }
+      const errorMessage = await shell.openPath(agentsFilePath);
+      if (errorMessage) {
+        return { ok: false as const, error: { code: "OPEN_FAILED", message: errorMessage }, path: agentsFilePath };
+      }
+      return { ok: true as const, path: agentsFilePath, created: !exists };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false as const, error: { code: "OPEN_FAILED", message }, path: agentsFilePath };
+    }
   });
 
   ipcMain.handle("app:openExternal", async (_event, payload: unknown) => {

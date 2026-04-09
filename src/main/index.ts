@@ -273,6 +273,7 @@ if (hasSingleInstanceLock) {
       windowsSandboxSetupService,
       bundledSkillsDir: skillRuntime.bundledSkillsDir,
       userSkillsDir: skillRuntime.userSkillsDir,
+      workspaceDir: skillRuntime.workspaceDir,
       homeDir: skillRuntime.homeDir,
       codexHomeDir: skillRuntime.codexHomeDir,
       onSettingsSaved: (settings) => {
