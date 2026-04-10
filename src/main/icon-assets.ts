@@ -33,7 +33,14 @@ function resizeMascot(size: number): NativeImage {
   return source.resize({ width: size, height: size, quality: "best" });
 }
 
-function createRoundedMascot(size: number, insetRatio = 0): NativeImage {
+type RgbaColor = {
+  r: number;
+  g: number;
+  b: number;
+  a?: number;
+};
+
+function createRoundedMascot(size: number, insetRatio = 0, backgroundColor?: RgbaColor): NativeImage {
   const resized = resizeMascot(size);
   if (resized.isEmpty()) {
     return resized;
@@ -84,6 +91,13 @@ function createRoundedMascot(size: number, insetRatio = 0): NativeImage {
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       if (x >= innerLeft && x <= innerRight && y >= innerTop && y <= innerBottom && isInsideRoundedRect(x, y)) {
+        if (backgroundColor) {
+          const offset = (y * size + x) * 4;
+          bitmap[offset] = backgroundColor.b;
+          bitmap[offset + 1] = backgroundColor.g;
+          bitmap[offset + 2] = backgroundColor.r;
+          bitmap[offset + 3] = backgroundColor.a ?? 255;
+        }
         continue;
       }
       const offset = (y * size + x) * 4;
@@ -91,6 +105,23 @@ function createRoundedMascot(size: number, insetRatio = 0): NativeImage {
       bitmap[offset + 1] = 0;
       bitmap[offset + 2] = 0;
       bitmap[offset + 3] = 0;
+    }
+  }
+
+  for (let y = 0; y < innerSize; y++) {
+    for (let x = 0; x < innerSize; x++) {
+      const srcOffset = (y * innerSize + x) * 4;
+      const alpha = scaled[srcOffset + 3];
+      if (alpha === 0) {
+        continue;
+      }
+      const dstX = x + inset;
+      const dstY = y + inset;
+      const dstOffset = (dstY * size + dstX) * 4;
+      bitmap[dstOffset] = scaled[srcOffset];
+      bitmap[dstOffset + 1] = scaled[srcOffset + 1];
+      bitmap[dstOffset + 2] = scaled[srcOffset + 2];
+      bitmap[dstOffset + 3] = alpha;
     }
   }
 
@@ -112,7 +143,7 @@ export function resolveWindowIcon(): NativeImage | undefined {
 }
 
 export function resolveAppIcon(size = 256): NativeImage {
-  return createRoundedMascot(size, 0.08);
+  return createRoundedMascot(size, 0.08, { r: 255, g: 255, b: 255, a: 255 });
 }
 
 export function resolveTrayIcon(size: number): NativeImage {
