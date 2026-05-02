@@ -103,28 +103,51 @@ function tryResolveWindowsBuildPlan() {
     const versions = listDirectories(buildToolsRoot);
 
     for (const version of versions) {
-      const candidates = [
-        {
-          targetArch: "arm64",
-          targetTriple: "aarch64-pc-windows-msvc",
-          cargoToolchain: null,
-          linkerDirs: [
-            path.join(buildToolsRoot, version, "bin", "Hostarm64", "arm64"),
-            path.join(buildToolsRoot, version, "bin", "Hostx64", "arm64")
-          ],
-          msvcLibDir: path.join(buildToolsRoot, version, "lib", "arm64")
-        },
-        {
+      const candidates = process.arch === "arm64"
+        ? [
+          {
+            targetArch: "arm64",
+            targetTriple: "aarch64-pc-windows-msvc",
+            cargoToolchain: null,
+            linkerDirs: [
+              path.join(buildToolsRoot, version, "bin", "Hostarm64", "arm64"),
+              path.join(buildToolsRoot, version, "bin", "Hostx64", "arm64")
+            ],
+            msvcLibDir: path.join(buildToolsRoot, version, "lib", "arm64")
+          },
+          {
+            targetArch: "x64",
+            targetTriple: "x86_64-pc-windows-msvc",
+            cargoToolchain: "stable-x86_64-pc-windows-msvc",
+            linkerDirs: [
+              path.join(buildToolsRoot, version, "bin", "Hostarm64", "x64"),
+              path.join(buildToolsRoot, version, "bin", "Hostx64", "x64")
+            ],
+            msvcLibDir: path.join(buildToolsRoot, version, "lib", "x64")
+          }
+        ]
+        : [
+          {
           targetArch: "x64",
           targetTriple: "x86_64-pc-windows-msvc",
-          cargoToolchain: process.arch === "arm64" ? "stable-x86_64-pc-windows-msvc" : null,
+          cargoToolchain: null,
           linkerDirs: [
             path.join(buildToolsRoot, version, "bin", "Hostarm64", "x64"),
             path.join(buildToolsRoot, version, "bin", "Hostx64", "x64")
           ],
           msvcLibDir: path.join(buildToolsRoot, version, "lib", "x64")
-        }
-      ];
+          },
+          {
+            targetArch: "arm64",
+            targetTriple: "aarch64-pc-windows-msvc",
+            cargoToolchain: null,
+            linkerDirs: [
+              path.join(buildToolsRoot, version, "bin", "Hostarm64", "arm64"),
+              path.join(buildToolsRoot, version, "bin", "Hostx64", "arm64")
+            ],
+            msvcLibDir: path.join(buildToolsRoot, version, "lib", "arm64")
+          }
+        ];
 
       for (const candidate of candidates) {
         for (const linkerDir of candidate.linkerDirs) {
