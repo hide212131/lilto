@@ -4,6 +4,7 @@
 
 | 変更内容 | ミス/課題 | 再発防止ルール |
 |---|---|---|
+| Windows x64 native build 用 workflow を GitHub Actions で初回実行したところ、`scripts/build-native.js` が `C:\BuildTools\VC\Tools\MSVC` 固定でしか MSVC を探索しておらず、`windows-latest` 標準の Visual Studio 配置を見つけられなかった。 | ローカルの Build Tools 専用環境を前提にした探索ロジックは、GitHub runner の標準イメージでは簡単に外れる。workflow を足した時点で安心すると、CI に載せた瞬間だけ native build が壊れる。 | Windows の native toolchain 探索では、固定パス 1 本に依存せず `vswhere.exe` と標準の Visual Studio install path を併用して解決する。GitHub Actions 導入時は最初の失敗ログまで確認し、runner image の実配置に探索ロジックが追従しているかをその場で補正する。 |
 | Windows x64 で native build を含む配布物生成を GitHub Actions へ載せる際、`scripts/build-native.js` は既定だと native build 失敗を警告扱いで流すため、そのままでは CI が壊れたことを検知できない。 | ローカル開発では helper 未ビルドでも先に進める設計が便利でも、CI まで同じ挙動にすると「Windows runner 上では native helper が作れていないのに workflow は成功」という偽陽性になる。 | native build の成否を CI で担保したいジョブでは、soft-fail を前提にせず `LILTO_NATIVE_BUILD_REQUIRED=1` を明示して hard-fail に切り替える。配布物確認ジョブでは installer 生成だけでなく helper 同梱まで `verify:dist` で検証する。 |
 | 会話履歴サイドパネルの幅変更を追加する際、リサイズ責務は一覧コンポーネントではなくレイアウト親の `lilt-app` が持つ方が自然だった。 | 固定幅を持つ子コンポーネント側へドラッグ処理まで押し込むと、ハンドル位置・main レイアウト・永続化の責務が分散しやすい。 | 分割ペインやサイドバーリサイズのようなレイアウト機能は、幅 state・ドラッグイベント・永続化を親レイアウトへ集約する。子コンポーネントは表示内容に専念させ、幅は style/property で注入する。 |
 | 会話履歴サイドバーを整理する修正で、最初はダークテーマ化や装飾の削減を広く入れたが、ユーザーの本題は「2行を1行にまとめること」と「日付を経過時間にすること」だった。 | 見た目改善の依頼でも、情報密度・表示形式・文言のどこを変えたいかを分離せず進めると、色や装飾の変更まで広げてしまい、要求の中心から外れやすい。 | UI の「すっきりさせたい」依頼では、最初に表示情報の構造変更か、配色・装飾変更かを切り分ける。履歴一覧なら特に「行数」「補助情報の形式」「相対日時か絶対日時か」を先に固定してからスタイルを広げる。 |

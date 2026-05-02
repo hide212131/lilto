@@ -33,59 +33,119 @@ function listDirectories(dirPath) {
     .sort((left, right) => right.localeCompare(left, undefined, { numeric: true }));
 }
 
+function listWindowsMsvcRoots() {
+  const roots = [];
+  const seen = new Set();
+
+  function addRoot(candidate) {
+    if (!candidate) {
+      return;
+    }
+
+    const resolved = path.resolve(candidate);
+    if (seen.has(resolved)) {
+      return;
+    }
+
+    seen.add(resolved);
+    roots.push(resolved);
+  }
+
+  const programFilesX86 = process.env["ProgramFiles(x86)"];
+  const installerDir = programFilesX86
+    ? path.join(programFilesX86, "Microsoft Visual Studio", "Installer")
+    : null;
+  const vsWherePath = installerDir ? path.join(installerDir, "vswhere.exe") : null;
+
+  if (vsWherePath && fs.existsSync(vsWherePath)) {
+    const result = spawnSync(vsWherePath, [
+      "-products",
+      "*",
+      "-requires",
+      "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+      "-property",
+      "installationPath"
+    ], {
+      encoding: "utf8"
+    });
+
+    if (result.status === 0 && result.stdout) {
+      for (const installPath of result.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)) {
+        addRoot(path.join(installPath, "VC", "Tools", "MSVC"));
+      }
+    }
+  }
+
+  addRoot("C:\\BuildTools\\VC\\Tools\\MSVC");
+
+  if (programFilesX86) {
+    const visualStudioRoot = path.join(programFilesX86, "Microsoft Visual Studio");
+    for (const year of ["2022", "2019"]) {
+      for (const edition of ["BuildTools", "Enterprise", "Professional", "Community"]) {
+        addRoot(path.join(visualStudioRoot, year, edition, "VC", "Tools", "MSVC"));
+      }
+    }
+  }
+
+  return roots.filter((candidate) => fs.existsSync(candidate));
+}
+
 function tryResolveWindowsBuildPlan() {
-  const buildToolsRoot = "C:\\BuildTools\\VC\\Tools\\MSVC";
-  if (!fs.existsSync(buildToolsRoot)) {
+  const buildToolsRoots = listWindowsMsvcRoots();
+  if (buildToolsRoots.length === 0) {
     return null;
   }
 
   const sdkRoot = "C:\\Program Files (x86)\\Windows Kits\\10\\Lib";
-  const versions = listDirectories(buildToolsRoot);
   const sdkVersions = listDirectories(sdkRoot);
 
-  for (const version of versions) {
-    const candidates = [
-      {
-        targetArch: "arm64",
-        targetTriple: "aarch64-pc-windows-msvc",
-        cargoToolchain: null,
-        linkerDirs: [
-          path.join(buildToolsRoot, version, "bin", "Hostarm64", "arm64"),
-          path.join(buildToolsRoot, version, "bin", "Hostx64", "arm64")
-        ],
-        msvcLibDir: path.join(buildToolsRoot, version, "lib", "arm64")
-      },
-      {
-        targetArch: "x64",
-        targetTriple: "x86_64-pc-windows-msvc",
-        cargoToolchain: process.arch === "arm64" ? "stable-x86_64-pc-windows-msvc" : null,
-        linkerDirs: [
-          path.join(buildToolsRoot, version, "bin", "Hostarm64", "x64"),
-          path.join(buildToolsRoot, version, "bin", "Hostx64", "x64")
-        ],
-        msvcLibDir: path.join(buildToolsRoot, version, "lib", "x64")
-      }
-    ];
+  for (const buildToolsRoot of buildToolsRoots) {
+    const versions = listDirectories(buildToolsRoot);
 
-    for (const candidate of candidates) {
-      for (const linkerDir of candidate.linkerDirs) {
-        const linker = path.join(linkerDir, "link.exe");
-        if (!fs.existsSync(linker) || !fs.existsSync(path.join(candidate.msvcLibDir, "vcruntime.lib"))) {
-          continue;
+    for (const version of versions) {
+      const candidates = [
+        {
+          targetArch: "arm64",
+          targetTriple: "aarch64-pc-windows-msvc",
+          cargoToolchain: null,
+          linkerDirs: [
+            path.join(buildToolsRoot, version, "bin", "Hostarm64", "arm64"),
+            path.join(buildToolsRoot, version, "bin", "Hostx64", "arm64")
+          ],
+          msvcLibDir: path.join(buildToolsRoot, version, "lib", "arm64")
+        },
+        {
+          targetArch: "x64",
+          targetTriple: "x86_64-pc-windows-msvc",
+          cargoToolchain: process.arch === "arm64" ? "stable-x86_64-pc-windows-msvc" : null,
+          linkerDirs: [
+            path.join(buildToolsRoot, version, "bin", "Hostarm64", "x64"),
+            path.join(buildToolsRoot, version, "bin", "Hostx64", "x64")
+          ],
+          msvcLibDir: path.join(buildToolsRoot, version, "lib", "x64")
         }
+      ];
 
-        for (const sdkVersion of sdkVersions) {
-          const sdkLibDirs = [
-            path.join(sdkRoot, sdkVersion, "ucrt", candidate.targetArch),
-            path.join(sdkRoot, sdkVersion, "um", candidate.targetArch)
-          ];
+      for (const candidate of candidates) {
+        for (const linkerDir of candidate.linkerDirs) {
+          const linker = path.join(linkerDir, "link.exe");
+          if (!fs.existsSync(linker) || !fs.existsSync(path.join(candidate.msvcLibDir, "vcruntime.lib"))) {
+            continue;
+          }
 
-          if (sdkLibDirs.every((dirPath) => fs.existsSync(dirPath))) {
-            return {
-              ...candidate,
-              linkerDir,
-              sdkLibDirs
-            };
+          for (const sdkVersion of sdkVersions) {
+            const sdkLibDirs = [
+              path.join(sdkRoot, sdkVersion, "ucrt", candidate.targetArch),
+              path.join(sdkRoot, sdkVersion, "um", candidate.targetArch)
+            ];
+
+            if (sdkLibDirs.every((dirPath) => fs.existsSync(dirPath))) {
+              return {
+                ...candidate,
+                linkerDir,
+                sdkLibDirs
+              };
+            }
           }
         }
       }
