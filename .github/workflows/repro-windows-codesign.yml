@@ -1,6 +1,9 @@
 name: Repro Windows Codesign
 
 on:
+  push:
+    branches:
+      - ci/windows-x64-native-build
   workflow_dispatch:
 
 jobs:
