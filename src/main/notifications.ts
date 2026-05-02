@@ -1,6 +1,7 @@
 import { app, BrowserWindow, nativeImage, Notification, Tray } from "electron";
 import { deflateSync } from "node:zlib";
-import { resolveBadgeIcon, resolveTrayIcon } from "./icon-assets";
+import { createCountBadgeBitmap } from "./badge-bitmap";
+import { resolveTrayIcon } from "./icon-assets";
 
 /**
  * マスコット（緑の電球キャラクター）の顔を模した PNG を生成する。
@@ -95,7 +96,7 @@ function createMascotFacePng(size: number, hasNotification = false): Buffer {
 
 export class NotificationService {
   private _unreadCount = 0;
-  private _badgeImage: ReturnType<typeof nativeImage.createFromBuffer> | null = null;
+  private _badgeImages = new Map<number, ReturnType<typeof nativeImage.createFromBitmap>>();
   private _tray: Tray | null = null;
   private _trayNormalImage: ReturnType<typeof nativeImage.createFromBuffer> | null = null;
   private _trayBadgeImage: ReturnType<typeof nativeImage.createFromBuffer> | null = null;
@@ -107,15 +108,14 @@ export class NotificationService {
   setupTray(getWindow: () => BrowserWindow | null): void {
     const trayIconSize = process.platform === "darwin" ? 22 : 16;
     const normalFromAsset = resolveTrayIcon(trayIconSize);
-    const badgeFromAsset = resolveBadgeIcon(trayIconSize);
 
     this._trayNormalImage = normalFromAsset.isEmpty()
       ? nativeImage.createFromBuffer(createMascotFacePng(trayIconSize, false))
       : normalFromAsset;
 
-    this._trayBadgeImage = badgeFromAsset.isEmpty()
+    this._trayBadgeImage = normalFromAsset.isEmpty()
       ? nativeImage.createFromBuffer(createMascotFacePng(trayIconSize, true))
-      : badgeFromAsset;
+      : normalFromAsset;
 
     this._tray = new Tray(this._trayNormalImage);
     this._tray.setToolTip("lilto");
@@ -157,14 +157,20 @@ export class NotificationService {
     this._applyBadge();
   }
 
-  private _getBadgeOverlayImage(): ReturnType<typeof nativeImage.createFromBuffer> {
-    if (!this._badgeImage) {
-      const badgeFromAsset = resolveBadgeIcon(16);
-      this._badgeImage = badgeFromAsset.isEmpty()
-        ? nativeImage.createFromBuffer(createMascotFacePng(16, true))
-        : badgeFromAsset;
+  private _getBadgeOverlayImage(count: number): ReturnType<typeof nativeImage.createFromBitmap> {
+    const cached = this._badgeImages.get(count);
+    if (cached) {
+      return cached;
     }
-    return this._badgeImage;
+
+    const badge = createCountBadgeBitmap(count, 16);
+    const image = nativeImage.createFromBitmap(badge.bitmap, {
+      width: badge.width,
+      height: badge.height,
+      scaleFactor: 1
+    });
+    this._badgeImages.set(count, image);
+    return image;
   }
 
   private _applyBadge(): void {
@@ -180,7 +186,7 @@ export class NotificationService {
       const win = BrowserWindow.getAllWindows()[0];
       if (win) {
         const description = count > 0 ? `${count} 件の未読メッセージ` : "";
-        win.setOverlayIcon(count > 0 ? this._getBadgeOverlayImage() : null, description);
+        win.setOverlayIcon(count > 0 ? this._getBadgeOverlayImage(count) : null, description);
       }
     }
 

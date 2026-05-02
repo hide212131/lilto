@@ -29,6 +29,10 @@ const config = readConfig();
 const logger = createLogger("main");
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
+if (process.platform === "win32") {
+  app.setAppUserModelId("dev.hide.lilto");
+}
+
 let mainWindow: BrowserWindow | null = null;
 let isQuitting = false;
 let schedulerBridge: SchedulerBridgeServer | null = null;
