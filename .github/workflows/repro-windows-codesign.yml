@@ -1,0 +1,41 @@
+name: Repro Windows Codesign
+
+on:
+  workflow_dispatch:
+
+jobs:
+  repro-windows-codesign:
+    runs-on: windows-latest
+    env:
+      LILTO_NATIVE_BUILD_REQUIRED: "1"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Show runner identity
+        shell: pwsh
+        run: |
+          whoami
+          whoami /groups
+          whoami /priv
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build Windows installer without suppressing codesign discovery
+        shell: pwsh
+        run: |
+          Remove-Item Env:CSC_IDENTITY_AUTO_DISCOVERY -ErrorAction SilentlyContinue
+          npm run dist:win
