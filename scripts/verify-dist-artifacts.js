@@ -34,7 +34,12 @@ assert(files.length > 0, "release artifacts were not generated");
 const artifactPaths = files.map((file) => path.relative(rootDir, file));
 const hasMacInstaller = artifactPaths.some((file) => file.endsWith(".dmg"));
 const hasWindowsInstaller = artifactPaths.some((file) => file.endsWith(".exe"));
-const hasSchedulerHelper = artifactPaths.some((file) => file.endsWith("/Resources/bin/scheduler-daemon") || file.endsWith("\\Resources\\bin\\scheduler-daemon.exe"));
+const hasSchedulerHelper = artifactPaths.some(
+  (file) =>
+    file.endsWith("/Resources/bin/scheduler-daemon") ||
+    file.endsWith("\\Resources\\bin\\scheduler-daemon.exe") ||
+    file.endsWith("\\resources\\bin\\scheduler-daemon.exe")
+);
 const hasSpeechHelper = artifactPaths.some(
   (file) =>
     file.endsWith("/Resources/bin/speech-transcriber.app/Contents/MacOS/speech-transcriber") ||
