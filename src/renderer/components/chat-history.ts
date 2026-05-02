@@ -30,62 +30,52 @@ export class LiltChatHistory extends LitElement {
     :host {
       display: flex;
       flex-direction: column;
-      width: 240px;
-      min-width: 240px;
+      width: 272px;
+      min-width: 272px;
       height: 100%;
       background: var(--surface, #ffffff);
       border-right: 1px solid var(--line, #dddddf);
       overflow: hidden;
     }
-    .header {
-      padding: 12px 16px;
-      font-size: 12px;
-      font-weight: 600;
-      color: var(--muted, #6b7280);
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      border-bottom: 1px solid var(--line, #dddddf);
-      flex-shrink: 0;
-    }
     .list {
       flex: 1;
       overflow-y: auto;
-      padding: 4px 0;
+      padding: 6px 8px 10px;
     }
     .list::-webkit-scrollbar {
-      width: 4px;
+      width: 6px;
     }
     .list::-webkit-scrollbar-track {
       background: transparent;
     }
     .list::-webkit-scrollbar-thumb {
-      background: var(--line, #dddddf);
-      border-radius: 2px;
+      background: rgba(31, 35, 40, 0.16);
+      border-radius: 999px;
     }
     .empty {
-      padding: 24px 16px;
-      text-align: center;
+      padding: 14px 12px;
       color: var(--muted, #6b7280);
-      font-size: 13px;
+      font-size: 12px;
       line-height: 1.5;
     }
     .session-item {
       position: relative;
       display: flex;
       flex-direction: row;
-      align-items: center;
-      gap: 2px;
-      padding: 10px 8px 10px 16px;
+      align-items: flex-start;
+      gap: 6px;
+      padding: 7px 8px 7px 12px;
+      margin-bottom: 0;
       cursor: pointer;
-      border-left: 3px solid transparent;
-      transition: background 0.1s;
+      border-radius: 8px;
+      border-left: none;
+      transition: background 0.12s ease, color 0.12s ease;
     }
     .session-item:hover {
-      background: var(--bg, #f3f3f4);
+      background: #f5f5f5;
     }
     .session-item.active {
-      background: #eff6ff;
-      border-left-color: #3b82f6;
+      background: #f1f3f5;
     }
     .session-item.editing {
       cursor: default;
@@ -94,29 +84,33 @@ export class LiltChatHistory extends LitElement {
       flex: 1;
       min-width: 0;
       display: flex;
-      flex-direction: column;
-      gap: 2px;
+      align-items: baseline;
+      gap: 8px;
     }
     .session-title {
-      font-size: 13px;
+      flex: 1;
+      min-width: 0;
+      font-size: 14px;
       font-weight: 500;
+      line-height: 1.2;
       color: var(--text, #1f2328);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
     }
     .session-date {
+      flex-shrink: 0;
       font-size: 11px;
       color: var(--muted, #6b7280);
     }
     .session-title-input {
-      font-size: 13px;
+      font-size: 14px;
       font-weight: 500;
       font-family: inherit;
       color: var(--text, #1f2328);
-      border: 1px solid #3b82f6;
-      border-radius: 4px;
-      padding: 1px 5px;
+      border: 1px solid rgba(244, 163, 0, 0.9);
+      border-radius: 8px;
+      padding: 3px 8px;
       width: 100%;
       box-sizing: border-box;
       outline: none;
@@ -127,63 +121,62 @@ export class LiltChatHistory extends LitElement {
       display: flex;
       align-items: center;
       justify-content: center;
-      width: 24px;
-      height: 24px;
+      width: 28px;
+      height: 28px;
       border: none;
-      border-radius: 4px;
+      border-radius: 8px;
       background: transparent;
       cursor: pointer;
       color: var(--muted, #6b7280);
       opacity: 0;
-      transition: opacity 0.1s, background 0.1s;
+      transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
       padding: 0;
       font-size: 16px;
       line-height: 1;
     }
     .session-item:hover .menu-btn,
+    .session-item.active .menu-btn,
     .menu-btn.open {
       opacity: 1;
     }
     .menu-btn:hover {
-      background: var(--line, #dddddf);
+      background: #e6e7eb;
       color: var(--text, #1f2328);
     }
     .dropdown {
       position: absolute;
-      right: 8px;
-      top: calc(100% - 4px);
+      right: 10px;
+      top: calc(100% - 2px);
       z-index: 100;
       background: #ffffff;
       border: 1px solid var(--line, #dddddf);
-      border-radius: 8px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+      border-radius: 10px;
+      box-shadow: 0 14px 32px rgba(0, 0, 0, 0.34);
       min-width: 140px;
       overflow: hidden;
     }
     .dropdown-item {
       display: flex;
       align-items: center;
-      gap: 8px;
-      padding: 9px 14px;
+      padding: 10px 14px;
       font-size: 13px;
       color: var(--text, #1f2328);
       cursor: pointer;
-      transition: background 0.1s;
+      transition: background 0.12s ease;
     }
     .dropdown-item:hover {
-      background: var(--bg, #f3f3f4);
+      background: #f5f5f5;
     }
     .dropdown-item.danger {
-      color: #dc2626;
+      color: #f87171;
     }
     .dropdown-item.danger:hover {
-      background: #fef2f2;
+      background: rgba(248, 113, 113, 0.12);
     }
   `;
 
   render() {
     return html`
-      <div class="header">会話履歴</div>
       <div class="list">
         ${this.sessions.length === 0
           ? html`<div class="empty">まだ会話がありません</div>`
@@ -214,9 +207,11 @@ export class LiltChatHistory extends LitElement {
                 @blur=${() => this._commitRename(session)}
                 @click=${(e: Event) => e.stopPropagation()}
               />`
-            : html`<div class="session-title">${session.title}</div>`
+            : html`
+              <div class="session-title">${session.title}</div>
+              <div class="session-date">${dateLabel}</div>
+            `
           }
-          <div class="session-date">${dateLabel}</div>
         </div>
         ${!isEditing ? html`
           <button
@@ -227,10 +222,10 @@ export class LiltChatHistory extends LitElement {
           ${menuOpen ? html`
             <div class="dropdown" @click=${(e: Event) => e.stopPropagation()}>
               <div class="dropdown-item" @click=${(e: Event) => this._onRename(e, session)}>
-                ✏️ 名称変更
+                名称変更
               </div>
               <div class="dropdown-item danger" @click=${(e: Event) => this._onDelete(e, session)}>
-                🗑️ 削除
+                削除
               </div>
             </div>
           ` : ""}
@@ -295,13 +290,24 @@ export class LiltChatHistory extends LitElement {
   private _formatDate(date: Date): string {
     const now = new Date();
     const diffMs = now.getTime() - date.getTime();
+    const diffMinutes = Math.max(0, Math.floor(diffMs / (1000 * 60)));
+    const diffHours = Math.floor(diffMinutes / 60);
     const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-    if (diffDays === 0) {
-      return date.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
+    const diffWeeks = Math.floor(diffDays / 7);
+    const diffMonths = Math.floor(diffDays / 30);
+    if (diffMinutes < 60) {
+      return `${Math.max(1, diffMinutes)}分`;
     }
-    if (diffDays === 1) return "昨日";
-    if (diffDays < 7) return `${diffDays}日前`;
-    return date.toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" });
+    if (diffHours < 24) {
+      return `${diffHours}時間`;
+    }
+    if (diffDays < 7) {
+      return `${diffDays}日`;
+    }
+    if (diffWeeks < 5) {
+      return `${diffWeeks}週間`;
+    }
+    return `${Math.max(1, diffMonths)}か月`;
   }
 
   private _selectSession(session: Session) {

@@ -20,6 +20,10 @@ import type { AgentLoopEvent, LoopState } from "../shared/agent-loop.js";
 import { createInitialLoopState, reduceLoopState } from "../shared/agent-loop.js";
 
 const SESSIONS_STORAGE_KEY = "lilto-sessions";
+const SIDEBAR_WIDTH_STORAGE_KEY = "lilto-sidebar-width";
+const DEFAULT_SIDEBAR_WIDTH = 272;
+const MIN_SIDEBAR_WIDTH = 220;
+const MAX_SIDEBAR_WIDTH = 480;
 
 @customElement("lilt-app")
 export class LiltApp extends LitElement {
@@ -58,9 +62,11 @@ export class LiltApp extends LitElement {
   @property({ type: Boolean }) settingsOpen = false;
   @property({ type: Object }) loopState: LoopState = createInitialLoopState();
   @property({ type: Boolean }) sidebarOpen = false;
+  @property({ type: Number }) sidebarWidth = DEFAULT_SIDEBAR_WIDTH;
   @property({ type: Array }) sessions: Session[] = [];
   @property() activeSessionId: string | null = null;
 
+  @query(".body") private _body!: HTMLDivElement;
   @query("lilt-composer") private _composer!: LiltComposer;
 
   private _unsubscribeAuthListener: (() => void) | null = null;
@@ -75,6 +81,22 @@ export class LiltApp extends LitElement {
   private _toolProgress: AssistantToolProgress[] = [];
   private _pendingLabel = "";
   private _currentSessionId: string | null = null;
+  private _isResizingSidebar = false;
+  private _onSidebarResize = (event: PointerEvent) => {
+    if (!this._isResizingSidebar) return;
+    const nextWidth = this._clampSidebarWidth(event.clientX - this._body.getBoundingClientRect().left);
+    if (nextWidth === this.sidebarWidth) return;
+    this.sidebarWidth = nextWidth;
+  };
+  private _stopSidebarResize = () => {
+    if (!this._isResizingSidebar) return;
+    this._isResizingSidebar = false;
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+    window.removeEventListener("pointermove", this._onSidebarResize);
+    window.removeEventListener("pointerup", this._stopSidebarResize);
+    this._saveSidebarWidth();
+  };
 
   private _getActiveSession(): Session | null {
     if (!this._currentSessionId) {
@@ -103,8 +125,36 @@ export class LiltApp extends LitElement {
       flex-shrink: 0;
       transition: width 0.2s ease, min-width 0.2s ease;
     }
+    .body.resizing lilt-chat-history {
+      transition: none;
+    }
     lilt-chat-history[hidden] {
       display: none;
+    }
+    .sidebar-resizer {
+      flex: 0 0 10px;
+      align-self: stretch;
+      cursor: col-resize;
+      position: relative;
+      background: transparent;
+      border: 0;
+      padding: 0;
+      margin: 0 -4px 0 0;
+      z-index: 1;
+    }
+    .sidebar-resizer::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 4px;
+      width: 1px;
+      background: rgba(31, 35, 40, 0.08);
+      transition: background 0.12s ease;
+    }
+    .sidebar-resizer:hover::before,
+    .body.resizing .sidebar-resizer::before {
+      background: #d29a00;
     }
     .main {
       flex: 1;
@@ -129,6 +179,7 @@ export class LiltApp extends LitElement {
   connectedCallback() {
     super.connectedCallback();
     this._loadSessions();
+    this._loadSidebarWidth();
     void this._hydrate();
     this._unsubscribeAuthListener = window.lilto.onAuthStateChanged((state) => {
       this.authState = state;
@@ -149,6 +200,7 @@ export class LiltApp extends LitElement {
 
   disconnectedCallback() {
     super.disconnectedCallback();
+    this._stopSidebarResize();
     this._unsubscribeAuthListener?.();
     this._unsubscribeLoopListener?.();
     this._unsubscribeSchedulerListener?.();
@@ -176,6 +228,31 @@ export class LiltApp extends LitElement {
     } catch {
       // ストレージ容量超過などは無視
     }
+  }
+
+  private _loadSidebarWidth() {
+    try {
+      const raw = localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = Number(raw);
+      if (!Number.isFinite(parsed)) return;
+      this.sidebarWidth = this._clampSidebarWidth(parsed);
+    } catch {
+      this.sidebarWidth = DEFAULT_SIDEBAR_WIDTH;
+    }
+  }
+
+  private _saveSidebarWidth() {
+    try {
+      localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(this.sidebarWidth));
+    } catch {
+      // ストレージ容量超過などは無視
+    }
+  }
+
+  private _clampSidebarWidth(width: number) {
+    const maxWidth = Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, window.innerWidth - 320));
+    return Math.min(Math.max(width, MIN_SIDEBAR_WIDTH), maxWidth);
   }
 
   private _saveCurrentSession() {
@@ -272,15 +349,25 @@ export class LiltApp extends LitElement {
         @toggle-sidebar=${this._onToggleSidebar}
       ></lilt-top-bar>
 
-      <div class="body">
+      <div class="body ${this._isResizingSidebar ? "resizing" : ""}">
         <lilt-chat-history
           ?hidden=${!this.sidebarOpen}
+          style=${this.sidebarOpen ? `width: ${this.sidebarWidth}px; min-width: ${this.sidebarWidth}px;` : ""}
           .sessions=${this.sessions}
           .activeSessionId=${this.activeSessionId}
           @select-session=${this._onSelectSession}
           @rename-session=${this._onRenameSession}
           @delete-session=${this._onDeleteSession}
         ></lilt-chat-history>
+        ${this.sidebarOpen ? html`
+          <button
+            class="sidebar-resizer"
+            type="button"
+            title="サイドパネル幅を変更"
+            aria-label="サイドパネル幅を変更"
+            @pointerdown=${this._onSidebarResizeStart}
+          ></button>
+        ` : ""}
 
         <div class="main">
           <div class="stage">
@@ -312,6 +399,16 @@ export class LiltApp extends LitElement {
 
   private _onToggleSidebar() {
     this.sidebarOpen = !this.sidebarOpen;
+  }
+
+  private _onSidebarResizeStart(event: PointerEvent) {
+    if (!this.sidebarOpen) return;
+    event.preventDefault();
+    this._isResizingSidebar = true;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("pointermove", this._onSidebarResize);
+    window.addEventListener("pointerup", this._stopSidebarResize);
   }
 
   private _onSelectSession(e: CustomEvent<Session>) {
