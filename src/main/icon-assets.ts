@@ -246,13 +246,6 @@ function createWindowsTaskbarIcon(size: number): NativeImage {
 
   const safeSize = Math.max(16, Math.floor(size));
   const bitmap = Buffer.alloc(safeSize * safeSize * 4, 0);
-  const white = { r: 255, g: 255, b: 255, a: 255 };
-
-  for (let y = 0; y < safeSize; y++) {
-    for (let x = 0; x < safeSize; x++) {
-      paintPixel(bitmap, safeSize, x, y, white);
-    }
-  }
 
   const cropped = cropTransparentBounds(source);
   const croppedSize = cropped.getSize();

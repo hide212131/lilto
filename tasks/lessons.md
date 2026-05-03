@@ -354,3 +354,9 @@
 | Change | Mistake/Context | Rule to repeat |
 |---|---|---|
 | Moved Lilt-o's Windows Electron `userData` root from Electron's default Roaming path to `%LOCALAPPDATA%\\Lilt-o`, and added a first-run copy from legacy Roaming directories when the new Local directory does not exist. | Electron's default Windows `userData` path follows Roaming and may use the package-name casing, while this app's install location and expected app-owned data both belong under Local with product casing. Changing only call sites that use `app.getPath("userData")` would miss services that already correctly share that root. | For Electron storage-root changes, set `app.setPath("userData", ...)` before any service reads `app.getPath("userData")`. Keep the root decision in one small module, preserve product-name casing explicitly, and include a non-destructive migration from legacy roots when existing user state may be present. |
+
+## 2026-05-03 windows transparent icon addendum
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| Changed Windows app/installer icons back to transparent background while leaving Mac runtime icon behavior unchanged. | Windows taskbar/installer icon requirements can differ from macOS Dock expectations; forcing white backgrounds into Windows .ico assets was not desired. | Keep Windows .ico and BrowserWindow icons transparent unless explicitly requested otherwise. Preserve macOS icon behavior separately, and do not use one platform icon treatment as a blanket rule for all packages. |

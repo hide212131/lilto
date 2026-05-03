@@ -45,49 +45,22 @@ function cropTransparentBounds(image) {
   return nativeImage.createFromBitmap(bitmap, { width, height, scaleFactor: 1 });
 }
 
-function cropCenterFace(image) {
-  const cropped = cropTransparentBounds(image);
-  const size = cropped.getSize();
-  const source = cropped.toBitmap();
-  const width = Math.max(1, Math.floor(size.width * 0.62));
-  const height = Math.max(1, Math.floor(size.height * 0.72));
-  const left = Math.max(0, Math.floor((size.width - width) / 2));
-  const top = Math.max(0, Math.floor(size.height * 0.12));
-  const bitmap = Buffer.alloc(width * height * 4, 0);
-
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const srcX = x + left;
-      const srcY = y + top;
-      if (srcX >= size.width || srcY >= size.height) {
-        continue;
-      }
-      const srcOffset = (srcY * size.width + srcX) * 4;
-      const dstOffset = (y * width + x) * 4;
-      bitmap[dstOffset] = source[srcOffset];
-      bitmap[dstOffset + 1] = source[srcOffset + 1];
-      bitmap[dstOffset + 2] = source[srcOffset + 2];
-      bitmap[dstOffset + 3] = source[srcOffset + 3];
-    }
-  }
-
-  return nativeImage.createFromBitmap(bitmap, { width, height, scaleFactor: 1 });
-}
-
-function composeIcon(sourcePath, outputPath, size) {
-  const source = cropCenterFace(nativeImage.createFromPath(sourcePath));
+function composeIcon(sourcePath, outputPath, size, options = {}) {
+  const source = cropTransparentBounds(nativeImage.createFromPath(sourcePath));
   if (source.isEmpty()) {
     throw new Error(`Could not read source icon: ${sourcePath}`);
   }
 
   const canvas = Buffer.alloc(size * size * 4, 0);
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const offset = (y * size + x) * 4;
-      canvas[offset] = 255;
-      canvas[offset + 1] = 255;
-      canvas[offset + 2] = 255;
-      canvas[offset + 3] = 255;
+  if (options.background === "white") {
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const offset = (y * size + x) * 4;
+        canvas[offset] = 255;
+        canvas[offset + 1] = 255;
+        canvas[offset + 2] = 255;
+        canvas[offset + 3] = 255;
+      }
     }
   }
 
@@ -157,7 +130,7 @@ app.whenReady()
     const pngPath = path.join(rootDir, "build", "icon.png");
     const icoPath = path.join(rootDir, "build", "icon.ico");
     fs.mkdirSync(path.dirname(pngPath), { recursive: true });
-    composeIcon(sourcePath, pngPath, 512);
+    composeIcon(sourcePath, pngPath, 512, { background: "white" });
 
     const icoImages = [16, 24, 32, 48, 64, 128, 256].map((size) => ({
       size,
