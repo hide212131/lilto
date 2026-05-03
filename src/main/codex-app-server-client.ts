@@ -19,6 +19,17 @@ type NotificationWaiter<T> = {
   timeout: NodeJS.Timeout;
 };
 
+function buildCodexAppServerEnvironment(options: {
+  invocationEnv?: NodeJS.ProcessEnv;
+  codexHomeDir: string;
+}): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    ...(options.invocationEnv ?? {}),
+    CODEX_HOME: options.codexHomeDir
+  };
+}
+
 export class CodexAppServerClient {
   private readonly logger: Logger;
   private child: ChildProcessWithoutNullStreams | null = null;
@@ -55,15 +66,10 @@ export class CodexAppServerClient {
     const spawnImpl = this.options.spawnImpl ?? spawn;
     const invocation = resolveCliInvocation(this.options.codexCommand ?? "codex", ["app-server", "--listen", "stdio://"]);
     const child = spawnImpl(invocation.command, invocation.args, {
-      env: {
-        ...process.env,
-        ...(invocation.env ?? {}),
-        ...(this.options.homeDir ? {
-          HOME: this.options.homeDir,
-          USERPROFILE: this.options.homeDir
-        } : {}),
-        CODEX_HOME: this.options.codexHomeDir
-      },
+      env: buildCodexAppServerEnvironment({
+        invocationEnv: invocation.env,
+        codexHomeDir: this.options.codexHomeDir
+      }),
       stdio: ["pipe", "pipe", "pipe"]
     }) as ChildProcessWithoutNullStreams;
 
@@ -262,3 +268,5 @@ export class CodexAppServerClient {
     this.started = false;
   }
 }
+
+export { buildCodexAppServerEnvironment as buildCodexAppServerEnvironmentForTest };

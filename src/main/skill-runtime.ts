@@ -14,7 +14,8 @@ export type SkillMetadata = {
 };
 
 export type SkillRuntimeSetup = {
-  homeDir: string;
+  appDataDir: string;
+  homeDir?: string;
   codexHomeDir: string;
   appSkillsDir: string;
   bundledSkillsDir: string;
@@ -75,19 +76,16 @@ function resolveRuntimeEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv
 }
 
 function buildManagedSkillEnv(options: {
-  homeDir?: string;
   codexHomeDir?: string;
 }): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
-  if (options.homeDir) {
-    env.HOME = options.homeDir;
-    env.USERPROFILE = options.homeDir;
-  }
   if (options.codexHomeDir) {
     env.CODEX_HOME = options.codexHomeDir;
   }
   return env;
 }
+
+export { buildManagedSkillEnv as buildManagedSkillEnvForTest };
 
 function runSkillsCliSync(options: {
   args: string[];
@@ -471,9 +469,10 @@ export function setupSkillRuntime(options: {
   settingsPaths?: string[];
   projectRoot?: string;
 }): SkillRuntimeSetup {
-  const homeDir = path.resolve(options.homeDir ?? options.appDataDir);
-  const codexHomeDir = resolveCodexHomeDir(options.appDataDir);
-  cleanupLegacySandboxState({ appDataDir: options.appDataDir, codexHomeDir });
+  const appDataDir = path.resolve(options.appDataDir);
+  const homeDir = options.homeDir ? path.resolve(options.homeDir) : undefined;
+  const codexHomeDir = resolveCodexHomeDir(appDataDir);
+  cleanupLegacySandboxState({ appDataDir, codexHomeDir });
   const appSkillsDir = path.join(codexHomeDir, "skills");
   const bundledSkillsDir = path.join(appSkillsDir, ".system");
   const workspaceDir = path.resolve(options.projectRoot ?? process.cwd());
@@ -489,6 +488,7 @@ export function setupSkillRuntime(options: {
   const availableSkills = discoverSkillMetadata([userSkillsDir, bundledSkillsDir]);
 
   return {
+    appDataDir,
     homeDir,
     codexHomeDir,
     appSkillsDir,
@@ -1430,7 +1430,6 @@ export async function installSkillFromSource(options: {
   const projectRoot = options.projectRoot ?? process.cwd();
   const userSkillsDir = options.userSkillsDir ?? resolveWorkspaceUserSkillsDir(projectRoot);
   const envOverrides = buildManagedSkillEnv({
-    homeDir: options.homeDir,
     codexHomeDir: options.codexHomeDir
   });
   const sourceIsHttp = isHttpUrl(source);

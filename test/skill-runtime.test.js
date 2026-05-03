@@ -16,6 +16,7 @@ const {
   installSkillFromSource,
   resolveCodexHomeDir,
   resolveCliListedSkillPath,
+  buildManagedSkillEnvForTest,
   parseReleaseUrl,
   computeContentHash,
   checkSkillUpdates
@@ -283,7 +284,8 @@ test("setupSkillRuntime は CODEX_HOME 配下に bundled/user skills を配置�
       projectRoot
     });
 
-    assert.equal(runtime.homeDir, appDataDir);
+    assert.equal(runtime.appDataDir, appDataDir);
+    assert.equal(runtime.homeDir, undefined);
     assert.equal(runtime.codexHomeDir, codexHomeDir);
     assert.equal(runtime.bundledSkillsDir, path.join(codexHomeDir, "skills", ".system"));
     assert.equal(runtime.userSkillsDir, userSkillsDir);
@@ -370,7 +372,6 @@ test("installSkillFromSource uses the provided workspace directory for local ins
       source: sourceDir,
       projectRoot: workspaceDir,
       userSkillsDir: path.join(workspaceDir, ".agents", "skills"),
-      homeDir: workspaceDir,
       codexHomeDir
     });
 
@@ -379,6 +380,36 @@ test("installSkillFromSource uses the provided workspace directory for local ins
     assert.equal(fs.existsSync(path.join(localInstallDir, ".agents", "skills", "local-folder-skill", "SKILL.md")), false);
   } finally {
     process.chdir(previousCwd);
+  }
+});
+
+test("managed skill env keeps HOME and USERPROFILE while setting CODEX_HOME", { concurrency: false }, () => {
+  const previousHome = process.env.HOME;
+  const previousUserProfile = process.env.USERPROFILE;
+  process.env.HOME = "/users/real-home";
+  process.env.USERPROFILE = "C:\\Users\\Real";
+  try {
+    const env = buildManagedSkillEnvForTest({
+      codexHomeDir: "C:\\Users\\hide\\AppData\\Local\\Lilt-o\\codex"
+    });
+    const mergedEnv = { ...process.env, ...env };
+
+    assert.equal(mergedEnv.HOME, "/users/real-home");
+    assert.equal(mergedEnv.USERPROFILE, "C:\\Users\\Real");
+    assert.equal(mergedEnv.CODEX_HOME, "C:\\Users\\hide\\AppData\\Local\\Lilt-o\\codex");
+    assert.equal(Object.hasOwn(env, "HOME"), false);
+    assert.equal(Object.hasOwn(env, "USERPROFILE"), false);
+  } finally {
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+    if (previousUserProfile === undefined) {
+      delete process.env.USERPROFILE;
+    } else {
+      process.env.USERPROFILE = previousUserProfile;
+    }
   }
 });
 

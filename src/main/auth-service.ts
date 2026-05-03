@@ -60,6 +60,17 @@ type AuthInspectionResult = {
   readError: string | null;
 };
 
+function buildCodexLoginEnvironment(options: {
+  invocationEnv?: NodeJS.ProcessEnv;
+  codexHome: string;
+}): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    ...(options.invocationEnv ?? {}),
+    CODEX_HOME: options.codexHome
+  };
+}
+
 function normalizeState(
   prev: Partial<AuthState>,
   phase: AuthPhase,
@@ -84,7 +95,6 @@ export class ClaudeAuthService {
   private readonly authPath: string;
   private readonly openExternal: (url: string) => Promise<void>;
   private readonly codexHome: string;
-  private readonly homeDir: string;
   private readonly codexAuthPath: string;
   private readonly fallbackCodexAuthPath: string;
   private readonly codexCommand: string;
@@ -117,7 +127,6 @@ export class ClaudeAuthService {
     authPath = path.join(process.cwd(), ".lilto-auth.json"),
     openExternal = (url: string) => shell.openExternal(url),
     codexHome = process.env.CODEX_HOME || path.join(process.env.HOME || process.cwd(), ".codex"),
-    homeDir = process.env.HOME || process.cwd(),
     fallbackCodexHome = path.join(process.env.HOME || process.cwd(), ".codex"),
     codexCommand = "codex"
   }: {
@@ -133,7 +142,6 @@ export class ClaudeAuthService {
     this.authPath = authPath;
     this.openExternal = openExternal;
     this.codexHome = codexHome;
-    this.homeDir = homeDir;
     this.codexAuthPath = path.join(codexHome, "auth.json");
     this.fallbackCodexAuthPath = path.join(fallbackCodexHome, "auth.json");
     this.codexCommand = codexCommand;
@@ -288,13 +296,10 @@ export class ClaudeAuthService {
       try {
         const invocation = resolveCliInvocation(this.codexCommand, ["login"]);
         this.loginChild = spawn(invocation.command, invocation.args, {
-          env: {
-            ...process.env,
-            ...(invocation.env ?? {}),
-            HOME: this.homeDir,
-            USERPROFILE: this.homeDir,
-            CODEX_HOME: this.codexHome
-          },
+          env: buildCodexLoginEnvironment({
+            invocationEnv: invocation.env,
+            codexHome: this.codexHome
+          }),
           stdio: "ignore"
         });
       } catch (error) {
@@ -362,3 +367,5 @@ export class ClaudeAuthService {
     }
   }
 }
+
+export { buildCodexLoginEnvironment as buildCodexLoginEnvironmentForTest };

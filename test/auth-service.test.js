@@ -4,7 +4,34 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const { ClaudeAuthService } = require("../dist/main/auth-service.js");
+const { ClaudeAuthService, buildCodexLoginEnvironmentForTest } = require("../dist/main/auth-service.js");
+
+test("codex login env keeps HOME and USERPROFILE while setting CODEX_HOME", { concurrency: false }, () => {
+  const previousHome = process.env.HOME;
+  const previousUserProfile = process.env.USERPROFILE;
+  process.env.HOME = "/users/real-home";
+  process.env.USERPROFILE = "C:\\Users\\Real";
+  try {
+    const env = buildCodexLoginEnvironmentForTest({
+      codexHome: "C:\\Users\\hide\\AppData\\Local\\Lilt-o\\codex"
+    });
+
+    assert.equal(env.HOME, "/users/real-home");
+    assert.equal(env.USERPROFILE, "C:\\Users\\Real");
+    assert.equal(env.CODEX_HOME, "C:\\Users\\hide\\AppData\\Local\\Lilt-o\\codex");
+  } finally {
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+    if (previousUserProfile === undefined) {
+      delete process.env.USERPROFILE;
+    } else {
+      process.env.USERPROFILE = previousUserProfile;
+    }
+  }
+});
 
 test("chatgpt token を含む auth.json がある場合は ChatGPT 認証済みとして初期化される", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "lilto-auth-"));

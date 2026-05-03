@@ -166,7 +166,7 @@ if (hasSingleInstanceLock) {
       const message = error instanceof Error ? error.message : String(error);
       logger.error("skill_runtime_init_failed", { message });
       skillRuntime = {
-        homeDir: app.getPath("userData"),
+        appDataDir: app.getPath("userData"),
         codexHomeDir: process.env.CODEX_HOME || resolveCodexHomeDir(app.getPath("userData")),
         appSkillsDir: "",
         bundledSkillsDir: "",
@@ -224,23 +224,20 @@ if (hasSingleInstanceLock) {
       logger: createLogger("auth"),
       authPath: path.join(app.getPath("userData"), "auth-state.json"),
       codexHome: skillRuntime.codexHomeDir,
-      homeDir: skillRuntime.homeDir,
       fallbackCodexHome: skillRuntime.codexHomeDir
     });
     const modelCatalogService = new ModelCatalogService({
       logger: createLogger("models"),
-      homeDir: skillRuntime.homeDir,
       codexHomeDir: skillRuntime.codexHomeDir
     });
     const pluginService = new CodexPluginService({
       logger: createLogger("plugins"),
       workspaceDir: skillRuntime.workspaceDir,
-      homeDir: skillRuntime.homeDir,
+      homeDir: skillRuntime.appDataDir,
       codexHomeDir: skillRuntime.codexHomeDir
     });
     const windowsSandboxSetupService = new WindowsSandboxSetupService({
       logger: createLogger("windows-sandbox-setup"),
-      homeDir: skillRuntime.homeDir,
       codexHomeDir: skillRuntime.codexHomeDir,
       workspaceDir: skillRuntime.workspaceDir
     });
@@ -251,7 +248,6 @@ if (hasSingleInstanceLock) {
       authService,
       workspaceDir: skillRuntime.workspaceDir,
       codexHomeDir: skillRuntime.codexHomeDir,
-      homeDir: skillRuntime.homeDir,
       schedulerBridge,
       availableSkills: skillRuntime.availableSkills
     });
@@ -284,7 +280,7 @@ if (hasSingleInstanceLock) {
       bundledSkillsDir: skillRuntime.bundledSkillsDir,
       userSkillsDir: skillRuntime.userSkillsDir,
       workspaceDir: skillRuntime.workspaceDir,
-      homeDir: skillRuntime.homeDir,
+      homeDir: skillRuntime.appDataDir,
       codexHomeDir: skillRuntime.codexHomeDir,
       onSettingsSaved: (settings) => {
         registerAppShortcut(settings.chatSettings.globalShortcut, () => mainWindow);

@@ -408,6 +408,16 @@ function withScopedProxyEnvironment(settings: ProviderSettings): () => void {
   };
 }
 
+function buildCodexSdkEnvironment(options: {
+  codexHomeDir?: string;
+}): Record<string, string> {
+  const env = { ...process.env } as Record<string, string>;
+  if (options.codexHomeDir) {
+    env.CODEX_HOME = options.codexHomeDir;
+  }
+  return env;
+}
+
 export async function createCodexThreadFromSdk(options: {
   apiKey: string | null;
   model?: RuntimeModel;
@@ -433,14 +443,7 @@ export async function createCodexThreadFromSdk(options: {
       resumeThread: (id: string, options: Record<string, unknown>) => Thread;
     };
   };
-  const env = { ...process.env } as Record<string, string>;
-  if (options.homeDir) {
-    env.HOME = options.homeDir;
-    env.USERPROFILE = options.homeDir;
-  }
-  if (options.codexHomeDir) {
-    env.CODEX_HOME = options.codexHomeDir;
-  }
+  const env = buildCodexSdkEnvironment({ codexHomeDir: options.codexHomeDir });
   const packagedCodex = resolvePackagedCodexBinary();
   if (packagedCodex?.extraPath) {
     const pathSeparator = process.platform === "win32" ? ";" : ":";
@@ -953,3 +956,4 @@ export class AgentRuntime {
 }
 
 export { AgentRuntime as PiAgentBridge };
+export { buildCodexSdkEnvironment as buildCodexSdkEnvironmentForTest };

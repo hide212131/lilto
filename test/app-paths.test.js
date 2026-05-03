@@ -13,10 +13,11 @@ const {
 } = require("../dist/main/app-paths.js");
 
 test("resolvePreloadPath and resolveRendererIndexPath use the packaged app root", () => {
-  const appRoot = "/tmp/Lilt-o.app/Contents/Resources/app.asar";
-  assert.equal(resolveAppRoot({ appRoot }), appRoot);
-  assert.equal(resolvePreloadPath({ appRoot }), `${appRoot}/dist/preload.js`);
-  assert.equal(resolveRendererIndexPath({ appRoot }), `${appRoot}/dist/renderer/index.html`);
+  const appRoot = path.join(os.tmpdir(), "Lilt-o.app", "Contents", "Resources", "app.asar");
+  const resolvedAppRoot = path.resolve(appRoot);
+  assert.equal(resolveAppRoot({ appRoot }), resolvedAppRoot);
+  assert.equal(resolvePreloadPath({ appRoot }), path.join(resolvedAppRoot, "dist", "preload.js"));
+  assert.equal(resolveRendererIndexPath({ appRoot }), path.join(resolvedAppRoot, "dist", "renderer", "index.html"));
 });
 
 test("resolveNativeHelperPath prefers development output when it exists", () => {

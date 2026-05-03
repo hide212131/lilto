@@ -61,14 +61,18 @@ export function isWindowsPlatform(platform = process.platform): boolean {
   return platform === "win32";
 }
 
-function resolveAppRootDir(baseDir?: string): string {
+function pathModuleForPlatform(platform: NodeJS.Platform): typeof path.win32 | typeof path.posix {
+  return isWindowsPlatform(platform) ? path.win32 : path.posix;
+}
+
+function resolveAppRootDir(baseDir: string | undefined, platform: NodeJS.Platform): string {
   if (!baseDir) {
     return path.resolve(__dirname, "..", "..");
   }
   if (/^[A-Za-z]:[\\/]/.test(baseDir)) {
     return path.win32.resolve(baseDir);
   }
-  return path.resolve(baseDir);
+  return pathModuleForPlatform(platform).resolve(baseDir);
 }
 
 function resolveBundledCodexBinPath(
@@ -76,7 +80,7 @@ function resolveBundledCodexBinPath(
   baseDir: string,
   pathExists: (filePath: string) => boolean
 ): string | null {
-  const pathModule = isWindowsPlatform(platform) ? path.win32 : path;
+  const pathModule = pathModuleForPlatform(platform);
   const candidate = pathModule.join(baseDir, "node_modules", ".bin", isWindowsPlatform(platform) ? "codex.cmd" : "codex");
   return pathExists(candidate) ? candidate : null;
 }
@@ -86,7 +90,7 @@ function resolveBundledCodexScriptPath(
   baseDir: string,
   pathExists: (filePath: string) => boolean
 ): string | null {
-  const pathModule = isWindowsPlatform(platform) ? path.win32 : path;
+  const pathModule = pathModuleForPlatform(platform);
   const candidate = pathModule.join(baseDir, "node_modules", "@openai", "codex", "bin", "codex.js");
   return pathExists(candidate) ? candidate : null;
 }
@@ -108,13 +112,14 @@ function resolveCodexTargetTriple(platform: NodeJS.Platform, arch = process.arch
 function resolvePackagedCodexBinary(
   platform: NodeJS.Platform,
   baseDir: string,
-  pathExists: (filePath: string) => boolean
+  pathExists: (filePath: string) => boolean,
+  arch = process.arch
 ): { command: string; env?: Record<string, string> } | null {
   if (!baseDir.endsWith(".asar")) {
     return null;
   }
 
-  const targetTriple = resolveCodexTargetTriple(platform);
+  const targetTriple = resolveCodexTargetTriple(platform, arch);
   if (!targetTriple) {
     return null;
   }
@@ -169,6 +174,7 @@ export function resolveCliInvocation(
   args: readonly string[] = [],
   options: {
     platform?: NodeJS.Platform;
+    arch?: NodeJS.Architecture;
     baseDir?: string;
     pathExists?: (filePath: string) => boolean;
   } = {}
@@ -194,10 +200,10 @@ export function resolveCliInvocation(
   }
 
   if (normalized.toLowerCase() === "codex") {
-    const baseDir = resolveAppRootDir(options.baseDir);
+    const baseDir = resolveAppRootDir(options.baseDir, platform);
     const pathExists = options.pathExists ?? fs.existsSync;
-    const pathModule = isWindowsPlatform(platform) ? path.win32 : path;
-    const packagedBinary = resolvePackagedCodexBinary(platform, baseDir, pathExists);
+    const pathModule = pathModuleForPlatform(platform);
+    const packagedBinary = resolvePackagedCodexBinary(platform, baseDir, pathExists, options.arch);
     if (packagedBinary) {
       return {
         command: packagedBinary.command,

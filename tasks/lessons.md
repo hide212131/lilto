@@ -1,4 +1,11 @@
-# Lessons
+﻿# Lessons
+
+## 2026-05-03 home environment boundary correction
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| Proposed preserving the OS `HOME` / `USERPROFILE` environment instead of pointing it at Electron `userData`. | Moving `HOME` to app `userData` can make unrelated CLIs and user config discovery read from the wrong place; `userData` and OS home have different responsibilities. | Never use `HOME` / `USERPROFILE` as an app-data routing mechanism. Keep app-owned state behind explicit paths such as `userDataDir`, `CODEX_HOME`, `workspaceDir`, or `projectRoot`, and let child processes inherit the user's normal home unless the user explicitly asks otherwise. |
+| Fixed full-test failures caused by macOS/POSIX path assumptions while running on Windows. | Tests that simulate packaged macOS paths can silently use Windows separators or the host architecture unless the platform and arch are explicit; hardcoded developer Node paths also fail on another machine. | For cross-platform path tests, use platform-aware path modules or normalize separators in assertions, pass simulated `arch` alongside `platform`, and spawn test Node processes with `process.execPath`. |
 
 ## 2026-05-03 Windows sandbox Skill 運用テスト
 
@@ -368,3 +375,4 @@
 | Change | Mistake/Context | Rule to repeat |
 |---|---|---|
 | Changed Windows app/installer icons back to transparent background while leaving Mac runtime icon behavior unchanged. | Windows taskbar/installer icon requirements can differ from macOS Dock expectations; forcing white backgrounds into Windows .ico assets was not desired. | Keep Windows .ico and BrowserWindow icons transparent unless explicitly requested otherwise. Preserve macOS icon behavior separately, and do not use one platform icon treatment as a blanket rule for all packages. |
+

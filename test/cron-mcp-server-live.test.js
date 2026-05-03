@@ -73,7 +73,7 @@ test("cron-mcp-server は Codex 互換の JSONL transport で initialize/tools �
   const bridge = await startBridgeStub();
   t.after(() => bridge.server.close());
 
-  const child = spawn("/Users/hide/.nvm/versions/node/v22.14.0/bin/node", ["dist/main/cron-mcp-server.js"], {
+  const child = spawn(process.execPath, ["dist/main/cron-mcp-server.js"], {
     cwd: process.cwd(),
     env: {
       ...process.env,
