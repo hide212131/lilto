@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
 export type SkillMetadata = {
@@ -27,9 +26,6 @@ export type SkillRuntimeSetup = {
 };
 
 const BUNDLED_SKILL_NAMES = ["agent-browser", "skill-creator"] as const;
-const SKILLS_CLI_AGENT = "codex";
-const ANSI_ESCAPE_REGEX = /\x1B\[[0-9;]*m/g;
-const SKILL_INSTALL_TIMEOUT_MS = 60_000;
 const MANAGED_SKILLS_CONFIG_START = "# lilto-managed-skills-config:start";
 const MANAGED_SKILLS_CONFIG_END = "# lilto-managed-skills-config:end";
 const BUNDLED_SKILL_SOURCES: Record<string, string> = {
@@ -41,38 +37,8 @@ function resolveWorkspaceUserSkillsDir(workspaceDir: string): string {
   return path.join(workspaceDir, ".agents", "skills");
 }
 
-function resolveWorkspaceDirFromUserSkillsDir(userSkillsDir: string): string | null {
-  const normalized = path.resolve(userSkillsDir);
-  const expectedSuffix = path.normalize(path.join(".agents", "skills"));
-  if (!normalized.endsWith(expectedSuffix)) {
-    return null;
-  }
-
-  return path.dirname(path.dirname(normalized));
-}
-
-function isManagedProjectUserSkillsDir(userSkillsDir: string, projectRoot?: string): boolean {
-  const resolvedProjectRoot = path.resolve(projectRoot ?? resolveWorkspaceDirFromUserSkillsDir(userSkillsDir) ?? process.cwd());
-  return path.resolve(userSkillsDir) === path.resolve(resolveWorkspaceUserSkillsDir(resolvedProjectRoot));
-}
-
-function resolveSkillsCliPath(projectRoot: string): string {
-  try {
-    const require = createRequire(__filename);
-    return require.resolve("skills/bin/cli.mjs");
-  } catch {
-    const fallbackPath = path.join(projectRoot, "node_modules", "skills", "bin", "cli.mjs");
-    if (!fs.existsSync(fallbackPath)) {
-      throw new Error(`skills 繝ｩ繧､繝悶Λ繝ｪ縺瑚ｦ九▽縺九ｊ縺ｾ縺帙ｓ: ${fallbackPath}`);
-    }
-    return fallbackPath;
-  }
-}
-
-function resolveRuntimeEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  return process.versions.electron
-    ? { ...process.env, ...overrides, ELECTRON_RUN_AS_NODE: "1" }
-    : { ...process.env, ...overrides };
+export function resolveCodexUserSkillsDir(codexHomeDir: string): string {
+  return path.join(codexHomeDir, "skills");
 }
 
 function buildManagedSkillEnv(options: {
@@ -86,57 +52,6 @@ function buildManagedSkillEnv(options: {
 }
 
 export { buildManagedSkillEnv as buildManagedSkillEnvForTest };
-
-function runSkillsCliSync(options: {
-  args: string[];
-  projectRoot?: string;
-  envOverrides?: NodeJS.ProcessEnv;
-}): { ok: true; stdout: string } | { ok: false; error: string } {
-  const projectRoot = options.projectRoot ?? process.cwd();
-  let skillsCliPath = "";
-  try {
-    skillsCliPath = resolveSkillsCliPath(projectRoot);
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
-  }
-
-  try {
-    const stdout = execFileSync(
-      process.execPath,
-      [skillsCliPath, ...options.args],
-      {
-        cwd: projectRoot,
-        env: resolveRuntimeEnv(options.envOverrides),
-        timeout: SKILL_INSTALL_TIMEOUT_MS,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"]
-      }
-    );
-    return { ok: true, stdout: stdout.trim() };
-  } catch (error) {
-    const err = error as { stdout?: string; stderr?: string; message?: string };
-    const message = (err.stderr || err.stdout || err.message || String(error)).trim();
-    return { ok: false, error: message };
-  }
-}
-
-function parseSkillEntriesFromListOutput(output: string): Array<{ name: string; skillPath: string }> {
-  const entries: Array<{ name: string; skillPath: string }> = [];
-  const plain = output.replace(ANSI_ESCAPE_REGEX, "");
-  const lines = plain.split(/\r?\n/);
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-
-    const match = trimmed.match(/^([A-Za-z0-9._-]+)\s+((~|\.{1,2}|\/).+)$/);
-    if (match) {
-      entries.push({ name: match[1], skillPath: match[2] });
-    }
-  }
-
-  return entries;
-}
 
 export function resolveCliListedSkillPath(skillPath: string): string {
   if (skillPath === "~") {
@@ -362,6 +277,17 @@ function discoverUserSkillMetadata(options: {
   return discovered;
 }
 
+function discoverRuntimeSkills(options: {
+  userSkillsDir: string;
+  bundledSkillsDir: string;
+}): SkillMetadata[] {
+  const userSkills = discoverUserSkillMetadata(options);
+  const seen = new Set(userSkills.map((skill) => skill.name));
+  const bundledSkills = discoverSkillMetadata([options.bundledSkillsDir])
+    .filter((skill) => !seen.has(skill.name));
+  return [...userSkills, ...bundledSkills];
+}
+
 export function resolveCodexHomeDir(appDataDir: string): string {
   return process.env.CODEX_HOME || path.join(appDataDir, "codex");
 }
@@ -461,6 +387,62 @@ export function ensureBundledSkills(options: {
   return installed;
 }
 
+function migrateLegacyWorkspaceUserSkills(options: {
+  legacyUserSkillsDir: string;
+  userSkillsDir: string;
+  bundledSkillsDir: string;
+}): string[] {
+  if (!fs.existsSync(options.legacyUserSkillsDir)) {
+    return [];
+  }
+
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(options.legacyUserSkillsDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const migrated: string[] = [];
+  fs.mkdirSync(options.userSkillsDir, { recursive: true });
+
+  for (const entry of entries) {
+    if (entry.name === ".system") {
+      continue;
+    }
+
+    const sourceDir = path.join(options.legacyUserSkillsDir, entry.name);
+    if (!entry.isDirectory()) {
+      if (!entry.isSymbolicLink()) continue;
+      try {
+        if (!fs.statSync(sourceDir).isDirectory()) {
+          continue;
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    if (isPathWithin(options.bundledSkillsDir, sourceDir)) {
+      continue;
+    }
+
+    const targetDir = path.join(options.userSkillsDir, entry.name);
+    if (fs.existsSync(targetDir)) {
+      continue;
+    }
+
+    try {
+      fs.cpSync(sourceDir, targetDir, { recursive: true, force: false });
+      migrated.push(targetDir);
+    } catch {
+      // Migration is best-effort and non-destructive; leave legacy content in place.
+    }
+  }
+
+  return migrated;
+}
+
 export function setupSkillRuntime(options: {
   appDataDir: string;
   projectName: string;
@@ -473,19 +455,24 @@ export function setupSkillRuntime(options: {
   const homeDir = options.homeDir ? path.resolve(options.homeDir) : undefined;
   const codexHomeDir = resolveCodexHomeDir(appDataDir);
   cleanupLegacySandboxState({ appDataDir, codexHomeDir });
-  const appSkillsDir = path.join(codexHomeDir, "skills");
+  const appSkillsDir = resolveCodexUserSkillsDir(codexHomeDir);
   const bundledSkillsDir = path.join(appSkillsDir, ".system");
   const workspaceDir = path.resolve(options.projectRoot ?? process.cwd());
-  const userSkillsDir = resolveWorkspaceUserSkillsDir(workspaceDir);
+  const userSkillsDir = appSkillsDir;
 
   ensureBundledSkills({ bundledSkillsDir, projectRoot: options.projectRoot });
   fs.mkdirSync(userSkillsDir, { recursive: true });
+  migrateLegacyWorkspaceUserSkills({
+    legacyUserSkillsDir: resolveWorkspaceUserSkillsDir(workspaceDir),
+    userSkillsDir,
+    bundledSkillsDir
+  });
 
   const updatedSettings = syncManagedSkillVisibility({
     codexHomeDir,
     workspaceDir
   });
-  const availableSkills = discoverSkillMetadata([userSkillsDir, bundledSkillsDir]);
+  const availableSkills = discoverRuntimeSkills({ userSkillsDir, bundledSkillsDir });
 
   return {
     appDataDir,
@@ -590,29 +577,8 @@ export function listSkillsWithSource(options: {
     userSkillsDir: options.userSkillsDir,
     bundledSkillsDir: options.bundledSkillsDir
   });
-  let userNamesFromCli: Set<string> | null = null;
-
-  if (isManagedProjectUserSkillsDir(options.userSkillsDir, options.projectRoot)) {
-    const cliListResult = runSkillsCliSync({
-      args: ["list", "--agent", SKILLS_CLI_AGENT],
-      projectRoot: options.projectRoot ?? resolveWorkspaceDirFromUserSkillsDir(options.userSkillsDir) ?? process.cwd()
-    });
-
-    if (!cliListResult.ok) {
-      throw new Error(`skills list failed: ${cliListResult.error}`);
-    }
-
-    userNamesFromCli = new Set(
-      parseSkillEntriesFromListOutput(cliListResult.stdout)
-        .filter((entry) => isPathWithin(path.resolve(options.userSkillsDir), resolveCliListedSkillPath(entry.skillPath)))
-        .map((entry) => entry.name)
-    );
-  }
 
   for (const skill of discoveredUserSkills) {
-    if (userNamesFromCli && !userNamesFromCli.has(skill.name)) {
-      continue;
-    }
     seen.add(skill.name);
     result.push({
       ...skill,
@@ -651,30 +617,12 @@ export function uninstallUserSkill(options: {
     return { ok: false, error: "Cannot uninstall bundled or system skills" };
   }
 
-  if (!isManagedProjectUserSkillsDir(options.userSkillsDir, options.projectRoot)) {
-    try {
-      fs.rmSync(skillDir, { recursive: true, force: true });
-      return { ok: true };
-    } catch (e) {
-      return { ok: false, error: e instanceof Error ? e.message : String(e) };
-    }
+  try {
+    fs.rmSync(skillDir, { recursive: true, force: true });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
-
-  const skillName = path.basename(skillDir);
-  if (!skillName) {
-    return { ok: false, error: "Invalid skill path" };
-  }
-
-  const cliRemoveResult = runSkillsCliSync({
-    args: ["remove", skillName, "--agent", SKILLS_CLI_AGENT, "--yes"],
-    projectRoot: options.projectRoot ?? resolveWorkspaceDirFromUserSkillsDir(options.userSkillsDir) ?? process.cwd()
-  });
-
-  if (!cliRemoveResult.ok) {
-    return { ok: false, error: cliRemoveResult.error };
-  }
-
-  return { ok: true };
 }
 
 async function extractZip(zipFile: string, destDir: string): Promise<void> {
@@ -1172,6 +1120,10 @@ function resolveLocalSourcePath(source: string): string | null {
     return null;
   }
 
+  if (path.isAbsolute(source)) {
+    return path.resolve(source);
+  }
+
   try {
     const parsed = new URL(source);
     if (parsed.protocol === "file:") {
@@ -1299,11 +1251,19 @@ export async function checkSkillUpdates(options: { userSkillsDir: string; bundle
         continue;
       }
 
+      const skillDir = path.join(source.dir, entry.name);
+      if (
+        source.source === "user" &&
+        options.bundledSkillsDir &&
+        isPathWithin(options.bundledSkillsDir, skillDir)
+      ) {
+        continue;
+      }
+
       if (!entry.isDirectory()) {
         if (!entry.isSymbolicLink()) continue;
-        const linkedPath = path.join(source.dir, entry.name);
         try {
-          const linkedStats = fs.statSync(linkedPath);
+          const linkedStats = fs.statSync(skillDir);
           if (!linkedStats.isDirectory()) {
             continue;
           }
@@ -1312,7 +1272,6 @@ export async function checkSkillUpdates(options: { userSkillsDir: string; bundle
         }
       }
 
-      const skillDir = path.join(source.dir, entry.name);
       const sourceFile = path.join(skillDir, SKILL_SOURCE_FILE);
       const skillMd = path.join(skillDir, "SKILL.md");
 
@@ -1423,114 +1382,51 @@ export async function installSkillFromSource(options: {
     return { ok: false, error: "source is required" };
   }
 
-  const { execFile } = await import("node:child_process");
-  const { promisify } = await import("node:util");
-  const execFileAsync = promisify(execFile);
+  const codexHomeDir = options.codexHomeDir ?? process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex");
+  const userSkillsDir = options.userSkillsDir ?? resolveCodexUserSkillsDir(codexHomeDir);
 
-  const projectRoot = options.projectRoot ?? process.cwd();
-  const userSkillsDir = options.userSkillsDir ?? resolveWorkspaceUserSkillsDir(projectRoot);
-  const envOverrides = buildManagedSkillEnv({
-    codexHomeDir: options.codexHomeDir
-  });
-  const sourceIsHttp = isHttpUrl(source);
+  if (isHttpUrl(source)) {
+    const result = await installSkillFromUrl({ url: source, userSkillsDir });
+    if (!result.ok) {
+      return result;
+    }
+    return { ok: true, output: `Installed ${result.installedSkills.join(", ")}` };
+  }
+
+  const localSourcePath = resolveLocalSourcePath(source);
+  if (!localSourcePath || !fs.existsSync(localSourcePath)) {
+    return { ok: false, error: `Skill source not found: ${source}` };
+  }
+
   const localSourceSkillInfo = collectLocalSourceSkillInfo(source);
-  let namesBeforeInstall: Set<string> | null = null;
-  const installStartedAt = Date.now();
-
-  const beforeListResult = runSkillsCliSync({
-    args: ["list", "--agent", SKILLS_CLI_AGENT],
-    projectRoot,
-    envOverrides
-  });
-  if (beforeListResult.ok) {
-    namesBeforeInstall = new Set(
-      parseSkillEntriesFromListOutput(beforeListResult.stdout)
-        .filter((entry) => isPathWithin(path.resolve(userSkillsDir), resolveCliListedSkillPath(entry.skillPath)))
-        .map((entry) => entry.name)
-    );
+  if (localSourceSkillInfo.size === 0) {
+    return { ok: false, error: "No valid SKILL.md found in source" };
   }
 
-  let skillsCliPath = "";
-  try {
-    skillsCliPath = resolveSkillsCliPath(projectRoot);
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  fs.mkdirSync(userSkillsDir, { recursive: true });
+  const installedSkills: string[] = [];
+
+  for (const [skillName, localInfo] of localSourceSkillInfo) {
+    const skillDir = path.join(userSkillsDir, skillName);
+    fs.cpSync(path.dirname(localInfo.skillPath), skillDir, { recursive: true, force: true });
+
+    const sourceRecord: SkillSourceRecord = {
+      url: source,
+      installedAt: Date.now(),
+      installedVersion: localInfo.version ?? readInstalledVersionFromSkillDir(skillDir),
+      contentHash: null,
+      etag: null,
+      lastModified: null,
+      commitSha: null,
+      sourceSkillMtime: localInfo.mtimeMs,
+      sourceSkillPath: localInfo.skillPath
+    };
+
+    fs.writeFileSync(path.join(skillDir, SKILL_SOURCE_FILE), `${JSON.stringify(sourceRecord, null, 2)}\n`, "utf8");
+    installedSkills.push(skillName);
   }
 
-  try {
-    const { stdout } = await execFileAsync(
-      process.execPath,
-      [skillsCliPath, "add", source, "--agent", SKILLS_CLI_AGENT, "--yes"],
-      { timeout: SKILL_INSTALL_TIMEOUT_MS, cwd: projectRoot, env: resolveRuntimeEnv(envOverrides) }
-    );
-
-    const releaseInfo = parseReleaseUrl(source);
-    let commitSha: string | null = null;
-    if (sourceIsHttp) {
-      if (releaseInfo && releaseInfo.version === null && releaseInfo.ref !== null) {
-        commitSha = await fetchLatestCommitSha(releaseInfo, releaseInfo.ref);
-      } else if (!releaseInfo) {
-        commitSha = await fetchLatestRepositoryCommitSha(source);
-      }
-    }
-
-    const afterListResult = runSkillsCliSync({
-      args: ["list", "--agent", SKILLS_CLI_AGENT],
-      projectRoot,
-      envOverrides
-    });
-
-    if (afterListResult.ok) {
-      const namesAfterInstall = new Set(
-        parseSkillEntriesFromListOutput(afterListResult.stdout)
-          .filter((entry) => isPathWithin(path.resolve(userSkillsDir), resolveCliListedSkillPath(entry.skillPath)))
-          .map((entry) => entry.name)
-      );
-      const addedNames = namesBeforeInstall
-        ? [...namesAfterInstall].filter((name) => !namesBeforeInstall?.has(name))
-        : [...namesAfterInstall];
-
-      const changedNames = [...namesAfterInstall].filter((name) => {
-        const skillDir = path.join(userSkillsDir, name);
-        try {
-          const stats = fs.statSync(skillDir);
-          return stats.mtimeMs >= installStartedAt - 10_000;
-        } catch {
-          return false;
-        }
-      });
-
-      const targetNames = addedNames.length > 0 ? addedNames : changedNames;
-
-      for (const skillName of targetNames) {
-        const skillDir = path.join(userSkillsDir, skillName);
-        const localInfo = localSourceSkillInfo.get(skillName);
-        const sourceRecord: SkillSourceRecord = {
-          url: source,
-          installedAt: Date.now(),
-          installedVersion: releaseInfo?.version ?? localInfo?.version ?? readInstalledVersionFromSkillDir(skillDir),
-          contentHash: null,
-          etag: null,
-          lastModified: null,
-          commitSha,
-          sourceSkillMtime: localInfo?.mtimeMs ?? null,
-          sourceSkillPath: localInfo?.skillPath ?? null
-        };
-
-        try {
-          fs.writeFileSync(path.join(skillDir, SKILL_SOURCE_FILE), `${JSON.stringify(sourceRecord, null, 2)}\n`, "utf8");
-        } catch {
-          // best-effort metadata write
-        }
-      }
-    }
-
-    return { ok: true, output: stdout.trim() || "Skill installed" };
-  } catch (e) {
-    const err = e as { stdout?: string; stderr?: string; message?: string };
-    const msg = (err.stderr || err.stdout || err.message || String(e)).trim();
-    return { ok: false, error: msg };
-  }
+  return { ok: true, output: `Installed ${installedSkills.join(", ")}` };
 }
 
 export async function installSkillFromUrl(options: {

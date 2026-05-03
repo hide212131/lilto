@@ -15,6 +15,7 @@ const {
   setupSkillRuntime,
   installSkillFromSource,
   resolveCodexHomeDir,
+  resolveCodexUserSkillsDir,
   resolveCliListedSkillPath,
   buildManagedSkillEnvForTest,
   parseReleaseUrl,
@@ -265,10 +266,11 @@ test("setupSkillRuntime は CODEX_HOME 配下に bundled/user skills を配置�
     `---\nname: skill-creator\ndescription: bundled skill creator\n---\n`
   );
 
-  const userSkillsDir = path.join(projectRoot, ".agents", "skills");
-  fs.mkdirSync(path.join(userSkillsDir, "custom-one"), { recursive: true });
+  const legacyUserSkillsDir = path.join(projectRoot, ".agents", "skills");
+  const userSkillsDir = path.join(codexHomeDir, "skills");
+  fs.mkdirSync(path.join(legacyUserSkillsDir, "custom-one"), { recursive: true });
   fs.writeFileSync(
-    path.join(userSkillsDir, "custom-one", "SKILL.md"),
+    path.join(legacyUserSkillsDir, "custom-one", "SKILL.md"),
     `---\nname: custom-one\ndescription: user custom\n---\n`
   );
   fs.mkdirSync(path.join(projectRoot, ".codex", "skills", "repo-only"), { recursive: true });
@@ -289,11 +291,13 @@ test("setupSkillRuntime は CODEX_HOME 配下に bundled/user skills を配置�
     assert.equal(runtime.codexHomeDir, codexHomeDir);
     assert.equal(runtime.bundledSkillsDir, path.join(codexHomeDir, "skills", ".system"));
     assert.equal(runtime.userSkillsDir, userSkillsDir);
+    assert.equal(resolveCodexUserSkillsDir(codexHomeDir), userSkillsDir);
     assert.equal(runtime.workspaceDir, projectRoot);
     assert.deepEqual(
       runtime.availableSkills.map((skill) => skill.name).sort(),
       ["agent-browser", "custom-one", "skill-creator"]
     );
+    assert.equal(fs.existsSync(path.join(userSkillsDir, "custom-one", "SKILL.md")), true);
     assert.deepEqual(runtime.updatedSettings, [path.join(codexHomeDir, "config.toml")]);
     assert.deepEqual(runtime.removedWorkspaces, []);
     const configToml = fs.readFileSync(path.join(codexHomeDir, "config.toml"), "utf8");
@@ -338,7 +342,7 @@ test("setupSkillRuntime は projectRoot 未指定時のみ process.cwd() を使�
     });
 
     assert.equal(fs.realpathSync(runtime.workspaceDir), fs.realpathSync(cwdRoot));
-    assert.equal(fs.realpathSync(runtime.userSkillsDir), fs.realpathSync(path.join(cwdRoot, ".agents", "skills")));
+    assert.equal(fs.realpathSync(runtime.userSkillsDir), fs.realpathSync(path.join(codexHomeDir, "skills")));
   } finally {
     process.chdir(previousCwd);
     if (previousCodexHome === undefined) {
@@ -351,7 +355,62 @@ test("setupSkillRuntime は projectRoot 未指定時のみ process.cwd() を使�
 
 // ─── parseReleaseUrl ─────────────────────────────────────────────────────────
 
-test("installSkillFromSource uses the provided workspace directory for local installs", async () => {
+test("setupSkillRuntime migrates legacy workspace skills without overwriting CODEX_HOME skills", { concurrency: false }, () => {
+  const previousCodexHome = process.env.CODEX_HOME;
+  const root = tempDir("setup-runtime-migration");
+  const projectRoot = path.join(root, "project");
+  const appDataDir = path.join(root, "app-data");
+  const codexHomeDir = path.join(root, "codex-home");
+  const legacyUserSkillsDir = path.join(projectRoot, ".agents", "skills");
+  const userSkillsDir = path.join(codexHomeDir, "skills");
+  process.env.CODEX_HOME = codexHomeDir;
+
+  fs.mkdirSync(path.join(projectRoot, "node_modules", "agent-browser", "skills", "agent-browser"), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectRoot, "node_modules", "agent-browser", "skills", "agent-browser", "SKILL.md"),
+    `---\nname: agent-browser\ndescription: bundled browser\n---\n`
+  );
+  fs.mkdirSync(path.join(projectRoot, "skills", "bundled", "skill-creator"), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectRoot, "skills", "bundled", "skill-creator", "SKILL.md"),
+    `---\nname: skill-creator\ndescription: bundled skill creator\n---\n`
+  );
+  fs.mkdirSync(path.join(legacyUserSkillsDir, "custom-one"), { recursive: true });
+  fs.writeFileSync(
+    path.join(legacyUserSkillsDir, "custom-one", "SKILL.md"),
+    `---\nname: custom-one\ndescription: legacy copy\n---\n`
+  );
+  fs.mkdirSync(path.join(userSkillsDir, "custom-one"), { recursive: true });
+  fs.writeFileSync(
+    path.join(userSkillsDir, "custom-one", "SKILL.md"),
+    `---\nname: custom-one\ndescription: existing copy\n---\n`
+  );
+  fs.mkdirSync(path.join(legacyUserSkillsDir, "custom-two"), { recursive: true });
+  fs.writeFileSync(
+    path.join(legacyUserSkillsDir, "custom-two", "SKILL.md"),
+    `---\nname: custom-two\ndescription: migrated copy\n---\n`
+  );
+
+  try {
+    setupSkillRuntime({
+      appDataDir,
+      projectName: "Lilt AI",
+      projectRoot
+    });
+
+    assert.match(fs.readFileSync(path.join(userSkillsDir, "custom-one", "SKILL.md"), "utf8"), /existing copy/);
+    assert.equal(fs.existsSync(path.join(userSkillsDir, "custom-two", "SKILL.md")), true);
+    assert.equal(fs.existsSync(path.join(legacyUserSkillsDir, "custom-two", "SKILL.md")), true);
+  } finally {
+    if (previousCodexHome === undefined) {
+      delete process.env.CODEX_HOME;
+    } else {
+      process.env.CODEX_HOME = previousCodexHome;
+    }
+  }
+});
+
+test("installSkillFromSource uses CODEX_HOME skills for local installs", async () => {
   const root = tempDir("skills-install-workspace");
   const workspaceDir = path.join(root, "roaming-settings");
   const localInstallDir = path.join(root, "local-install");
@@ -371,12 +430,13 @@ test("installSkillFromSource uses the provided workspace directory for local ins
     const result = await installSkillFromSource({
       source: sourceDir,
       projectRoot: workspaceDir,
-      userSkillsDir: path.join(workspaceDir, ".agents", "skills"),
+      userSkillsDir: path.join(codexHomeDir, "skills"),
       codexHomeDir
     });
 
     assert.equal(result.ok, true);
-    assert.equal(fs.existsSync(path.join(workspaceDir, ".agents", "skills", "local-folder-skill", "SKILL.md")), true);
+    assert.equal(fs.existsSync(path.join(codexHomeDir, "skills", "local-folder-skill", "SKILL.md")), true);
+    assert.equal(fs.existsSync(path.join(workspaceDir, ".agents", "skills", "local-folder-skill", "SKILL.md")), false);
     assert.equal(fs.existsSync(path.join(localInstallDir, ".agents", "skills", "local-folder-skill", "SKILL.md")), false);
   } finally {
     process.chdir(previousCwd);
@@ -944,6 +1004,52 @@ test("ensureBundledSkills writes .skill-source.json for bundled skills", () => {
   assert.equal(agentBrowserSource.installedVersion, "0.13.0");
   assert.equal(skillCreatorSource.url, "https://github.com/anthropics/skills");
   assert.equal(skillCreatorSource.installedVersion, "1.0.0");
+});
+
+test("checkSkillUpdates treats .system under CODEX_HOME skills as bundled only", async () => {
+  const root = tempDir("update-check-codex-home-root");
+  const userSkillsDir = path.join(root, "skills");
+  const bundledSkillsDir = path.join(userSkillsDir, ".system");
+
+  makeSkillDir(userSkillsDir, "user-skill", {
+    url: "https://example.com/user-skill.zip",
+    installedAt: Date.now(),
+    installedVersion: null,
+    etag: "\"old-user\""
+  });
+  makeSkillDir(bundledSkillsDir, "agent-browser", {
+    url: "https://example.com/agent-browser.zip",
+    installedAt: Date.now(),
+    installedVersion: "0.13.0",
+    etag: "\"old-bundled\""
+  });
+
+  const fetchMock = mock.method(global, "fetch", async (url) => ({
+    ok: true,
+    headers: {
+      get: (name) => {
+        if (name === "etag") {
+          return String(url).includes("agent-browser") ? "\"new-bundled\"" : "\"new-user\"";
+        }
+        return null;
+      }
+    }
+  }));
+
+  try {
+    const results = await checkSkillUpdates({ userSkillsDir, bundledSkillsDir });
+    assert.deepEqual(
+      results
+        .map((item) => ({ name: item.skillName, source: item.source }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+      [
+        { name: "agent-browser", source: "bundled" },
+        { name: "user-skill", source: "user" }
+      ]
+    );
+  } finally {
+    fetchMock.mock.restore();
+  }
 });
 
 test("checkSkillUpdates includes bundled skills when source metadata exists", async () => {

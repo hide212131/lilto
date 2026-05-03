@@ -1,4 +1,10 @@
-﻿# Lessons
+# Lessons
+
+## 2026-05-04 skill storage root correction
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| Moved user-managed Skill add/list/remove/update storage from workspace `.agents/skills` to explicit `%CODEX_HOME%/skills`, with bundled skills under `%CODEX_HOME%/skills/.system`. | After preserving the real OS `HOME` / `USERPROFILE`, using workspace `.agents/skills` as the app skill root still tied skill storage to whichever project/workspace the app launched with. | Skill operations must use an explicit app-owned root: `%CODEX_HOME%/skills` for user skills and `%CODEX_HOME%/skills/.system` for bundled/system skills. Treat workspace `.agents/skills` only as a legacy migration source and never as the primary install/delete root. |
 
 ## 2026-05-03 home environment boundary correction
 
