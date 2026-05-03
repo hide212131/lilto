@@ -1,5 +1,13 @@
 # Lessons
 
+## 2026-05-03 Windows sandbox Skill 運用テスト
+
+| 変更/文脈 | なぜ重要だったか | 次に繰り返すルール |
+|---|---|---|
+| Windows sandbox 上の Agent Skill 運用テストを OpenSpec 提案として追加した。 | 汎用的なコマンド制限だけを見る sandbox テストでは、Temp 作業フォルダ、ネットワークアクセス、許可済み exe 実行を組み合わせる実際の Skill ワークフローを証明できない。 | Windows sandbox で Skill を検証するときは、Temp 作業、Web 取得、許可済み exe 実行を含む実 fixture を用意し、テストで使う正確な `config.toml` を生成する。 |
+| exe 実行を sandbox 内 Node の nested `child_process` として扱って live test を失敗させた後、Codex sandbox command の別ステップへ修正した。 | Windows sandbox runner は承認済みの top-level command を実行できる一方、sandbox 内の Node がさらに子プロセスを起動すると別の OS 境界に当たり `EPERM` になる。これを `config.toml` 検証の失敗と混同すると原因を誤る。 | 要件が nested process 起動そのものを対象にしていない限り、Agent Skill の exe 実行は helper script 内の `child_process` ではなく Codex sandbox command の手順としてモデル化する。`config.toml` 検証は `workspace-write`、`[windows]`、network access、writable roots に絞る。 |
+| live test が一時生成する `config.toml` だけで済ませ、手動で参照できるサンプルを最初に置いていなかった。 | 運用テスト資産として使う場合、生成処理だけでは設定の意図を人が確認しづらく、Sandbox 承認や手動再現時に迷いやすい。 | sandbox 運用テストを追加するときは、自動生成する設定に加えて、fixture 近くに `config.sample.toml` を置き、実パスへ置き換える箇所をコメントで明示する。 |
+
 ## 2026-05-03
 
 | Mistake/Context | Why it mattered | Rule to repeat |

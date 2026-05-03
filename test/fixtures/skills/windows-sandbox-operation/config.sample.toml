@@ -1,0 +1,21 @@
+# Sample config for the Windows sandbox operation Skill fixture.
+# Copy these settings into CODEX_HOME/config.toml for manual operation tests.
+# Replace the placeholder paths with absolute paths on the test machine.
+
+sandbox_mode = "workspace-write"
+
+[windows]
+sandbox = "elevated"
+# false keeps the sandboxed child on Winsta0\Default, which is easier to
+# observe during manual operation tests. true is the Codex default and is
+# more isolated, but can make interactive approval/debugging harder.
+sandbox_private_desktop = false
+
+[sandbox_workspace_write]
+network_access = true
+writable_roots = [
+  "C:\\Users\\<user>\\AppData\\Local\\Temp",
+  "C:\\path\\to\\lilto\\test\\fixtures\\sandbox-bin",
+]
+exclude_tmpdir_env_var = false
+exclude_slash_tmp = false

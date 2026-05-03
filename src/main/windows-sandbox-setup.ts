@@ -76,6 +76,7 @@ export class WindowsSandboxSetupService {
       logger?: Logger;
       spawnImpl?: typeof spawn;
       platform?: NodeJS.Platform;
+      setupTimeoutMs?: number;
     }
   ) {
     this.logger = options.logger ?? createLogger("windows-sandbox-setup");
@@ -143,7 +144,7 @@ export class WindowsSandboxSetupService {
         "windowsSandbox/setupCompleted",
         {
           predicate: (params) => params.mode === mode,
-          timeoutMs: 120000
+          timeoutMs: this.options.setupTimeoutMs ?? 120000
         }
       );
 
