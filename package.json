@@ -13,7 +13,7 @@
     "start": "npm run build:native && npm run build && electron .",
     "dist": "npm run build:native && npm run build && electron-builder --publish never",
     "dist:mac": "npm run build:native && npm run build && electron-builder --mac dmg --publish never",
-    "dist:win": "npm run build:native && npm run build && set CSC_IDENTITY_AUTO_DISCOVERY=false&& set CSC_LINK=&& set WIN_CSC_LINK=&& electron-builder --win nsis --publish never",
+    "dist:win": "npm run build:native && npm run build && set CSC_IDENTITY_AUTO_DISCOVERY=false&& set CSC_LINK=&& set WIN_CSC_LINK=&& electron-builder --win nsis --publish never --config.win.signAndEditExecutable=false",
     "verify:dist": "node scripts/verify-dist-artifacts.js",
     "live-ui:manual": "node scripts/live-ui-manual-verification.js",
     "test": "npm run build && node --test",
