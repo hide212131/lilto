@@ -334,3 +334,9 @@
 | Change | Mistake/Context | Rule to repeat |
 |---|---|---|
 | Fixed folder-based Agent Skills installs so the skills CLI runs with the app-managed workspace directory instead of the packaged executable working directory. | Packaged Windows runs can have `process.cwd()` under AppData Local / install location, so omitting `projectRoot` made `.agents/skills` appear beside the binary instead of in the Roaming/settings-backed workspace. | Any IPC path that shells out to `skills` must pass the resolved `workspaceDir` explicitly. Do not let install/list/remove operations fall back to `process.cwd()` in packaged Electron. |
+
+## 2026-05-03 Windows userData Local path correction
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| Moved Lilt-o's Windows Electron `userData` root from Electron's default Roaming path to `%LOCALAPPDATA%\\Lilt-o`, and added a first-run copy from legacy Roaming directories when the new Local directory does not exist. | Electron's default Windows `userData` path follows Roaming and may use the package-name casing, while this app's install location and expected app-owned data both belong under Local with product casing. Changing only call sites that use `app.getPath("userData")` would miss services that already correctly share that root. | For Electron storage-root changes, set `app.setPath("userData", ...)` before any service reads `app.getPath("userData")`. Keep the root decision in one small module, preserve product-name casing explicitly, and include a non-destructive migration from legacy roots when existing user state may be present. |
