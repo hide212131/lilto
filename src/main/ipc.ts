@@ -405,7 +405,7 @@ export function registerAgentIpcHandlers({
     if (!p) return { ok: false, error: "payload が必須です" };
 
     if (typeof p.source === "string") {
-      const result = await installSkillFromSource({ source: p.source, userSkillsDir, homeDir, codexHomeDir });
+      const result = await installSkillFromSource({ source: p.source, projectRoot: workspaceDir, userSkillsDir, homeDir, codexHomeDir });
       if (result.ok) {
         refreshAgentSkills();
       }

@@ -13,6 +13,7 @@ const {
   uninstallUserSkill,
   ensureBundledSkills,
   setupSkillRuntime,
+  installSkillFromSource,
   resolveCodexHomeDir,
   resolveCliListedSkillPath,
   parseReleaseUrl,
@@ -347,6 +348,39 @@ test("setupSkillRuntime は projectRoot 未指定時のみ process.cwd() を使�
 });
 
 // ─── parseReleaseUrl ─────────────────────────────────────────────────────────
+
+test("installSkillFromSource uses the provided workspace directory for local installs", async () => {
+  const root = tempDir("skills-install-workspace");
+  const workspaceDir = path.join(root, "roaming-settings");
+  const localInstallDir = path.join(root, "local-install");
+  const sourceDir = path.join(root, "source-skill");
+  const codexHomeDir = path.join(root, "codex-home");
+  fs.mkdirSync(workspaceDir, { recursive: true });
+  fs.mkdirSync(localInstallDir, { recursive: true });
+  fs.mkdirSync(sourceDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(sourceDir, "SKILL.md"),
+    `---\nname: local-folder-skill\ndescription: Installed from a local folder\n---\n`
+  );
+
+  const previousCwd = process.cwd();
+  try {
+    process.chdir(localInstallDir);
+    const result = await installSkillFromSource({
+      source: sourceDir,
+      projectRoot: workspaceDir,
+      userSkillsDir: path.join(workspaceDir, ".agents", "skills"),
+      homeDir: workspaceDir,
+      codexHomeDir
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(fs.existsSync(path.join(workspaceDir, ".agents", "skills", "local-folder-skill", "SKILL.md")), true);
+    assert.equal(fs.existsSync(path.join(localInstallDir, ".agents", "skills", "local-folder-skill", "SKILL.md")), false);
+  } finally {
+    process.chdir(previousCwd);
+  }
+});
 
 test("parseReleaseUrl: GitHub releases/download URL は version と ref を返す", () => {
   const info = parseReleaseUrl("https://github.com/owner/repo/releases/download/v1.2.3/skill.zip");

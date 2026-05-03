@@ -328,3 +328,9 @@
 | Change | Mistake/Context | Rule to repeat |
 |---|---|---|
 | Restored task tray icon after making it face-only while tuning taskbar icon size. | The taskbar and task tray need different icon treatments: taskbar can use full-canvas opaque assets, but tray should preserve the original winged mascot silhouette. | Never reuse taskbar icon simplification for tray. Keep tray icons on the original silhouette unless the user explicitly asks for a simplified tray glyph. |
+
+## 2026-05-03 agent skills install path correction
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| Fixed folder-based Agent Skills installs so the skills CLI runs with the app-managed workspace directory instead of the packaged executable working directory. | Packaged Windows runs can have `process.cwd()` under AppData Local / install location, so omitting `projectRoot` made `.agents/skills` appear beside the binary instead of in the Roaming/settings-backed workspace. | Any IPC path that shells out to `skills` must pass the resolved `workspaceDir` explicitly. Do not let install/list/remove operations fall back to `process.cwd()` in packaged Electron. |

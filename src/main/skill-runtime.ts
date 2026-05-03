@@ -473,7 +473,7 @@ export function setupSkillRuntime(options: {
   settingsPaths?: string[];
   projectRoot?: string;
 }): SkillRuntimeSetup {
-  const homeDir = path.resolve(options.appDataDir);
+  const homeDir = path.resolve(options.homeDir ?? options.appDataDir);
   const codexHomeDir = resolveCodexHomeDir(options.appDataDir);
   cleanupLegacySandboxState({ appDataDir: options.appDataDir, codexHomeDir });
   const appSkillsDir = path.join(codexHomeDir, "skills");
