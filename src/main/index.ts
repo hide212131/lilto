@@ -223,10 +223,13 @@ if (hasSingleInstanceLock) {
     authService = new ClaudeAuthService({
       logger: createLogger("auth"),
       authPath: path.join(app.getPath("userData"), "auth-state.json"),
-      codexHome: skillRuntime.codexHomeDir
+      codexHome: skillRuntime.codexHomeDir,
+      homeDir: skillRuntime.homeDir,
+      fallbackCodexHome: skillRuntime.codexHomeDir
     });
     const modelCatalogService = new ModelCatalogService({
       logger: createLogger("models"),
+      homeDir: skillRuntime.homeDir,
       codexHomeDir: skillRuntime.codexHomeDir
     });
     const pluginService = new CodexPluginService({
@@ -237,6 +240,7 @@ if (hasSingleInstanceLock) {
     });
     const windowsSandboxSetupService = new WindowsSandboxSetupService({
       logger: createLogger("windows-sandbox-setup"),
+      homeDir: skillRuntime.homeDir,
       codexHomeDir: skillRuntime.codexHomeDir,
       workspaceDir: skillRuntime.workspaceDir
     });

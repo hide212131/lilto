@@ -70,6 +70,7 @@ export class WindowsSandboxSetupService {
   constructor(
     private readonly options: {
       codexHomeDir: string;
+      homeDir?: string;
       workspaceDir?: string;
       codexCommand?: string;
       logger?: Logger;
@@ -117,6 +118,7 @@ export class WindowsSandboxSetupService {
     }
 
     const client = new CodexAppServerClient({
+      homeDir: this.options.homeDir,
       codexHomeDir: this.options.codexHomeDir,
       codexCommand: this.options.codexCommand,
       logger: this.logger,

@@ -102,6 +102,7 @@ export class ModelCatalogService {
   constructor(
     private readonly options: {
       codexHomeDir: string;
+      homeDir?: string;
       codexCommand?: string;
       logger?: Logger;
       fetchImpl?: typeof fetch;
@@ -116,6 +117,7 @@ export class ModelCatalogService {
   async listOauthModels(_provider: OAuthProviderId, networkProxy: NetworkProxySettings): Promise<ModelCatalogResult> {
     const restoreProxyEnv = withScopedProxyEnvironment(networkProxy);
     const client = new CodexAppServerClient({
+      homeDir: this.options.homeDir,
       codexHomeDir: this.options.codexHomeDir,
       codexCommand: this.options.codexCommand,
       logger: this.logger,

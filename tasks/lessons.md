@@ -2,9 +2,16 @@
 
 ## 2026-05-03
 
+| Mistake/Context | Why it mattered | Rule to repeat |
+|---|---|---|
+| Answered the Agent Skills path as only canonical `~/.codex` paths, missing that the installed Windows app uses `app.getPath("userData")` under `%LOCALAPPDATA%\Lilt-o` as its packaged workspace/home base. | The user was asking about the installed app, where user-installed workspace skills resolve under the app's LocalAppData workspace, while Codex home/bundled system skills may still resolve through canonical `~/.codex` in current code. Mixing these contexts points debugging at the wrong directory. | For Lilt-o skill path questions, first distinguish dev repo, installed app `userData`, and Codex home. On Windows installed builds, check `%LOCALAPPDATA%\Lilt-o`, especially `.agents\skills`, before giving the final path, and mention legacy `codex\skills` only as legacy/current-state evidence. |
+| Treated `%LOCALAPPDATA%\Lilt-o\.agents\skills` as automatically recognized because it is the packaged workspace's `.agents` directory. | Codex's normal skill roots are `$CODEX_HOME/skills`, `$HOME/.agents/skills`, and `cwd/.codex/skills`; `cwd/.agents/skills` is not a normal root. The LocalAppData path only works if Lilt-o launches Codex with `HOME`/`USERPROFILE` set to `%LOCALAPPDATA%\Lilt-o`, or if the app-server request supplies it as an extra user root. | When debugging installed skill recognition, verify the actual environment passed to Codex. Do not infer recognition from `workspaceDir\.agents\skills`; confirm it is also `$HOME\.agents\skills` for the spawned Codex process, or move/install the skill under a root Codex natively scans. |
+
+## 2026-05-03
+
 | 変更内容 | ミス/課題 | 再発防止ルール |
 |---|---|---|
-| Windows の `dist:win` を署名なしユーザ権限でも通るように、electron-builder 実行直前で `CSC_IDENTITY_AUTO_DISCOVERY=false` に加えて `CSC_LINK` / `WIN_CSC_LINK` を空にした。 | `CSC_IDENTITY_AUTO_DISCOVERY=false` だけでは、環境に `CSC_LINK` 系が残るケースの署名入力を完全には潰せない。さらに electron-builder は署名スキップ時でも `signing with signtool.exe` を先に出すため、通常ログだけだと署名されたように見える。 | Windows の署名なし配布を作るときは `CSC_IDENTITY_AUTO_DISCOVERY=false` と `CSC_LINK=` / `WIN_CSC_LINK=` を同じコマンド内で明示し、検証時は `DEBUG=electron-builder` で `no signing info identified, signing is skipped` まで確認する。 |
+| Windows の `dist:win` を署名なしユーザ権限でも通るように、electron-builder 実行時へ `--config.win.signAndEditExecutable=false` を追加し、直前で `CSC_IDENTITY_AUTO_DISCOVERY=false` / `CSC_LINK=` / `WIN_CSC_LINK=` も明示した。 | `CSC_*` を潰すだけでは electron-builder の Windows exe リソース編集・署名経路そのものは止まらない。署名なしユーザ権限で確実に通すには `signAndEditExecutable=false` で unpacked exe 側の rcedit/sign 処理を避ける必要がある。 | Windows の署名なし配布を作るときは `--config.win.signAndEditExecutable=false` を主指定にし、同じコマンド内で `CSC_IDENTITY_AUTO_DISCOVERY=false` と `CSC_LINK=` / `WIN_CSC_LINK=` も明示する。検証時は `DEBUG=electron-builder` の effective config と署名スキップログを確認する。 |
 | `tasks/lessons.md` への追記を末尾かつ CP932 で行ってしまい、ユーザーから UTF-8 統一と先頭追記の指摘を受けた。 | `apply_patch` が invalid UTF-8 で失敗した時点で、ファイル全体を UTF-8 へ正規化する前に、PowerShell のローカルエンコーディング追記へ逃げた。さらに最新の学びを探しやすくする配置ルールも守れていなかった。 | `tasks/lessons.md` は UTF-8 に統一し、新しい学びは `# Lessons` 直下の先頭に追記する。エンコーディング異常を見つけたら、まず UTF-8 として修復・検証してから編集する。 |
 
 ## 2026-05-03

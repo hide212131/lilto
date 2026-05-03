@@ -26,7 +26,6 @@ export type SkillRuntimeSetup = {
 };
 
 const BUNDLED_SKILL_NAMES = ["agent-browser", "skill-creator"] as const;
-const DEFAULT_CODEX_HOME_DIR = path.join(os.homedir(), ".codex");
 const SKILLS_CLI_AGENT = "codex";
 const ANSI_ESCAPE_REGEX = /\x1B\[[0-9;]*m/g;
 const SKILL_INSTALL_TIMEOUT_MS = 60_000;
@@ -366,8 +365,7 @@ function discoverUserSkillMetadata(options: {
 }
 
 export function resolveCodexHomeDir(appDataDir: string): string {
-  void appDataDir;
-  return process.env.CODEX_HOME || DEFAULT_CODEX_HOME_DIR;
+  return process.env.CODEX_HOME || path.join(appDataDir, "codex");
 }
 
 function resolveLegacyAppCodexHomeDir(appDataDir: string): string {
