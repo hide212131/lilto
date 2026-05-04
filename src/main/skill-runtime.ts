@@ -1294,7 +1294,9 @@ export async function checkSkillUpdates(options: { userSkillsDir: string; bundle
         const currentSourceMtime = resolveSkillSourceMtime(record, entry.name);
         if (currentSourceMtime !== null) {
           latestVersion = resolveSkillSourceVersion(record, entry.name);
-          updateAvailable = currentSourceMtime !== record.sourceSkillMtime;
+          updateAvailable =
+            (latestVersion !== null && installedVersion !== null && latestVersion !== installedVersion) ||
+            currentSourceMtime !== record.sourceSkillMtime;
           updateCheckMethod = "local-skill-mtime";
         }
       }

@@ -268,11 +268,22 @@ function getProxyValue(upper: string, lower: string): string {
   return process.env[upper]?.trim() || process.env[lower]?.trim() || "";
 }
 
+const INITIAL_PROXY_ENVIRONMENT = {
+  httpProxy: getProxyValue("HTTP_PROXY", "http_proxy"),
+  httpsProxy: getProxyValue("HTTPS_PROXY", "https_proxy"),
+  noProxy: getProxyValue("NO_PROXY", "no_proxy")
+};
+
 function getProxyEnvironmentValues(): { httpProxy: string; httpsProxy: string; noProxy: string } {
-  return {
+  const current = {
     httpProxy: getProxyValue("HTTP_PROXY", "http_proxy"),
     httpsProxy: getProxyValue("HTTPS_PROXY", "https_proxy"),
     noProxy: getProxyValue("NO_PROXY", "no_proxy")
+  };
+  return {
+    httpProxy: current.httpProxy || INITIAL_PROXY_ENVIRONMENT.httpProxy,
+    httpsProxy: current.httpsProxy || INITIAL_PROXY_ENVIRONMENT.httpsProxy,
+    noProxy: current.noProxy || INITIAL_PROXY_ENVIRONMENT.noProxy
   };
 }
 

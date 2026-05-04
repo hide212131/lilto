@@ -243,6 +243,19 @@ async function waitForCustomSaveStatus(page, expectedText, timeoutMs = 5000) {
   );
 }
 
+async function waitForProxySetting(page, expectedUseProxy, timeoutMs = 5000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const useProxy = await page.evaluate(async () => {
+      const settings = await window.lilto.getProviderSettings();
+      return Boolean(settings.networkProxy?.useProxy);
+    });
+    if (useProxy === expectedUseProxy) return;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`Timed out waiting for useProxy=${expectedUseProxy}`);
+}
+
 async function waitForResponse(page, expectedText, timeoutMs = 15000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -272,7 +285,7 @@ async function waitForDictationStatusClear(page, timeoutMs = 5000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     const text = await getDictationStatusText(page);
-    if (!text || text === "No speech detected") return;
+    if (!text || text.includes("No speech detected") || text.includes("No speech could be recognized")) return;
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
   throw new Error(`Timed out waiting for dictation status clear. Last: "${await getDictationStatusText(page)}"`);
@@ -368,6 +381,7 @@ async function main() {
     await setSettingsCheckboxValue(page, "use-proxy", false);
     await clickSaveProviderSettingsButton(page);
     await waitForCustomSaveStatus(page, "設定を保存しました。");
+    await waitForProxySetting(page, false);
     console.log("✓ Custom Provider saved with proxy usage disabled");
 
     await clickSettingsClose(page);
@@ -391,7 +405,7 @@ async function main() {
     console.log("✓ New session button enable/disable state toggles with isSending");
 
     await holdComposerDictation(page);
-    await waitForDictationStatus(page, ["音声入力中...", "録音中..."]);
+    await waitForDictationStatus(page, ["音声入力中...", "録音中...", "Listening..."]);
     await releaseComposerDictation(page);
     await waitForDictationStatusClear(page);
     console.log("✓ Dictation button toggles active status only while pressed");
@@ -409,9 +423,12 @@ async function main() {
     await setSettingsCheckboxValue(page, "use-proxy", true);
     await clickSaveProviderSettingsButton(page);
     await waitForCustomSaveStatus(page, "設定を保存しました。");
+    await waitForProxySetting(page, true);
     await clickSettingsClose(page);
     await waitForModalClose(page);
     await waitForSendEnabled(page);
+    await clickNewSessionButton(page);
+    await new Promise((resolve) => setTimeout(resolve, 300));
     console.log("✓ Proxy usage enabled");
 
     const secondMessage = "E2E proxy check with proxy";

@@ -1,5 +1,17 @@
 # Lessons
 
+## 2026-05-04 Agent Skills startup update detection
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| Updated the Agent Skills update-check proposal so update detection runs automatically right after app startup, with the manual button kept as a retry/recheck action. | Only moving the button still leaves update discovery dependent on user action, which misses the expected startup signal. | For settings-side update checks, distinguish "discovery timing" from "manual recheck UI": run discovery automatically when the app initializes, keep the button as a non-blocking retry, and never block app startup on update checks. |
+
+## 2026-05-04 Agent Skills update check proposal
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| Proposed moving Agent Skills "check updates" into the installed skills header next to refresh, and formalized local folder update detection via source `SKILL.md` version/mtime. | Treating update check as a separate explained section makes the settings UI heavier than requested; treating URL and folder installs the same misses local source changes after copy into `CODEX_HOME/skills`. | For Agent Skills settings, keep update actions close to the installed skills list with no extra explanatory copy unless requested. For folder-installed skills, persist and compare the source `SKILL.md` path, version, and mtime instead of only inspecting the copied installed file. |
+
 ## 2026-05-04 skill storage root correction
 
 | Change | Mistake/Context | Rule to repeat |
@@ -381,4 +393,12 @@
 | Change | Mistake/Context | Rule to repeat |
 |---|---|---|
 | Changed Windows app/installer icons back to transparent background while leaving Mac runtime icon behavior unchanged. | Windows taskbar/installer icon requirements can differ from macOS Dock expectations; forcing white backgrounds into Windows .ico assets was not desired. | Keep Windows .ico and BrowserWindow icons transparent unless explicitly requested otherwise. Preserve macOS icon behavior separately, and do not use one platform icon treatment as a blanket rule for all packages. |
+
+## 2026-05-04 agent skills update check correction
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| Moved the Agent Skills update check button next to the installed-skills refresh button, added startup update detection, and taught folder-sourced skills to detect version changes as well as `SKILL.md` mtime changes. | The original UI separated update checks into a described section, and local-folder updates could be missed when file mtime did not move but the skill version changed. | For Agent Skills update checks, keep manual recheck in the installed-skills toolbar, run a non-blocking check on settings startup, and compare local-source version before falling back to mtime. |
+| Moved Agent Skills update results above the installed-skills list after user correction. | Showing the result below a long skills table makes the feedback feel hidden even when the button itself is in the right toolbar. | Render update-check status and result rows immediately under the installed-skills toolbar, before the installed skills table. |
+| Stabilized Electron E2E around proxy-enabled sends after model-list requests temporarily changed proxy environment variables. | Concurrent UI requests that scoped `process.env` could erase proxy variables while the agent precheck was reading them, making a saved `useProxy=true` setting behave like direct network access. | When code scopes proxy environment variables, read proxy source values from a stable baseline plus current env fallback. GUI E2E should wait for persisted proxy settings before sending and then verify the proxy-required path both off and on. |
 

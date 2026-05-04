@@ -110,6 +110,7 @@ export class LiltSettingsModal extends LitElement {
   @state() private _skillUpdates: SkillUpdateInfo[] = [];
   @state() private _skillUpdatesChecking = false;
   @state() private _skillUpdatesChecked = false;
+  @state() private _skillUpdateStatus = "";
   @state() private _schedules: SchedulerScheduleSummary[] = [];
   @state() private _schedulesLoading = false;
   @state() private _scheduleStatus = "";
@@ -126,6 +127,7 @@ export class LiltSettingsModal extends LitElement {
   private readonly _isMac = window.lilto.getPlatform() === "darwin";
   private readonly _isWindows = window.lilto.getPlatform() === "win32";
   private _preserveWindowsSandboxStatusOnce = false;
+  private _startupSkillUpdateCheckStarted = false;
 
   private _boundKeydown = (e: KeyboardEvent) => {
     if (e.key === "Escape" && this.open) this._close();
@@ -134,6 +136,10 @@ export class LiltSettingsModal extends LitElement {
   connectedCallback() {
     super.connectedCallback();
     document.addEventListener("keydown", this._boundKeydown);
+    if (!this._startupSkillUpdateCheckStarted) {
+      this._startupSkillUpdateCheckStarted = true;
+      void this._checkUpdates({ automatic: true });
+    }
   }
 
   disconnectedCallback() {
@@ -481,6 +487,7 @@ export class LiltSettingsModal extends LitElement {
       border-bottom: 2px solid #e5e7eb;
       font-weight: 600;
       color: #374151;
+      white-space: nowrap;
     }
     .skills-table td {
       padding: 8px;
@@ -493,6 +500,7 @@ export class LiltSettingsModal extends LitElement {
       border-radius: 999px;
       font-size: 12px;
       font-weight: 600;
+      white-space: nowrap;
     }
     .skill-badge.bundled {
       background: #e5e7eb;
@@ -525,6 +533,37 @@ export class LiltSettingsModal extends LitElement {
       font-size: 11px;
       color: #6b7280;
       word-break: break-all;
+    }
+    .installed-skills-table {
+      table-layout: fixed;
+    }
+    .installed-skills-table th,
+    .installed-skills-table td {
+      overflow-wrap: anywhere;
+    }
+    .installed-skills-table th:nth-child(1),
+    .installed-skills-table td:nth-child(1) {
+      width: 13%;
+    }
+    .installed-skills-table th:nth-child(2),
+    .installed-skills-table td:nth-child(2) {
+      width: 12%;
+    }
+    .installed-skills-table th:nth-child(3),
+    .installed-skills-table td:nth-child(3) {
+      width: 40%;
+    }
+    .installed-skills-table th:nth-child(4),
+    .installed-skills-table td:nth-child(4) {
+      width: 11%;
+    }
+    .installed-skills-table th:nth-child(5),
+    .installed-skills-table td:nth-child(5) {
+      width: 17%;
+    }
+    .installed-skills-table th:nth-child(6),
+    .installed-skills-table td:nth-child(6) {
+      width: 7%;
     }
     .btn-danger {
       background: #fee2e2;
@@ -938,7 +977,7 @@ export class LiltSettingsModal extends LitElement {
     return html`
       <h3>Agent Skills</h3>
       <p>スキルをインストール・管理します。変更は次回の送信から反映されます。</p>
-      <p><a href="https://skills.sh" @click=${this._openSkillsDirectory}>https://skills.sh</a> から公開スキルを探せます。</p>
+      <p><a href="https://skills.sh" @click=${this._openSkillsDirectory}>https://skills.sh</a></p>
 
       <section class="provider-section">
         <h4>スキルのインストール</h4>
@@ -970,13 +1009,53 @@ export class LiltSettingsModal extends LitElement {
           <button style="margin-left: 10px; font-size: 13px; padding: 4px 10px;" @click=${this._loadSkills} .disabled=${this._skillsLoading}>
             ${this._skillsLoading ? "読み込み中..." : "更新"}
           </button>
+          <button style="margin-left: 8px; font-size: 13px; padding: 4px 10px;" @click=${() => this._checkUpdates()} .disabled=${this._skillUpdatesChecking}>
+            ${this._skillUpdatesChecking ? "確認中..." : html`&#12450;&#12483;&#12503;&#12487;&#12540;&#12488;&#12434;&#30906;&#35469;`}
+          </button>
         </h4>
+        ${this._skillUpdateStatus ? html`<p class="status">${this._skillUpdateStatus}</p>` : ""}
+        ${this._skillUpdatesChecked
+          ? this._skillUpdates.length === 0
+            ? html`<p class="status">更新はありません。</p>`
+            : html`
+              <table class="skills-table">
+                <thead>
+                  <tr>
+                    <th>スキル</th>
+                    <th>インストール済み</th>
+                    <th>最新</th>
+                    <th>状態</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${this._skillUpdates.map((u) => html`
+                    <tr>
+                      <td><strong>${u.skillName}</strong></td>
+                      <td>${u.installedVersion ?? "unknown"}</td>
+                      <td>${u.latestVersion ?? "unavailable"}</td>
+                      <td>
+                        ${u.updateAvailable
+                          ? html`<span class="skill-badge user">更新あり</span>`
+                          : html`<span class="skill-badge bundled">最新</span>`}
+                      </td>
+                      <td>
+                        ${u.updateAvailable
+                          ? html`<button @click=${() => this._updateSkill(u.sourceUrl)}>アップデート</button>`
+                          : ""}
+                      </td>
+                    </tr>
+                  `)}
+                </tbody>
+              </table>
+            `
+          : ""}
         ${this._skillsLoading
           ? html`<p class="status">読み込み中...</p>`
           : this._skills.length === 0
             ? html`<p class="status">スキルが見つかりません。</p>`
             : html`
-              <table class="skills-table">
+              <table class="skills-table installed-skills-table">
                 <thead>
                   <tr>
                     <th>名前</th>
@@ -1002,64 +1081,17 @@ export class LiltSettingsModal extends LitElement {
                       <td>
                         ${skill.source === "user"
                           ? html`<button class="btn-danger" @click=${() => this._uninstallSkill(skill.filePath, skill.name)}>削除</button>`
-                          : html`<span class="status">—</span>`}
+                          : html`<span class="status">-</span>`}
                       </td>
                     </tr>
                   `)}
                 </tbody>
               </table>
             `}
-              ${this._skillListStatus ? html`<p class="status">${this._skillListStatus}</p>` : ""}
-      </section>
-
-      <section class="provider-section" style="margin-top: 12px;">
-        <h4>
-          アップデート確認
-          <button style="margin-left: 10px; font-size: 13px; padding: 4px 10px;" @click=${this._checkUpdates} .disabled=${this._skillUpdatesChecking}>
-            ${this._skillUpdatesChecking ? "確認中..." : "アップデートを確認"}
-          </button>
-        </h4>
-        <p>GitHub / GitLab のリリースからインストールしたスキルの最新バージョンを確認します。</p>
-        ${this._skillUpdatesChecked
-          ? this._skillUpdates.length === 0
-            ? html`<p class="status">アップデートが必要なスキルはありません。</p>`
-            : html`
-              <table class="skills-table">
-                <thead>
-                  <tr>
-                    <th>スキル名</th>
-                    <th>インストール済み</th>
-                    <th>最新</th>
-                    <th>状態</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${this._skillUpdates.map((u) => html`
-                    <tr>
-                      <td><strong>${u.skillName}</strong></td>
-                      <td>${u.installedVersion ?? "不明"}</td>
-                      <td>${u.latestVersion ?? "取得失敗"}</td>
-                      <td>
-                        ${u.updateAvailable
-                          ? html`<span class="skill-badge user">更新あり</span>`
-                          : html`<span class="skill-badge bundled">最新</span>`}
-                      </td>
-                      <td>
-                        ${u.updateAvailable
-                          ? html`<button @click=${() => this._updateSkill(u.sourceUrl)}>更新</button>`
-                          : ""}
-                      </td>
-                    </tr>
-                  `)}
-                </tbody>
-              </table>
-            `
-          : ""}
+        ${this._skillListStatus ? html`<p class="status">${this._skillListStatus}</p>` : ""}
       </section>
     `;
   }
-
   private _renderPlugins() {
     return html`
       <h3>Plugins</h3>
@@ -1626,12 +1658,21 @@ export class LiltSettingsModal extends LitElement {
     }
   }
 
-  private async _checkUpdates() {
+  private async _checkUpdates(options: { automatic?: boolean } = {}) {
+    if (this._skillUpdatesChecking) {
+      return;
+    }
     this._skillUpdatesChecking = true;
     this._skillUpdatesChecked = false;
+    this._skillUpdateStatus = options.automatic ? "" : "";
     try {
       this._skillUpdates = (await window.lilto.checkSkillUpdates()).filter((item) => item.updateAvailable);
       this._skillUpdatesChecked = true;
+      this._skillUpdateStatus = "";
+    } catch (error) {
+      this._skillUpdates = [];
+      this._skillUpdatesChecked = true;
+      this._skillUpdateStatus = `更新確認エラー: ${error instanceof Error ? error.message : String(error)}`;
     } finally {
       this._skillUpdatesChecking = false;
     }

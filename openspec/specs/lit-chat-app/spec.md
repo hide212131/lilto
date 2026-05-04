@@ -146,3 +146,37 @@ TBD - created by archiving change migrate-ui-to-lit. Update Purpose after archiv
 - **WHEN** ユーザーが `Plugins` タブで plugin の削除を完了する
 - **THEN** `lilt-settings-modal` はモーダルを閉じずに一覧と状態文言を更新する
 
+### Requirement: Agent Skills 更新確認ボタンの配置
+`<lilt-settings-modal>` は `Agent Skills` タブの「アップデートを確認」操作を「インストール済みスキル」見出しの更新ボタン右隣に表示しなければならない（MUST）。この操作のための独立した説明文または補足セクションを表示してはならない（MUST NOT）。
+
+#### Scenario: 更新確認ボタンがインストール済みスキル見出しに表示される
+- **WHEN** ユーザーが Settings モーダルの `Agent Skills` タブを開く
+- **THEN** 「インストール済みスキル」見出しの更新ボタン右隣に「アップデートを確認」ボタンが表示される
+
+#### Scenario: 更新確認説明を表示しない
+- **WHEN** ユーザーが Settings モーダルの `Agent Skills` タブを開く
+- **THEN** 「アップデートを確認」の説明文や、更新確認専用の説明セクションは表示されない
+
+#### Scenario: 更新確認結果はインストール済みスキル管理内に表示される
+- **WHEN** ユーザーが「アップデートを確認」ボタンを押して更新確認が完了する
+- **THEN** 更新候補または更新不要の状態は「インストール済みスキル」管理の文脈内に表示される
+
+### Requirement: Agent Skills 更新の起動時自動検出
+アプリは起動直後に Agent Skills の更新確認を自動実行しなければならない（MUST）。この自動検出はアプリ起動や主要 UI 操作をブロックしてはならず（MUST NOT）、ユーザーは自動検出後も手動で再確認できなければならない（MUST）。
+
+#### Scenario: 起動直後に更新確認が自動実行される
+- **WHEN** アプリが起動し renderer の初期化が完了する
+- **THEN** ユーザーが「アップデートを確認」ボタンを押さなくても Agent Skills の更新確認が開始される
+
+#### Scenario: 自動検出結果が Agent Skills タブに反映される
+- **WHEN** 起動直後の Agent Skills 更新確認が完了する
+- **THEN** `Agent Skills` タブを開いたとき、更新候補または更新不要の状態が表示される
+
+#### Scenario: 自動検出は起動をブロックしない
+- **WHEN** 起動直後の Agent Skills 更新確認に時間がかかる
+- **THEN** アプリの起動と通常の UI 操作は更新確認の完了を待たずに利用できる
+
+#### Scenario: 手動再確認ができる
+- **WHEN** 起動直後の Agent Skills 更新確認が完了済みである
+- **THEN** ユーザーは「アップデートを確認」ボタンを押して更新確認を再実行できる
+

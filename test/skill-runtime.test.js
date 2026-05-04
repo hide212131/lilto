@@ -1105,3 +1105,48 @@ test("checkSkillUpdates includes bundled skills when source metadata exists", as
     fetchMock.mock.restore();
   }
 });
+test("checkSkillUpdates detects local source version changes even when mtime is unchanged", async () => {
+  const root = tempDir("update-check-local-version");
+  const localSourceDir = tempDir("local-source-version");
+  const sourceSkillDir = path.join(localSourceDir, "local-skill");
+  const sourceSkillPath = path.join(sourceSkillDir, "SKILL.md");
+  fs.mkdirSync(sourceSkillDir, { recursive: true });
+  fs.writeFileSync(sourceSkillPath, `---\nname: local-skill\ndescription: local source\nmetadata:\n  version: "2.0.0"\n---\n`);
+  const sourceMtime = fs.statSync(sourceSkillPath).mtimeMs;
+
+  makeSkillDir(root, "local-skill", {
+    url: localSourceDir,
+    installedAt: Date.now(),
+    installedVersion: "1.0.0",
+    sourceSkillPath,
+    sourceSkillMtime: sourceMtime
+  });
+  fs.writeFileSync(
+    path.join(root, "local-skill", "SKILL.md"),
+    `---\nname: local-skill\ndescription: installed local skill\nmetadata:\n  version: "1.0.0"\n---\n`
+  );
+
+  const results = await checkSkillUpdates({ userSkillsDir: root });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].updateAvailable, true);
+  assert.equal(results[0].updateCheckMethod, "local-skill-mtime");
+  assert.equal(results[0].installedVersion, "1.0.0");
+  assert.equal(results[0].latestVersion, "2.0.0");
+});
+
+test("checkSkillUpdates continues when a local source SKILL.md is missing", async () => {
+  const root = tempDir("update-check-local-missing");
+  const missingSourcePath = path.join(root, "missing-source", "SKILL.md");
+  makeSkillDir(root, "local-skill", {
+    url: path.dirname(missingSourcePath),
+    installedAt: Date.now(),
+    installedVersion: "1.0.0",
+    sourceSkillPath: missingSourcePath,
+    sourceSkillMtime: Date.now()
+  });
+
+  const results = await checkSkillUpdates({ userSkillsDir: root });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].updateAvailable, false);
+  assert.equal(results[0].updateCheckMethod, "none");
+});
