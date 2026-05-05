@@ -6,6 +6,7 @@ const path = require("node:path");
 
 const {
   resolveAppRoot,
+  resolveCronMcpServerPath,
   resolvePackagedCodexBinary,
   resolveNativeHelperPath,
   resolvePreloadPath,
@@ -18,6 +19,23 @@ test("resolvePreloadPath and resolveRendererIndexPath use the packaged app root"
   assert.equal(resolveAppRoot({ appRoot }), resolvedAppRoot);
   assert.equal(resolvePreloadPath({ appRoot }), path.join(resolvedAppRoot, "dist", "preload.js"));
   assert.equal(resolveRendererIndexPath({ appRoot }), path.join(resolvedAppRoot, "dist", "renderer", "index.html"));
+});
+
+test("resolveCronMcpServerPath prefers app.asar.unpacked in packaged apps", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lilto-app-paths-"));
+  const appRoot = path.join(tempRoot, "resources", "app.asar");
+  const unpackedScript = path.join(tempRoot, "resources", "app.asar.unpacked", "dist", "main", "cron-mcp-server.js");
+  fs.mkdirSync(path.dirname(unpackedScript), { recursive: true });
+  fs.writeFileSync(unpackedScript, "console.log('cron');");
+
+  assert.equal(resolveCronMcpServerPath({ appRoot }), unpackedScript);
+});
+
+test("resolveCronMcpServerPath falls back to app.asar when no unpacked copy exists", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lilto-app-paths-"));
+  const appRoot = path.join(tempRoot, "resources", "app.asar");
+
+  assert.equal(resolveCronMcpServerPath({ appRoot }), path.join(appRoot, "dist", "main", "cron-mcp-server.js"));
 });
 
 test("resolveNativeHelperPath prefers development output when it exists", () => {

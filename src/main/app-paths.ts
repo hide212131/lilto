@@ -71,7 +71,17 @@ export function resolveRendererIndexPath(options: AppPathOptions = {}): string {
 }
 
 export function resolveCronMcpServerPath(options: AppPathOptions = {}): string {
-  return path.join(resolveAppRoot(options), "dist", "main", "cron-mcp-server.js");
+  const appRoot = resolveAppRoot(options);
+  const asarUnpackedRoot = appRoot.endsWith(".asar") ? appRoot.replace(/\.asar$/, ".asar.unpacked") : null;
+  const packagedCandidate = asarUnpackedRoot
+    ? path.join(asarUnpackedRoot, "dist", "main", "cron-mcp-server.js")
+    : null;
+
+  if (packagedCandidate && fs.existsSync(packagedCandidate)) {
+    return packagedCandidate;
+  }
+
+  return path.join(appRoot, "dist", "main", "cron-mcp-server.js");
 }
 
 export function resolveMascotPngPath(options: AppPathOptions = {}): string | null {

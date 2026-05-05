@@ -1,5 +1,11 @@
 # Lessons
 
+## 2026-05-05 cron MCP packaged path
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| Fixed packaged cron MCP startup by unpacking `dist/main/cron-mcp-server.js` and resolving `app.asar.unpacked` first. | Spawning `process.execPath` with a JS entrypoint inside `app.asar` can work differently across machines and Electron packaging layouts; assuming an asar path is always executable made the packaged cron tool fragile. | When Electron spawns Node-mode helper scripts from the packaged app, explicitly unpack the script and make path resolution prefer `app.asar.unpacked`, with a regression test that covers the packaged path. |
+
 ## 2026-05-05 Electron と shell の環境差分 proposal
 
 | Change | Mistake/Context | Rule to repeat |

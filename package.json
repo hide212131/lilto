@@ -26,6 +26,9 @@
     "productName": "Lilt-o",
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "asar": true,
+    "asarUnpack": [
+      "dist/main/cron-mcp-server.js"
+    ],
     "directories": {
       "output": "release",
       "buildResources": "build"
