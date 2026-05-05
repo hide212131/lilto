@@ -1,5 +1,11 @@
 # Lessons
 
+## 2026-05-05 Electron と shell の環境差分 proposal
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| OpenSpec change `normalize-electron-codex-environment` を作成し、Electron 起動時の `process.env` をそのまま `new Codex({ env })` に流すのではなく、Windows の persistent environment 補完と app-managed override を分離する方針を整理した。 | 「Electron から見える env をそのまま shell 相当」と見なすと、Explorer 起動と対話 shell 起動の `PATH` 差分や stale env を見落としやすい。一方で shell profile 実行で完全再現しようとすると、副作用と任意コード実行を設計へ持ち込む。 | Electron と shell の環境差分を扱う変更では、「現在プロセスの env」「persistent User/Machine env」「app-managed override」を別レイヤとして設計する。shell profile の完全再現を前提にせず、まず `PATH` と標準変数の安全な補完と最終 override の優先順を固定する。 |
+
 ## 2026-05-04 Agent Skills startup update detection
 
 | Change | Mistake/Context | Rule to repeat |

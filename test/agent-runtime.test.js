@@ -2,7 +2,13 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const http = require("node:http");
 
-const { AgentRuntime, buildCodexSdkEnvironmentForTest } = require("../dist/main/agent-sdk.js");
+const { AgentRuntime, createCodexThreadFromSdk } = require("../dist/main/agent-sdk.js");
+const {
+  mergePathValues,
+  mergeWindowsEnvironment,
+  resolveCodexProcessEnvironment,
+  resetWindowsPersistentEnvironmentCacheForTest
+} = require("../dist/main/codex-environment.js");
 
 function createProviderSettings(overrides = {}) {
   return {
@@ -42,14 +48,17 @@ function createAuthService(phase = "authenticated") {
   };
 }
 
-test("Codex SDK env keeps HOME and USERPROFILE while setting CODEX_HOME", { concurrency: false }, () => {
+test("Codex SDK env keeps HOME and USERPROFILE while setting CODEX_HOME", { concurrency: false }, async () => {
   const previousHome = process.env.HOME;
   const previousUserProfile = process.env.USERPROFILE;
   process.env.HOME = "/users/real-home";
   process.env.USERPROFILE = "C:\\Users\\Real";
   try {
-    const env = buildCodexSdkEnvironmentForTest({
-      codexHomeDir: "C:\\Users\\hide\\AppData\\Local\\Lilt-o\\codex"
+    const env = await resolveCodexProcessEnvironment({
+      platform: "win32",
+      processEnv: process.env,
+      codexHomeDir: "C:\\Users\\hide\\AppData\\Local\\Lilt-o\\codex",
+      readWindowsPersistentEnvironment: async () => ({})
     });
 
     assert.equal(env.HOME, "/users/real-home");
@@ -67,6 +76,98 @@ test("Codex SDK env keeps HOME and USERPROFILE while setting CODEX_HOME", { conc
       process.env.USERPROFILE = previousUserProfile;
     }
   }
+});
+
+test("Windows env merge keeps current PATH first and appends only missing persistent entries", () => {
+  const merged = mergeWindowsEnvironment(
+    {
+      PATH: "C:\\app\\bin;C:\\Windows\\System32",
+      TEMP: "C:\\app\\temp"
+    },
+    {
+      Path: "C:\\Users\\hide\\bin;C:\\Windows\\System32",
+      PATHEXT: ".EXE;.CMD",
+      ComSpec: "C:\\Windows\\System32\\cmd.exe"
+    }
+  );
+
+  assert.equal(merged.PATH, "C:\\app\\bin;C:\\Windows\\System32;C:\\Users\\hide\\bin");
+  assert.equal(merged.TEMP, "C:\\app\\temp");
+  assert.equal(merged.PATHEXT, ".EXE;.CMD");
+  assert.equal(merged.ComSpec, "C:\\Windows\\System32\\cmd.exe");
+});
+
+test("mergePathValues removes duplicate Windows PATH entries case-insensitively", () => {
+  assert.equal(
+    mergePathValues("C:\\Tools;C:\\Windows\\System32", "c:\\tools;C:\\Users\\hide\\bin", "win32"),
+    "C:\\Tools;C:\\Windows\\System32;C:\\Users\\hide\\bin"
+  );
+});
+
+test("Windows persistent env lookup failure falls back to process env", { concurrency: false }, async () => {
+  resetWindowsPersistentEnvironmentCacheForTest();
+  const errors = [];
+  const env = await resolveCodexProcessEnvironment({
+    platform: "win32",
+    processEnv: {
+      HOME: "/users/real-home",
+      PATH: "C:\\app\\bin"
+    },
+    codexHomeDir: "C:\\Users\\hide\\AppData\\Local\\Lilt-o\\codex",
+    appendPathEntries: ["C:\\Windows\\System32\\WindowsPowerShell\\v1.0"],
+    readWindowsPersistentEnvironment: async () => {
+      throw new Error("registry unavailable");
+    },
+    logger: {
+      error(eventName, payload) {
+        errors.push({ eventName, payload });
+      }
+    }
+  });
+
+  assert.equal(env.HOME, "/users/real-home");
+  assert.equal(env.CODEX_HOME, "C:\\Users\\hide\\AppData\\Local\\Lilt-o\\codex");
+  assert.equal(env.PATH, "C:\\app\\bin;C:\\Windows\\System32\\WindowsPowerShell\\v1.0");
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].eventName, "codex_env_windows_fallback");
+});
+
+test("createCodexThreadFromSdk passes normalized env into new Codex", async () => {
+  const captured = { env: null, startOptions: null };
+  await createCodexThreadFromSdk(
+    {
+      apiKey: "sk-test",
+      model: { id: "gpt-5.3-codex", baseUrl: "https://example.com/v1" },
+      cwd: "C:\\workspace",
+      codexHomeDir: "C:\\Users\\hide\\AppData\\Local\\Lilt-o\\codex"
+    },
+    {
+      resolveEnvironment: async () => ({
+        PATH: "C:\\normalized\\bin",
+        CODEX_HOME: "C:\\Users\\hide\\AppData\\Local\\Lilt-o\\codex",
+        CUSTOM_FLAG: "1"
+      }),
+      createCodex: (options) => {
+        captured.env = options.env;
+        return {
+          startThread(threadOptions) {
+            captured.startOptions = threadOptions;
+            return { id: null };
+          },
+          resumeThread() {
+            throw new Error("should not resume");
+          }
+        };
+      }
+    }
+  );
+
+  assert.deepEqual(captured.env, {
+    PATH: "C:\\normalized\\bin",
+    CODEX_HOME: "C:\\Users\\hide\\AppData\\Local\\Lilt-o\\codex",
+    CUSTOM_FLAG: "1"
+  });
+  assert.equal(captured.startOptions.workingDirectory, "C:\\workspace");
 });
 
 test("ChatGPT 認証済みなら Codex thread event を text_delta と session_bound に正規化する", async () => {

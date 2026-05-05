@@ -5,6 +5,7 @@ import type { ClaudeAuthService } from "./auth-service";
 import type { ProviderSettings } from "./provider-settings";
 import { isCustomProviderReady } from "./provider-settings";
 import type { SchedulerBridgeServer } from "./scheduler-bridge";
+import { resolveCodexProcessEnvironment, WINDOWS_POWERSHELL_PATHS } from "./codex-environment";
 import { resolveCronMcpServerPath, resolvePackagedCodexBinary } from "./app-paths";
 import type { AgentLoopEvent } from "../shared/agent-loop";
 
@@ -419,33 +420,6 @@ function withScopedProxyEnvironment(settings: ProviderSettings): () => void {
   };
 }
 
-const WINDOWS_POWERSHELL_PATHS = [
-  "C:\\Program Files\\PowerShell\\7",
-  "C:\\Windows\\System32\\WindowsPowerShell\\v1.0"
-];
-
-function buildCodexSdkEnvironment(options: {
-  codexHomeDir?: string;
-}): Record<string, string> {
-  // Codex SDK に env を渡すと process.env は自動的に引き継がれないため、
-  // ここで process.env を明示的にコピーする。undefined 値はフィルタして文字列のみにする。
-  const env: Record<string, string> = Object.fromEntries(
-    Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)
-  );
-  if (options.codexHomeDir) {
-    env.CODEX_HOME = options.codexHomeDir;
-  }
-  if (process.platform === "win32") {
-    const pathSep = ";";
-    const existing = (env.PATH ?? "").split(pathSep).filter(Boolean);
-    const toAdd = WINDOWS_POWERSHELL_PATHS.filter((p) => !existing.includes(p));
-    if (toAdd.length > 0) {
-      env.PATH = [...existing, ...toAdd].join(pathSep);
-    }
-  }
-  return env;
-}
-
 export async function createCodexThreadFromSdk(options: {
   apiKey: string | null;
   model?: RuntimeModel;
@@ -458,35 +432,74 @@ export async function createCodexThreadFromSdk(options: {
   schedulerSessionId?: string;
   sandboxMode?: "danger-full-access" | "workspace-write";
   config?: CodexConfig;
-}): Promise<Thread> {
-  const { Codex } = (await importEsm("@openai/codex-sdk")) as {
-    Codex: new (options: {
-      apiKey?: string;
-      baseUrl?: string;
-      env?: Record<string, string>;
-      codexPathOverride?: string;
-      config?: Record<string, unknown>;
-    }) => {
-      startThread: (options: Record<string, unknown>) => Thread;
-      resumeThread: (id: string, options: Record<string, unknown>) => Thread;
-    };
+}, dependencies?: {
+  createCodex?: (options: {
+    apiKey?: string;
+    baseUrl?: string;
+    env?: Record<string, string>;
+    codexPathOverride?: string;
+    config?: Record<string, unknown>;
+  }) => {
+    startThread: (options: Record<string, unknown>) => Thread;
+    resumeThread: (id: string, options: Record<string, unknown>) => Thread;
   };
-  const env = buildCodexSdkEnvironment({ codexHomeDir: options.codexHomeDir });
+  resolveEnvironment?: typeof resolveCodexProcessEnvironment;
+}): Promise<Thread> {
+  const createCodex = dependencies?.createCodex ?? (() => {
+    throw new Error("unreachable");
+  });
+  const resolvedCreateCodex = dependencies?.createCodex
+    ? createCodex
+    : (() => {
+        let loadedCodex:
+          | (new (options: {
+              apiKey?: string;
+              baseUrl?: string;
+              env?: Record<string, string>;
+              codexPathOverride?: string;
+              config?: Record<string, unknown>;
+            }) => {
+              startThread: (options: Record<string, unknown>) => Thread;
+              resumeThread: (id: string, options: Record<string, unknown>) => Thread;
+            })
+          | null = null;
+        return async (options: {
+          apiKey?: string;
+          baseUrl?: string;
+          env?: Record<string, string>;
+          codexPathOverride?: string;
+          config?: Record<string, unknown>;
+        }) => {
+          if (!loadedCodex) {
+            loadedCodex = ((await importEsm("@openai/codex-sdk")) as {
+              Codex: new (options: {
+                apiKey?: string;
+                baseUrl?: string;
+                env?: Record<string, string>;
+                codexPathOverride?: string;
+                config?: Record<string, unknown>;
+              }) => {
+                startThread: (options: Record<string, unknown>) => Thread;
+                resumeThread: (id: string, options: Record<string, unknown>) => Thread;
+              };
+            }).Codex;
+          }
+          return new loadedCodex(options);
+        };
+      })();
   const packagedCodex = resolvePackagedCodexBinary();
-  if (packagedCodex?.extraPath) {
-    const pathSeparator = process.platform === "win32" ? ";" : ":";
-    env.PATH = [packagedCodex.extraPath, ...(env.PATH ?? "").split(pathSeparator).filter(Boolean)].join(pathSeparator);
-  }
   const bridgeEnv = options.schedulerBridge
     ? options.schedulerBridge.getBridgeEnv(options.schedulerSessionId ?? "default")
     : {};
-  if (options.schedulerBridge) {
-    // Pass bridge env vars into the Codex CLI process so MCP subprocesses inherit them
-    Object.assign(env, bridgeEnv);
-    if (process.versions.electron) {
-      env.ELECTRON_RUN_AS_NODE = "1";
-    }
-  }
+  const envOverrides = options.schedulerBridge && process.versions.electron
+    ? { ...bridgeEnv, ELECTRON_RUN_AS_NODE: "1" }
+    : bridgeEnv;
+  const env = await (dependencies?.resolveEnvironment ?? resolveCodexProcessEnvironment)({
+    codexHomeDir: options.codexHomeDir,
+    prependPathEntries: packagedCodex?.extraPath ? [packagedCodex.extraPath] : undefined,
+    appendPathEntries: process.platform === "win32" ? WINDOWS_POWERSHELL_PATHS : undefined,
+    overrides: envOverrides
+  });
   const mcpConfig = options.schedulerBridge
     ? {
         mcp_servers: {
@@ -502,7 +515,7 @@ export async function createCodexThreadFromSdk(options: {
         }
       }
     : undefined;
-  const codex = new Codex({
+  const codex = await resolvedCreateCodex({
     apiKey: options.apiKey ?? undefined,
     baseUrl: options.model?.baseUrl,
     env,
@@ -984,4 +997,3 @@ export class AgentRuntime {
 }
 
 export { AgentRuntime as PiAgentBridge };
-export { buildCodexSdkEnvironment as buildCodexSdkEnvironmentForTest };
