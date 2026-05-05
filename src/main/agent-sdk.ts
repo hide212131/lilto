@@ -419,12 +419,25 @@ function withScopedProxyEnvironment(settings: ProviderSettings): () => void {
   };
 }
 
+const WINDOWS_POWERSHELL_PATHS = [
+  "C:\\Program Files\\PowerShell\\7",
+  "C:\\Windows\\System32\\WindowsPowerShell\\v1.0"
+];
+
 function buildCodexSdkEnvironment(options: {
   codexHomeDir?: string;
 }): Record<string, string> {
   const env = { ...process.env } as Record<string, string>;
   if (options.codexHomeDir) {
     env.CODEX_HOME = options.codexHomeDir;
+  }
+  if (process.platform === "win32") {
+    const pathSep = ";";
+    const existing = (env.PATH ?? "").split(pathSep).filter(Boolean);
+    const toAdd = WINDOWS_POWERSHELL_PATHS.filter((p) => !existing.includes(p));
+    if (toAdd.length > 0) {
+      env.PATH = [...existing, ...toAdd].join(pathSep);
+    }
   }
   return env;
 }
