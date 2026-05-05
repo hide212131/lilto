@@ -427,7 +427,11 @@ const WINDOWS_POWERSHELL_PATHS = [
 function buildCodexSdkEnvironment(options: {
   codexHomeDir?: string;
 }): Record<string, string> {
-  const env = { ...process.env } as Record<string, string>;
+  // Codex SDK に env を渡すと process.env は自動的に引き継がれないため、
+  // ここで process.env を明示的にコピーする。undefined 値はフィルタして文字列のみにする。
+  const env: Record<string, string> = Object.fromEntries(
+    Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)
+  );
   if (options.codexHomeDir) {
     env.CODEX_HOME = options.codexHomeDir;
   }
