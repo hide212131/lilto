@@ -113,7 +113,7 @@ export function registerAgentIpcHandlers({
         : undefined;
     const text = await normalizePromptPluginMentions(originalText, pluginService);
     const requestId = randomUUID();
-    broadcastLoopEvent({ type: "run_start", requestId });
+    broadcastLoopEvent({ type: "run_start", requestId, conversationId });
     try {
       const providerSettings = providerSettingsService.getState();
       const result = await agentRuntime.submitPrompt(text, providerSettings, {
