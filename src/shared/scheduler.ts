@@ -4,6 +4,7 @@ export type SchedulerNotificationPayload = {
   sessionId: string;
   message: string;
   followUpInstruction?: string;
+  notificationDecisionCriteria?: string;
 };
 
 export type SchedulerScheduleSummary = {
@@ -16,6 +17,7 @@ export type SchedulerScheduleSummary = {
   sessionId: string;
   notificationMessage: string;
   followUpInstruction?: string;
+  notificationDecisionCriteria?: string;
   nextRunAt?: string;
 };
 
@@ -34,5 +36,6 @@ export type SchedulerNotificationEvent = {
   sessionId: string;
   message: string;
   followUpInstruction?: string;
+  notificationDecisionCriteria?: string;
   firedAt: string;
 };

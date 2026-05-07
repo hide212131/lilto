@@ -23,6 +23,7 @@ type CronToolParams = {
   timezone?: string;
   notificationMessage?: string;
   followUpInstruction?: string;
+  notificationDecisionCriteria?: string;
   scope?: "current_session" | "all";
   afterSeconds?: number;
   date?: string;
@@ -75,6 +76,10 @@ export async function createCronTool({
         timezone: { type: "string", description: "IANA timezone, e.g. Asia/Tokyo" },
         notificationMessage: { type: "string", description: "Message delivered when the schedule fires" },
         followUpInstruction: { type: "string", description: "Optional concrete action for the AI to continue after the notification fires" },
+        notificationDecisionCriteria: {
+          type: "string",
+          description: "Optional criteria that decides whether the firing result should notify the user; if omitted, notify every time"
+        },
         scope: { type: "string", enum: ["current_session", "all"], description: "For list: current session only (default) or all sessions" },
         afterSeconds: { type: "number", description: "For set_timer: notify after this many seconds" },
         date: { type: "string", description: "For set_reminder_at: local date in YYYY-MM-DD" },
@@ -206,7 +211,8 @@ function buildTimerInput(
     notification: {
       sessionId,
       message: notificationMessage,
-      followUpInstruction: sanitizeFollowUpInstruction(params.followUpInstruction)
+      followUpInstruction: sanitizeFollowUpInstruction(params.followUpInstruction),
+      notificationDecisionCriteria: sanitizeOptionalText(params.notificationDecisionCriteria)
     }
   };
 }
@@ -233,7 +239,8 @@ function buildReminderAtInput(
     notification: {
       sessionId,
       message: notificationMessage,
-      followUpInstruction: sanitizeFollowUpInstruction(params.followUpInstruction)
+      followUpInstruction: sanitizeFollowUpInstruction(params.followUpInstruction),
+      notificationDecisionCriteria: sanitizeOptionalText(params.notificationDecisionCriteria)
     }
   };
 }
@@ -258,7 +265,8 @@ function buildDailyReminderInput(
     notification: {
       sessionId,
       message: notificationMessage,
-      followUpInstruction: sanitizeFollowUpInstruction(params.followUpInstruction)
+      followUpInstruction: sanitizeFollowUpInstruction(params.followUpInstruction),
+      notificationDecisionCriteria: sanitizeOptionalText(params.notificationDecisionCriteria)
     }
   };
 }
@@ -292,12 +300,17 @@ function buildLowLevelInput(
     notification: {
       sessionId,
       message: notificationMessage,
-      followUpInstruction: sanitizeFollowUpInstruction(params.followUpInstruction)
+      followUpInstruction: sanitizeFollowUpInstruction(params.followUpInstruction),
+      notificationDecisionCriteria: sanitizeOptionalText(params.notificationDecisionCriteria)
     }
   };
 }
 
 function sanitizeFollowUpInstruction(value: string | undefined): string | undefined {
+  return sanitizeOptionalText(value);
+}
+
+function sanitizeOptionalText(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
 }

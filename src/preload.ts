@@ -8,8 +8,13 @@ const AGENT_LOOP_EVENT_CHANNEL = "agent:loopEvent";
 const SCHEDULER_NOTIFICATION_CHANNEL = "scheduler:notification";
 
 contextBridge.exposeInMainWorld("lilto", {
-  submitPrompt: async (text: string, conversationId?: string | null, backendSessionId?: string | null) =>
-    ipcRenderer.invoke("agent:submitPrompt", { text, conversationId, backendSessionId }),
+  submitPrompt: async (
+    text: string,
+    conversationId?: string | null,
+    backendSessionId?: string | null,
+    options?: { silent?: boolean }
+  ) =>
+    ipcRenderer.invoke("agent:submitPrompt", { text, conversationId, backendSessionId, silent: options?.silent === true }),
   abortPrompt: async () => ipcRenderer.invoke("agent:abort"),
   getAgentsFile: async () => ipcRenderer.invoke("app:getAgentsFile"),
   openAgentsFile: async () => ipcRenderer.invoke("app:openAgentsFile"),
@@ -29,6 +34,10 @@ contextBridge.exposeInMainWorld("lilto", {
     | { ok: true }
     | { ok: false; error: { code: string; message: string } }
   > => ipcRenderer.invoke("scheduler:delete", { id }),
+  showSchedulerNotification: async (message: string): Promise<
+    | { ok: true }
+    | { ok: false; error: { code: string; message: string } }
+  > => ipcRenderer.invoke("scheduler:showNotification", { message }),
   listPlugins: async (payload?: { forceRemoteSync?: boolean }) => ipcRenderer.invoke("plugins:list", payload ?? {}),
   readPlugin: async (payload: { marketplacePath: string; pluginName: string }) =>
     ipcRenderer.invoke("plugins:read", payload),

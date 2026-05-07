@@ -6,7 +6,9 @@ const { normalizePluginMentionsForPrompt } = require("../dist/main/plugin-mentio
 
 test("prompt バリデーション", () => {
   assert.equal(validatePrompt({ text: "hello" }).ok, true);
+  assert.equal(validatePrompt({ text: "hello", silent: true }).ok, true);
   assert.equal(validatePrompt({ text: "   " }).ok, false);
+  assert.equal(validatePrompt({ text: "hello", silent: "yes" }).ok, false);
   assert.equal(validatePrompt(null).ok, false);
 });
 

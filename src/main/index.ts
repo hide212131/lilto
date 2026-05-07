@@ -182,13 +182,16 @@ if (hasSingleInstanceLock) {
       logger: createLogger("scheduler"),
       userDataDir: app.getPath("userData"),
       onNotification: (event) => {
+        const shouldDeferVisibleNotification = Boolean(
+          event.notificationDecisionCriteria && event.followUpInstruction
+        );
         if (heartbeatAssistant) {
           void heartbeatAssistant.handleSchedulerNotification(event).then((handled) => {
             if (handled) {
               return;
             }
             broadcastSchedulerNotification(event);
-            if (BrowserWindow.getFocusedWindow() === null) {
+            if (!shouldDeferVisibleNotification && BrowserWindow.getFocusedWindow() === null) {
               notificationService.notify("lilto - スケジュール通知", event.message);
               notificationService.incrementBadge();
             }
@@ -196,7 +199,7 @@ if (hasSingleInstanceLock) {
           return;
         }
         broadcastSchedulerNotification(event);
-        if (BrowserWindow.getFocusedWindow() === null) {
+        if (!shouldDeferVisibleNotification && BrowserWindow.getFocusedWindow() === null) {
           notificationService.notify("lilto - スケジュール通知", event.message);
           notificationService.incrementBadge();
         }

@@ -16,7 +16,12 @@ type SchedulerReady = { type: "ready"; db_path: string };
 type SchedulerFired = {
   type: "fired";
   id: string;
-  notification: { session_id: string; message: string; follow_up_instruction?: string };
+  notification: {
+    session_id: string;
+    message: string;
+    follow_up_instruction?: string;
+    notification_decision_criteria?: string;
+  };
   fired_at: string;
 };
 
@@ -130,7 +135,8 @@ export class SchedulerService implements SchedulerClient {
       kind: input.kind,
       runAt: input.runAt,
       cronExpr: input.cronExpr,
-      sessionId: input.notification.sessionId
+      sessionId: input.notification.sessionId,
+      notificationDecisionCriteria: input.notification.notificationDecisionCriteria
     });
     const response = await this.sendCommand<SchedulerScheduleSummary>({ cmd: "create", schedule: daemonSchedule });
     this.logger.info("create_schedule_response", {
@@ -189,7 +195,8 @@ export class SchedulerService implements SchedulerClient {
       notification: {
         session_id: input.notification.sessionId,
         message: input.notification.message,
-        follow_up_instruction: input.notification.followUpInstruction
+        follow_up_instruction: input.notification.followUpInstruction,
+        notification_decision_criteria: input.notification.notificationDecisionCriteria
       }
     };
   }
@@ -240,6 +247,7 @@ export class SchedulerService implements SchedulerClient {
         sessionId: payload.notification.session_id,
         message: payload.notification.message,
         followUpInstruction: payload.notification.follow_up_instruction,
+        notificationDecisionCriteria: payload.notification.notification_decision_criteria,
         firedAt: payload.fired_at
       });
       return;
@@ -284,6 +292,10 @@ export class SchedulerService implements SchedulerClient {
         typeof record.notification_message === "string" ? record.notification_message : record.notificationMessage,
       followUpInstruction:
         typeof record.follow_up_instruction === "string" ? record.follow_up_instruction : record.followUpInstruction,
+      notificationDecisionCriteria:
+        typeof record.notification_decision_criteria === "string"
+          ? record.notification_decision_criteria
+          : record.notificationDecisionCriteria,
       nextRunAt: typeof record.next_run_at === "string" ? record.next_run_at : record.nextRunAt
     };
   }

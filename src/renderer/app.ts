@@ -9,6 +9,11 @@ import {
 } from "../shared/heartbeat-assistant.js";
 import type { AuthState, ProviderSettings, Message, AssistantProgress, AssistantToolProgress, Session } from "./types.js";
 import type { OAuthProviderId } from "../shared/provider-settings.js";
+import {
+  buildConditionalSchedulerFollowUpPrompt,
+  parseSchedulerNotificationDecision,
+  shouldRunConditionalSchedulerFollowUp
+} from "../shared/scheduler-follow-up.js";
 import type { SchedulerNotificationEvent } from "../shared/scheduler.js";
 import "./components/top-bar.js";
 import "./components/message-list.js";
@@ -633,6 +638,11 @@ export class LiltApp extends LitElement {
       return;
     }
 
+    if (shouldRunConditionalSchedulerFollowUp(event)) {
+      void this._runConditionalSchedulerFollowUp(targetSession.id, event);
+      return;
+    }
+
     const notificationText = event.followUpInstruction
       ? `${event.message}\n続きの処理: ${event.followUpInstruction}`
       : event.message;
@@ -685,6 +695,44 @@ export class LiltApp extends LitElement {
     }
   }
 
+  private async _runConditionalSchedulerFollowUp(conversationId: string, event: SchedulerNotificationEvent) {
+    const session = this.sessions.find((entry) => entry.id === conversationId) ?? null;
+
+    try {
+      const result = await window.lilto.submitPrompt(
+        buildConditionalSchedulerFollowUpPrompt(event),
+        conversationId,
+        session?.backendSessionId ?? null,
+        { silent: true }
+      );
+      if (result.ok) {
+        const decision = parseSchedulerNotificationDecision(result.response.text);
+        if (!decision) {
+          await this._notifySchedulerDecision(conversationId, {
+            shouldNotify: true,
+            userMessage: result.response.text.trim() || event.message
+          });
+          return;
+        }
+        await this._notifySchedulerDecision(conversationId, decision);
+        return;
+      }
+
+      const error = result.error ?? { code: "UNKNOWN", message: "不明なエラー" };
+      await this._notifySchedulerDecision(conversationId, {
+        shouldNotify: true,
+        role: "error",
+        userMessage: `${error.code}: ${error.message}`
+      });
+    } catch (error) {
+      await this._notifySchedulerDecision(conversationId, {
+        shouldNotify: true,
+        role: "error",
+        userMessage: `UNEXPECTED: ${String(error)}`
+      });
+    }
+  }
+
   private _buildSchedulerFollowUpPrompt(event: SchedulerNotificationEvent): string {
     return [
       "以下はこの会話で発火した scheduler 通知です。",
@@ -693,6 +741,27 @@ export class LiltApp extends LitElement {
       "通知文言はすでにユーザーへ表示されています。",
       "まず必要なら一言だけ何をするかを伝え、その後に続きの処理をこの会話で実行してください。"
     ].join("\n");
+  }
+
+  private async _notifySchedulerDecision(
+    conversationId: string,
+    decision: { shouldNotify: boolean; userMessage: string; role?: "system" | "error" }
+  ) {
+    if (!decision.shouldNotify) {
+      return;
+    }
+
+    const userMessage = decision.userMessage.trim();
+    if (!userMessage) {
+      return;
+    }
+
+    this._appendMessageToSession(conversationId, {
+      id: this._nextMessageId(),
+      role: decision.role ?? "system",
+      text: userMessage
+    });
+    await window.lilto.showSchedulerNotification(userMessage);
   }
 
   private _appendProgressLineFromLoopEvent(event: AgentLoopEvent) {

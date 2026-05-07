@@ -1,5 +1,17 @@
 # Lessons
 
+## 2026-05-08 OpenSpec archive sync fallback
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| `add-conditional-scheduler-notifications` の archive 前 spec sync で subagent に委譲したが、編集ツールが無い前提のまま止まった。 | archive 直前の spec sync は変更範囲が限定されているので、委譲先がその場で編集できないと余計な往復になる。 | OpenSpec archive 前の delta sync は、対象 spec と置換内容が局所的なら自分で即 patch して進める。subagent は比較や要約には使っても、編集 capability が不確実な場面では主経路に置かない。 |
+
+## 2026-05-07 OpenSpec instructions JSON fallback
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| `add-conditional-scheduler-notifications` の OpenSpec artifact 生成中、`openspec instructions <artifact> --json` が空出力になるケースがあり、JSON 前提で止まると artifact 作成を進められなかった。 | CLI の `--json` が常に有効な payload を返すと決め打ちすると、環境差やコマンド実装差で空出力になったときに不要な手戻りが起きる。 | OpenSpec artifact 作成では `instructions --json` が空なら通常出力へ即フォールバックし、template・outputPath・dependencies を plain text から拾って先に進める。 |
+
 ## 2026-05-05 cron MCP packaged path
 
 | Change | Mistake/Context | Rule to repeat |

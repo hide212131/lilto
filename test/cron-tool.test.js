@@ -31,7 +31,8 @@ function createSchedulerDouble() {
           cronExpr: input.cronExpr,
           timezone: input.timezone ?? "Asia/Tokyo",
           sessionId: input.notification.sessionId,
-          notificationMessage: input.notification.message
+          notificationMessage: input.notification.message,
+          notificationDecisionCriteria: input.notification.notificationDecisionCriteria
         };
       },
       async listSchedules() { return []; },
@@ -45,7 +46,8 @@ function createSchedulerDouble() {
           cronExpr: input.cronExpr,
           timezone: input.timezone ?? "Asia/Tokyo",
           sessionId: input.notification.sessionId,
-          notificationMessage: input.notification.message
+          notificationMessage: input.notification.message,
+          notificationDecisionCriteria: input.notification.notificationDecisionCriteria
         };
       },
       async deleteSchedule() { throw new Error("not used"); }
@@ -66,13 +68,15 @@ test("cron tool set_timer は現在の agent sessionId を通知先に使う", a
     title: "3分タイマー",
     afterSeconds: 180,
     notificationMessage: "3分たちました。",
-    followUpInstruction: "alpha.co.jp を開きます"
+    followUpInstruction: "alpha.co.jp を開きます",
+    notificationDecisionCriteria: "結果に問題がある時だけ通知する"
   }, undefined, undefined, createCtx("session-xyz"));
   const after = Date.now();
 
   assert.equal(schedulerDouble.received.notification.sessionId, "session-xyz");
   assert.equal(schedulerDouble.received.notification.message, "3分たちました。");
   assert.equal(schedulerDouble.received.notification.followUpInstruction, "alpha.co.jp を開きます");
+  assert.equal(schedulerDouble.received.notification.notificationDecisionCriteria, "結果に問題がある時だけ通知する");
   const runAtMs = Date.parse(schedulerDouble.received.runAt);
   assert.ok(Number.isFinite(runAtMs));
   assert.ok(runAtMs >= before + 179000);
@@ -100,6 +104,7 @@ test("cron tool set_daily_reminder は hour/minute から日次 cron を生成�
   assert.equal(schedulerDouble.received.cronExpr, "0 30 9 * * *");
   assert.equal(schedulerDouble.received.timezone, "Asia/Tokyo");
   assert.equal(schedulerDouble.received.notification.sessionId, "session-a");
+  assert.equal(schedulerDouble.received.notification.notificationDecisionCriteria, undefined);
 });
 
 test("cron tool set_reminder_at は date/time/timezone から RFC3339 を組み立てる", async () => {
@@ -121,6 +126,7 @@ test("cron tool set_reminder_at は date/time/timezone から RFC3339 を組み�
   assert.equal(schedulerDouble.received.kind, "one_shot");
   assert.equal(schedulerDouble.received.runAt, "2026-03-10T09:15:00+09:00");
   assert.equal(schedulerDouble.received.notification.sessionId, "session-b");
+  assert.equal(schedulerDouble.received.notification.notificationDecisionCriteria, undefined);
 });
 
 test("cron tool create は低水準 API をフォールバックとして残す", async () => {
@@ -135,12 +141,14 @@ test("cron tool create は低水準 API をフォールバックとして残す"
     title: "複雑な繰り返し",
     kind: "cron",
     cronExpr: "0 15 10 * * 1-5",
-    timezone: "Asia/Tokyo"
+    timezone: "Asia/Tokyo",
+    notificationDecisionCriteria: "エラーや差分がある時だけ通知する"
   }, undefined, undefined, createCtx("session-c"));
 
   assert.equal(schedulerDouble.received.kind, "cron");
   assert.equal(schedulerDouble.received.cronExpr, "0 15 10 * * 1-5");
   assert.equal(schedulerDouble.received.notification.sessionId, "session-c");
+  assert.equal(schedulerDouble.received.notification.notificationDecisionCriteria, "エラーや差分がある時だけ通知する");
 });
 
 test("cron tool create は 5 field cron を 6 field へ正規化する", async () => {

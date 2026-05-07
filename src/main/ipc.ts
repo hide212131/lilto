@@ -111,9 +111,14 @@ export function registerAgentIpcHandlers({
       typeof (payload as { backendSessionId?: unknown }).backendSessionId === "string"
         ? (payload as { backendSessionId: string }).backendSessionId
         : undefined;
+    const silent = typeof (payload as { silent?: unknown }).silent === "boolean"
+      ? (payload as { silent: boolean }).silent
+      : false;
     const text = await normalizePromptPluginMentions(originalText, pluginService);
     const requestId = randomUUID();
-    broadcastLoopEvent({ type: "run_start", requestId, conversationId });
+    if (!silent) {
+      broadcastLoopEvent({ type: "run_start", requestId, conversationId });
+    }
     try {
       const providerSettings = providerSettingsService.getState();
       const result = await agentRuntime.submitPrompt(text, providerSettings, {
@@ -121,23 +126,29 @@ export function registerAgentIpcHandlers({
         conversationId,
         backendSessionId,
         onLoopEvent: (event) => {
-          broadcastLoopEvent(event);
+          if (!silent) {
+            broadcastLoopEvent(event);
+          }
         }
       });
       if (!result.ok) {
-        broadcastLoopEvent({
-          type: "run_end",
-          requestId,
-          status: result.error.code === "ABORTED" ? "aborted" : "failed",
-          errorMessage: `${result.error.code}: ${result.error.message}`
-        });
+        if (!silent) {
+          broadcastLoopEvent({
+            type: "run_end",
+            requestId,
+            status: result.error.code === "ABORTED" ? "aborted" : "failed",
+            errorMessage: `${result.error.code}: ${result.error.message}`
+          });
+        }
         return result;
       }
 
-      broadcastLoopEvent({ type: "run_end", requestId, status: "completed" });
+      if (!silent) {
+        broadcastLoopEvent({ type: "run_end", requestId, status: "completed" });
+      }
 
       // ウインドウが非フォーカス状態ならデスクトップ通知 + バッジを表示する
-      if (BrowserWindow.getFocusedWindow() === null) {
+      if (!silent && BrowserWindow.getFocusedWindow() === null) {
         const preview = result.text.length > 80 ? `${result.text.slice(0, 77)}…` : result.text;
         notificationService.notify("lilto - 返答が届きました", preview);
         notificationService.incrementBadge();
@@ -150,7 +161,9 @@ export function registerAgentIpcHandlers({
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      broadcastLoopEvent({ type: "run_end", requestId, status: "failed", errorMessage: message });
+      if (!silent) {
+        broadcastLoopEvent({ type: "run_end", requestId, status: "failed", errorMessage: message });
+      }
       throw error;
     }
   });
@@ -271,6 +284,29 @@ export function registerAgentIpcHandlers({
         : "SCHEDULER_DELETE_FAILED";
       return { ok: false as const, error: { code, message } };
     }
+  });
+
+  ipcMain.handle("scheduler:showNotification", (_event, payload: unknown) => {
+    if (!payload || typeof payload !== "object" || typeof (payload as { message?: unknown }).message !== "string") {
+      return {
+        ok: false as const,
+        error: { code: "INVALID_REQUEST", message: "message は必須です" }
+      };
+    }
+
+    const message = (payload as { message: string }).message.trim();
+    if (!message) {
+      return {
+        ok: false as const,
+        error: { code: "INVALID_REQUEST", message: "message は空にできません" }
+      };
+    }
+
+    if (BrowserWindow.getFocusedWindow() === null) {
+      notificationService.notify("lilto - スケジュール通知", message);
+      notificationService.incrementBadge();
+    }
+    return { ok: true as const };
   });
 
   ipcMain.handle("windowsSandbox:setup", async (_event, payload: unknown) => {

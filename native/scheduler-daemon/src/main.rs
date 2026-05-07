@@ -28,6 +28,7 @@ struct NotificationPayload {
     session_id: String,
     message: String,
     follow_up_instruction: Option<String>,
+    notification_decision_criteria: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,6 +54,7 @@ struct ScheduleSummary {
     session_id: String,
     notification_message: String,
     follow_up_instruction: Option<String>,
+    notification_decision_criteria: Option<String>,
     next_run_at: Option<String>,
 }
 
@@ -540,6 +542,7 @@ fn schedule_to_summary(record: &ScheduleRecord) -> Result<ScheduleSummary> {
         session_id: record.notification.session_id.clone(),
         notification_message: record.notification.message.clone(),
         follow_up_instruction: record.notification.follow_up_instruction.clone(),
+        notification_decision_criteria: record.notification.notification_decision_criteria.clone(),
         next_run_at: compute_next_run_at(record)?,
     })
 }

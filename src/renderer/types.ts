@@ -151,7 +151,8 @@ declare global {
       submitPrompt: (
         text: string,
         conversationId?: string | null,
-        backendSessionId?: string | null
+        backendSessionId?: string | null,
+        options?: { silent?: boolean }
       ) => Promise<
         // 既存契約との互換性維持: submitPrompt の戻り値は変更しない。
         | { ok: true; response: { text: string } }
@@ -196,6 +197,10 @@ declare global {
         | { ok: false; error: { code: string; message: string } }
       >;
       deleteSchedule: (id: string) => Promise<
+        | { ok: true }
+        | { ok: false; error: { code: string; message: string } }
+      >;
+      showSchedulerNotification: (message: string) => Promise<
         | { ok: true }
         | { ok: false; error: { code: string; message: string } }
       >;

@@ -31,6 +31,10 @@ const toolSchema = {
     timezone: { type: "string", description: "IANA timezone, e.g. Asia/Tokyo" },
     notificationMessage: { type: "string", description: "Message delivered when the schedule fires" },
     followUpInstruction: { type: "string", description: "Optional concrete action for the AI to continue after the notification fires" },
+    notificationDecisionCriteria: {
+      type: "string",
+      description: "Optional criteria that decides whether the firing result should notify the user; if omitted, notify every time"
+    },
     scope: { type: "string", enum: ["current_session", "all"], description: "For list: current session only (default) or all sessions" },
     afterSeconds: { type: "number", description: "For set_timer: notify after this many seconds" },
     date: { type: "string", description: "For set_reminder_at: local date in YYYY-MM-DD" },

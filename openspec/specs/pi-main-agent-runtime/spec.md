@@ -139,26 +139,42 @@ TBD - created by archiving change add-pi-sdk-main-process-agent. Update Purpose 
 - **THEN** Main はエラーコードと説明を含む失敗結果を返し、Renderer にも失敗イベントを中継する
 
 ### Requirement: scheduler 発火イベントを対象セッションへ配送できる
-システムは、scheduler daemon から発火イベントを受信したとき、payload に含まれる `sessionId` を解決して対象チャットへ通知を追加しなければならない（MUST）。また、アプリが非フォーカス時は OS 通知と未読バッジも更新しなければならない（MUST）。
+システムは、scheduler daemon から発火イベントを受信したとき、payload に含まれる `sessionId` を解決し、対象セッションに対するバックエンド処理を開始できなければならない（MUST）。`notificationDecisionCriteria` を持たない通常の schedule では、従来どおり対象チャットへ通知を追加しなければならない（MUST）。`notificationDecisionCriteria` を持つ schedule では、LLM による通知判定が完了するまでチャット通知、OS 通知、未読バッジ更新を行ってはならない（MUST NOT）。アプリが非フォーカス時は、通知必要と判定された場合に限って OS 通知と未読バッジも更新しなければならない（MUST）。
 
-#### Scenario: 発火イベントが対象チャットへ反映される
-- **WHEN** Main が scheduler daemon から有効な `sessionId` を持つ発火イベントを受信する
+#### Scenario: 発火イベントが条件なし schedule として通常通知される
+- **WHEN** Main が `notificationDecisionCriteria` を持たない scheduler 発火イベントを受信する
 - **THEN** システムは対象 session のチャットへ通知メッセージを追加する
 
-#### Scenario: 非フォーカス時にデスクトップ通知も出る
-- **WHEN** scheduler 発火時にアプリウィンドウが非フォーカス状態である
+#### Scenario: 条件付き schedule は判定完了まで表示しない
+- **WHEN** Main が `notificationDecisionCriteria` を持つ scheduler 発火イベントを受信する
+- **THEN** システムはユーザー向け通知を即時表示せず、まずバックエンド follow-up と通知判定を進める
+
+#### Scenario: 通知必要と判定された場合だけ OS 通知も出る
+- **WHEN** 条件付き schedule の最終判定が通知必要で、かつアプリウィンドウが非フォーカス状態である
 - **THEN** システムはチャット反映に加えてデスクトップ通知と未読バッジ更新を行う
 
+#### Scenario: 通知不要と判定された場合はユーザー向け表示を行わない
+- **WHEN** 条件付き schedule の最終判定が通知不要である
+- **THEN** システムはチャット、OS 通知、未読バッジのいずれも更新しない
+
 ### Requirement: Main プロセスは scheduler follow-up 情報を Renderer へ渡せる
-システムは、scheduler 発火イベントに follow-up 指示が含まれる場合、その情報を Renderer が同一会話で follow-up 実行に使える形で中継しなければならない（MUST）。
+システムは、scheduler 発火イベントに follow-up 指示が含まれる場合、その情報を Renderer または Main の follow-up 実行経路へ渡し、同一会話でバックエンド処理を継続できなければならない（MUST）。さらに `notificationDecisionCriteria` がある場合、システムは follow-up 実行結果、元の通知文言、判断基準を使った専用の通知判定 prompt を実行し、少なくとも `shouldNotify` とユーザー向け通知文を含む構造化結果へ変換できなければならない（MUST）。判定結果の parse に失敗した場合は、安全側として通知する動作へフォールバックしなければならない（MUST）。
 
-#### Scenario: follow-up 指示があれば Renderer へ同梱して中継する
-- **WHEN** Main が `followUpInstruction` を含む scheduler 発火イベントを受信する
-- **THEN** システムは対象 session へ送る scheduler 通知イベントに `followUpInstruction` を含めて Renderer へ中継する
+#### Scenario: follow-up 実行結果を通知判定へ渡す
+- **WHEN** Renderer または Main が `notificationDecisionCriteria` を持つ scheduler follow-up を実行する
+- **THEN** システムはその follow-up の結果を通知判定 prompt へ渡す
 
-#### Scenario: Renderer 起点 follow-up の loop event が通常応答と同様に中継される
-- **WHEN** Renderer が scheduler follow-up として `submitPrompt` を呼び出し AI が tool を実行する
-- **THEN** Main はその loop event と最終応答を通常のエージェント実行と同じ経路で Renderer へ中継する
+#### Scenario: 判定結果が構造化されて通知文面を返す
+- **WHEN** 通知判定 prompt が成功する
+- **THEN** システムは `shouldNotify` とユーザー向け通知文を含む構造化結果として扱う
+
+#### Scenario: 判定 parse 失敗時は通知にフォールバックする
+- **WHEN** 通知判定 prompt の応答が構造化結果として解釈できない
+- **THEN** システムは通知必要として扱い、通知文言または失敗を要約した文面をユーザーへ返す
+
+#### Scenario: 条件付き schedule でも follow-up が不要なら従来経路を維持する
+- **WHEN** scheduler 発火イベントが `notificationDecisionCriteria` を持つが `followUpInstruction` は持たない
+- **THEN** システムは follow-up 実行結果前提の判定を必須にせず、通常通知または既定経路を継続する
 
 ### Requirement: Main プロセスは managed installed plugin state を Codex runtime へ反映する
 システムは、lilto が管理する app-server 経由の installed plugin state を Codex runtime 起動環境へ反映しなければならない（MUST）。plugin 管理と runtime 起動は、強制的に同じ `HOME` を共有するのではなく、同じ app-managed `CODEX_HOME` と正規化済み runtime environment を共有しなければならない（MUST）。Codex 本体が install した plugin は、次回送信または新規 thread から利用可能でなければならない（MUST）。
