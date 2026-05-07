@@ -1,5 +1,11 @@
 # Lessons
 
+## 2026-05-08 chat history menu button sizing
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| 会話履歴の行高が三点リーダーボタンの 28px サイズに引っ張られていたため、ボタンを文字行高より小さい固定サイズへ縮め、行の縦位置も中央寄せに戻した。 | 一覧の密度調整で補助アクションの hit area や glyph size を本文と同列に大きく保つと、行高の支配要因が本文ではなくアイコンになってしまう。 | 1 行リストの高さを詰めるときは、まずタイトル文字の line-height を基準にし、補助ボタンはそれより小さい固定サイズにする。行高を決めるのがアイコンになっていないかを先に確認する。 |
+
 ## 2026-05-08 OpenSpec archive sync fallback
 
 | Change | Mistake/Context | Rule to repeat |

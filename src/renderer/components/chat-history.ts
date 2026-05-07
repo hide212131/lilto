@@ -62,7 +62,7 @@ export class LiltChatHistory extends LitElement {
       position: relative;
       display: flex;
       flex-direction: row;
-      align-items: flex-start;
+      align-items: center;
       gap: 6px;
       padding: 7px 8px 7px 12px;
       margin-bottom: 0;
@@ -121,17 +121,17 @@ export class LiltChatHistory extends LitElement {
       display: flex;
       align-items: center;
       justify-content: center;
-      width: 28px;
-      height: 28px;
+      width: 20px;
+      height: 20px;
       border: none;
-      border-radius: 8px;
+      border-radius: 6px;
       background: transparent;
       cursor: pointer;
       color: var(--muted, #6b7280);
       opacity: 0;
       transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
       padding: 0;
-      font-size: 16px;
+      font-size: 11px;
       line-height: 1;
     }
     .session-item:hover .menu-btn,
