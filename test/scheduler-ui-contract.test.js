@@ -16,6 +16,8 @@ test("preload は scheduler notification listener を公開する", () => {
 test("renderer app は backendSessionId または conversationId で scheduler notification を対応付ける", () => {
   const content = fs.readFileSync("src/renderer/app.ts", "utf8");
   assert.match(content, /event\.type === "session_bound"/);
+  assert.match(content, /event\.requestId === this\._activeRequestId/);
+  assert.match(content, /event\.type === "run_start" && event\.conversationId === this\._pendingConversationId/);
   assert.match(content, /backendSessionId/);
   assert.match(content, /_onSchedulerNotification/);
   assert.match(content, /session\.backendSessionId === event\.sessionId/);

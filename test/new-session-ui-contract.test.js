@@ -14,8 +14,17 @@ test("lilt-app が new-session で会話状態を初期化する", () => {
   assert.match(content, /@new-session=\$\{this\._onStartNewSession\}/);
   assert.match(content, /messages = \[\]/);
   assert.match(content, /loopState = createInitialLoopState\(\)/);
-  assert.match(content, /_pendingAssistantIndex = null/);
+  assert.match(content, /_pendingAssistantMessageId = null/);
+  assert.match(content, /_pendingConversationId = null/);
   assert.match(content, /_statusLines = \[\]/);
+});
+
+test("lilt-app は送信開始時の session に assistant 応答を書き戻す", () => {
+  const content = fs.readFileSync("src/renderer/app.ts", "utf8");
+  assert.match(content, /const conversationId = this\._currentSessionId;/);
+  assert.match(content, /_appendMessageToSession\(conversationId, \{/);
+  assert.match(content, /_updateSessionMessage\(conversationId, pendingMessageId, \{/);
+  assert.match(content, /_removeSessionMessage\(conversationId, pendingMessageId\)/);
 });
 
 test("lilt-app が user 送信前と retry 巻き戻し直後に session snapshot を保存する", () => {
