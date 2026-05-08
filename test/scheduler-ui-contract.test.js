@@ -12,7 +12,8 @@ test("preload は scheduler notification listener を公開する", () => {
   assert.match(content, /ipcRenderer\.invoke\("scheduler:list"\)/);
   assert.match(content, /deleteSchedule:\s*async \(id: string\)/);
   assert.match(content, /ipcRenderer\.invoke\("scheduler:delete", \{ id \}\)/);
-  assert.match(content, /showSchedulerNotification/);
+  assert.match(content, /showSchedulerNotification: async \(message: string, conversationId\?: string \| null\)/);
+  assert.match(content, /ipcRenderer\.invoke\("scheduler:showNotification", \{ message, conversationId \}\)/);
 });
 
 test("renderer app は backendSessionId または conversationId で scheduler notification を対応付ける", () => {
@@ -34,7 +35,8 @@ test("renderer app は backendSessionId または conversationId で scheduler n
   assert.match(content, /activeSession\?\.backendSessionId/);
   assert.match(content, /session\?\.backendSessionId/);
   assert.match(content, /window\.lilto\.submitPrompt/);
-  assert.match(content, /window\.lilto\.showSchedulerNotification/);
+  assert.match(content, /entry\.backendSessionId === conversationId/);
+  assert.match(content, /window\.lilto\.showSchedulerNotification\(userMessage, conversationId\)/);
 });
 
 test("settings-modal は Schedules タブから schedule 一覧取得と削除を行える", () => {
@@ -67,6 +69,7 @@ test("main ipc は scheduler 一覧取得と削除ハンドラを公開する", 
   assert.match(content, /ipcMain\.handle\("scheduler:delete"/);
   assert.match(content, /await scheduler\.deleteSchedule/);
   assert.match(content, /ipcMain\.handle\("scheduler:showNotification"/);
+  assert.match(content, /openConversationWindow\(conversationId\)/);
   assert.match(content, /if \(!silent\)/);
 });
 

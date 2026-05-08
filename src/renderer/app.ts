@@ -78,6 +78,7 @@ export class LiltApp extends LitElement {
   private _unsubscribeLoopListener: (() => void) | null = null;
   private _unsubscribeSchedulerListener: (() => void) | null = null;
   private _unsubscribeFocusListener: (() => void) | null = null;
+  private _unsubscribeOpenConversationListener: (() => void) | null = null;
   private _pendingAssistantMessageId: string | null = null;
   private _pendingConversationId: string | null = null;
   private _activeRequestId: string | null = null;
@@ -202,6 +203,9 @@ export class LiltApp extends LitElement {
         this._composer?.focusInput();
       });
     });
+    this._unsubscribeOpenConversationListener = window.lilto.onOpenConversation((conversationId) => {
+      this._openConversation(conversationId);
+    });
   }
 
   disconnectedCallback() {
@@ -211,10 +215,12 @@ export class LiltApp extends LitElement {
     this._unsubscribeLoopListener?.();
     this._unsubscribeSchedulerListener?.();
     this._unsubscribeFocusListener?.();
+    this._unsubscribeOpenConversationListener?.();
     this._unsubscribeAuthListener = null;
     this._unsubscribeLoopListener = null;
     this._unsubscribeSchedulerListener = null;
     this._unsubscribeFocusListener = null;
+    this._unsubscribeOpenConversationListener = null;
   }
 
   private _resetForegroundRequestState() {
@@ -428,9 +434,20 @@ export class LiltApp extends LitElement {
   }
 
   private _onSelectSession(e: CustomEvent<Session>) {
-    const session = e.detail;
-    if (session.id === this._currentSessionId) return;
-    // 現在のセッションを保存してから切り替え
+    this._openConversation(e.detail.id);
+  }
+
+  private _openConversation(conversationId: string) {
+    const session = this.sessions.find((entry) =>
+      entry.id === conversationId || entry.backendSessionId === conversationId
+    ) ?? null;
+    if (!session) {
+      return;
+    }
+    if (session.id === this._currentSessionId) {
+      return;
+    }
+
     this._saveCurrentSession();
     this.messages = [...session.messages];
     this._currentSessionId = session.id;
@@ -761,7 +778,7 @@ export class LiltApp extends LitElement {
       role: decision.role ?? "system",
       text: userMessage
     });
-    await window.lilto.showSchedulerNotification(userMessage);
+    await window.lilto.showSchedulerNotification(userMessage, conversationId);
   }
 
   private _appendProgressLineFromLoopEvent(event: AgentLoopEvent) {

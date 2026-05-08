@@ -32,6 +32,23 @@ function broadcastLoopEvent(event: AgentLoopEvent): void {
   }
 }
 
+function openConversationWindow(conversationId: string): void {
+  const windows = BrowserWindow.getAllWindows();
+  if (windows.length === 0) {
+    return;
+  }
+
+  for (const window of windows) {
+    if (window.isMinimized()) {
+      window.restore();
+    } else if (!window.isVisible()) {
+      window.show();
+    }
+    window.focus();
+    window.webContents.send("app:openConversation", conversationId);
+  }
+}
+
 async function normalizePromptPluginMentions(text: string, pluginService: PluginService): Promise<string> {
   if (!text.includes("@")) {
     return text;
@@ -150,7 +167,13 @@ export function registerAgentIpcHandlers({
       // ウインドウが非フォーカス状態ならデスクトップ通知 + バッジを表示する
       if (!silent && BrowserWindow.getFocusedWindow() === null) {
         const preview = result.text.length > 80 ? `${result.text.slice(0, 77)}…` : result.text;
-        notificationService.notify("lilto - 返答が届きました", preview);
+        notificationService.notify("lilto - 返答が届きました", preview, {
+          onClick: () => {
+            if (conversationId) {
+              openConversationWindow(conversationId);
+            }
+          }
+        });
         notificationService.incrementBadge();
       }
 
@@ -295,6 +318,10 @@ export function registerAgentIpcHandlers({
     }
 
     const message = (payload as { message: string }).message.trim();
+    const conversationId =
+      typeof (payload as { conversationId?: unknown }).conversationId === "string"
+        ? (payload as { conversationId: string }).conversationId.trim()
+        : "";
     if (!message) {
       return {
         ok: false as const,
@@ -303,7 +330,14 @@ export function registerAgentIpcHandlers({
     }
 
     if (BrowserWindow.getFocusedWindow() === null) {
-      notificationService.notify("lilto - スケジュール通知", message);
+      notificationService.notify("lilto - スケジュール通知", message, {
+        onClick: () => {
+          if (!conversationId) {
+            return;
+          }
+          openConversationWindow(conversationId);
+        }
+      });
       notificationService.incrementBadge();
     }
     return { ok: true as const };

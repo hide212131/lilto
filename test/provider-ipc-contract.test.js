@@ -17,6 +17,8 @@ test("preload exposes provider and dictation IPC methods", () => {
   assert.match(content, /cancelNativeDictation:\s*async \(\) => ipcRenderer\.invoke\("audio:cancelNativeDictation"\)/);
   assert.match(content, /startClaudeOauth:\s*async \(\) => ipcRenderer\.invoke\("auth:startClaudeOauth"\)/);
   assert.match(content, /listModels:\s*async \(payload: unknown\) => ipcRenderer\.invoke\("models:list", payload\)/);
+  assert.match(content, /onOpenConversation:\s*\(listener: \(conversationId: string\) => void\) => \{/);
+  assert.match(content, /ipcRenderer\.on\("app:openConversation", wrapped\)/);
 });
 
 test("ipc registers openai-codex auth and dictation handlers", () => {
@@ -36,4 +38,7 @@ test("ipc registers openai-codex auth and dictation handlers", () => {
   assert.match(content, /speechTranscriptionService\.startNativeDictation\(\)/);
   assert.match(content, /speechTranscriptionService\.finishNativeDictation\(\)/);
   assert.match(content, /agentRuntime\.refreshProviderSettings\(\);/);
+  assert.match(content, /notificationService\.notify\("lilto - 返答が届きました", preview, \{/);
+  assert.match(content, /conversationId,/);
+  assert.match(content, /notificationService\.notify\("lilto - スケジュール通知", message, \{/);
 });

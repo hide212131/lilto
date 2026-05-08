@@ -3,6 +3,10 @@ import { deflateSync } from "node:zlib";
 import { createCountBadgeBitmap } from "./badge-bitmap";
 import { resolveTrayIcon } from "./icon-assets";
 
+type NotificationOptions = {
+  onClick?: () => void;
+};
+
 /**
  * マスコット（緑の電球キャラクター）の顔を模した PNG を生成する。
  * 緑の円に白目・黒目・口を描画したトレイアイコン用。
@@ -135,9 +139,13 @@ export class NotificationService {
   /**
    * AIの返答が届いたことをデスクトップ通知で知らせる。
    */
-  notify(title: string, body: string): void {
+  notify(title: string, body: string, options?: NotificationOptions): void {
     if (!Notification.isSupported()) return;
-    new Notification({ title, body }).show();
+    const notification = new Notification({ title, body });
+    if (options?.onClick) {
+      notification.on("click", options.onClick);
+    }
+    notification.show();
   }
 
   /**

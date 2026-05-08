@@ -192,7 +192,19 @@ if (hasSingleInstanceLock) {
             }
             broadcastSchedulerNotification(event);
             if (!shouldDeferVisibleNotification && BrowserWindow.getFocusedWindow() === null) {
-              notificationService.notify("lilto - スケジュール通知", event.message);
+              notificationService.notify("lilto - スケジュール通知", event.message, {
+                onClick: () => {
+                  for (const window of BrowserWindow.getAllWindows()) {
+                    if (window.isMinimized()) {
+                      window.restore();
+                    } else if (!window.isVisible()) {
+                      window.show();
+                    }
+                    window.focus();
+                    window.webContents.send("app:openConversation", event.sessionId);
+                  }
+                }
+              });
               notificationService.incrementBadge();
             }
           });
@@ -200,7 +212,19 @@ if (hasSingleInstanceLock) {
         }
         broadcastSchedulerNotification(event);
         if (!shouldDeferVisibleNotification && BrowserWindow.getFocusedWindow() === null) {
-          notificationService.notify("lilto - スケジュール通知", event.message);
+          notificationService.notify("lilto - スケジュール通知", event.message, {
+            onClick: () => {
+              for (const window of BrowserWindow.getAllWindows()) {
+                if (window.isMinimized()) {
+                  window.restore();
+                } else if (!window.isVisible()) {
+                  window.show();
+                }
+                window.focus();
+                window.webContents.send("app:openConversation", event.sessionId);
+              }
+            }
+          });
           notificationService.incrementBadge();
         }
       }

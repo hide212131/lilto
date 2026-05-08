@@ -34,10 +34,10 @@ contextBridge.exposeInMainWorld("lilto", {
     | { ok: true }
     | { ok: false; error: { code: string; message: string } }
   > => ipcRenderer.invoke("scheduler:delete", { id }),
-  showSchedulerNotification: async (message: string): Promise<
+  showSchedulerNotification: async (message: string, conversationId?: string | null): Promise<
     | { ok: true }
     | { ok: false; error: { code: string; message: string } }
-  > => ipcRenderer.invoke("scheduler:showNotification", { message }),
+  > => ipcRenderer.invoke("scheduler:showNotification", { message, conversationId }),
   listPlugins: async (payload?: { forceRemoteSync?: boolean }) => ipcRenderer.invoke("plugins:list", payload ?? {}),
   readPlugin: async (payload: { marketplacePath: string; pluginName: string }) =>
     ipcRenderer.invoke("plugins:read", payload),
@@ -76,5 +76,10 @@ contextBridge.exposeInMainWorld("lilto", {
     const wrapped = () => listener();
     ipcRenderer.on("app:focusComposer", wrapped);
     return () => ipcRenderer.removeListener("app:focusComposer", wrapped);
+  },
+  onOpenConversation: (listener: (conversationId: string) => void) => {
+    const wrapped = (_event: unknown, conversationId: string) => listener(conversationId);
+    ipcRenderer.on("app:openConversation", wrapped);
+    return () => ipcRenderer.removeListener("app:openConversation", wrapped);
   }
 });

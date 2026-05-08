@@ -1,5 +1,17 @@
 # Lessons
 
+## 2026-05-09 scheduler notification click parity
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| scheduler 通知も通常の assistant 返答通知と同じく、OS 通知 click で対象会話へ戻るよう main/preload/renderer を揃えた。 | 同じ「会話に紐づく通知」でも、通常返答は `conversationId` を持っていた一方、scheduler 側は表示だけで click 復帰用の識別子がなく、UX が経路ごとに分裂していた。 | 会話単位の通知経路が複数ある場合は、表示文面ではなく「復帰用 identifier を click handler へ渡して同じ reopen flow に乗るか」で実装を揃える。UI 側の reopen helper は local session id だけでなく backend session id も受けられるようにする。 |
+
+## 2026-05-09 desktop notification conversation routing
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| ウインドウ非表示中の assistant 応答通知に `conversationId` を持たせ、通知クリックで対象会話を再表示する経路を main→preload→renderer へ追加した。 | 通知本文だけを出して click の復帰先識別子を一緒に運ばないと、「返答が来た」は分かってもどの会話を開くべきか renderer 側で復元できない。 | 会話単位の OS 通知を足すときは、表示文面とは別に復帰用の stable identifier を通知発火時点で確定し、click handler でウインドウ再表示と対象会話選択を同じ変更で配線する。 |
+
 ## 2026-05-08 chat history menu button sizing
 
 | Change | Mistake/Context | Rule to repeat |

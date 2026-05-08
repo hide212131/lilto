@@ -200,7 +200,7 @@ declare global {
         | { ok: true }
         | { ok: false; error: { code: string; message: string } }
       >;
-      showSchedulerNotification: (message: string) => Promise<
+      showSchedulerNotification: (message: string, conversationId?: string | null) => Promise<
         | { ok: true }
         | { ok: false; error: { code: string; message: string } }
       >;
@@ -247,6 +247,7 @@ declare global {
       onSchedulerNotification: (listener: (event: SchedulerNotificationEvent) => void) => () => void;
       onAuthStateChanged: (listener: (state: AuthState) => void) => () => void;
       onFocusComposer: (listener: () => void) => () => void;
+      onOpenConversation: (listener: (conversationId: string) => void) => () => void;
     };
   }
 }
