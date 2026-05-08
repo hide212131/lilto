@@ -1,5 +1,11 @@
 # Lessons
 
+## 2026-05-09 scheduler result assistant rendering parity
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| scheduler 実行結果の会話内表示を `system` ではなく通常の `assistant` メッセージ経路へ揃え、マスコット付きの返答 UI で出るようにした。 | 「通知由来の文面だから system でよい」とすると、同じ assistant からの案内でも scheduler 経路だけ見た目と操作感が分裂する。特に conditional follow-up の最終文面は普段の返答と同格なのに、role の違いだけで UI が崩れる。 | 会話に見せる assistant 文面を追加する時は、発火元が scheduler や notification でも「誰の発話として見せたいか」で role を決める。通常返答と同じ体験にしたい文面は `assistant` へ載せ、`system` は内部状態や補助情報だけに限定する。 |
+
 ## 2026-05-09 scheduler notification click parity
 
 | Change | Mistake/Context | Rule to repeat |

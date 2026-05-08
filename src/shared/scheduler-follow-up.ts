@@ -3,7 +3,7 @@ import type { SchedulerNotificationEvent } from "./scheduler";
 export type SchedulerNotificationDecision = {
   shouldNotify: boolean;
   userMessage: string;
-  role?: "system" | "error";
+  role?: "assistant" | "error";
 };
 
 export function shouldRunConditionalSchedulerFollowUp(event: SchedulerNotificationEvent): boolean {

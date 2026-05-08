@@ -37,6 +37,9 @@ test("renderer app は backendSessionId または conversationId で scheduler n
   assert.match(content, /window\.lilto\.submitPrompt/);
   assert.match(content, /entry\.backendSessionId === conversationId/);
   assert.match(content, /window\.lilto\.showSchedulerNotification\(userMessage, conversationId\)/);
+  assert.match(content, /role: "assistant",\s*text: notificationText/);
+  assert.match(content, /role\?: "assistant" \| "error"/);
+  assert.match(content, /role: decision\.role \?\? "assistant"/);
 });
 
 test("settings-modal は Schedules タブから schedule 一覧取得と削除を行える", () => {

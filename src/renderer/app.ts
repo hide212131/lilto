@@ -665,7 +665,7 @@ export class LiltApp extends LitElement {
       : event.message;
     this._appendMessageToSession(targetSession.id, {
       id: this._nextMessageId(),
-      role: "system",
+      role: "assistant",
       text: notificationText
     });
 
@@ -762,7 +762,7 @@ export class LiltApp extends LitElement {
 
   private async _notifySchedulerDecision(
     conversationId: string,
-    decision: { shouldNotify: boolean; userMessage: string; role?: "system" | "error" }
+    decision: { shouldNotify: boolean; userMessage: string; role?: "assistant" | "error" }
   ) {
     if (!decision.shouldNotify) {
       return;
@@ -775,7 +775,7 @@ export class LiltApp extends LitElement {
 
     this._appendMessageToSession(conversationId, {
       id: this._nextMessageId(),
-      role: decision.role ?? "system",
+      role: decision.role ?? "assistant",
       text: userMessage
     });
     await window.lilto.showSchedulerNotification(userMessage, conversationId);
