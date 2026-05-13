@@ -12,9 +12,15 @@ contextBridge.exposeInMainWorld("lilto", {
     text: string,
     conversationId?: string | null,
     backendSessionId?: string | null,
-    options?: { silent?: boolean }
+    options?: { silent?: boolean; freshContext?: boolean }
   ) =>
-    ipcRenderer.invoke("agent:submitPrompt", { text, conversationId, backendSessionId, silent: options?.silent === true }),
+    ipcRenderer.invoke("agent:submitPrompt", {
+      text,
+      conversationId,
+      backendSessionId,
+      silent: options?.silent === true,
+      freshContext: options?.freshContext === true
+    }),
   abortPrompt: async () => ipcRenderer.invoke("agent:abort"),
   getAgentsFile: async () => ipcRenderer.invoke("app:getAgentsFile"),
   openAgentsFile: async () => ipcRenderer.invoke("app:openAgentsFile"),

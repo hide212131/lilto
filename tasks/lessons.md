@@ -1,5 +1,11 @@
 # Lessons
 
+## 2026-05-13 scheduler follow-up fresh context isolation
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| cron/scheduler の follow-up 実行だけ `freshContext` を通し、既存 conversation thread の resume・cache 再利用・thread 再バインドを避けるようにした。 | `backendSessionId` を渡さないだけでは不十分で、`conversationId` ベースの thread map と session cache が残っていると、同一会話の follow-up が結局既存文脈や直前の detached thread を再利用してしまう。さらに新規 thread を会話へ再バインドすると、通常会話の resume 先まで scheduler 用 thread にすり替わる。 | 既存会話に結果だけを書き戻しつつ LLM 実行を新規文脈にしたいときは、「resume 識別子を渡さない」だけで済ませず、runtime で cache 無効化・thread map 無視・再バインド抑止を同じフラグで通す。 |
+
 ## 2026-05-09 scheduler result assistant rendering parity
 
 | Change | Mistake/Context | Rule to repeat |

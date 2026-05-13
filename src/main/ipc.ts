@@ -131,6 +131,9 @@ export function registerAgentIpcHandlers({
     const silent = typeof (payload as { silent?: unknown }).silent === "boolean"
       ? (payload as { silent: boolean }).silent
       : false;
+    const freshContext = typeof (payload as { freshContext?: unknown }).freshContext === "boolean"
+      ? (payload as { freshContext: boolean }).freshContext
+      : false;
     const text = await normalizePromptPluginMentions(originalText, pluginService);
     const requestId = randomUUID();
     if (!silent) {
@@ -142,6 +145,7 @@ export function registerAgentIpcHandlers({
         requestId,
         conversationId,
         backendSessionId,
+        freshContext,
         onLoopEvent: (event) => {
           if (!silent) {
             broadcastLoopEvent(event);

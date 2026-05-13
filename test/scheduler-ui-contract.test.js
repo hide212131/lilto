@@ -7,6 +7,7 @@ test("preload は scheduler notification listener を公開する", () => {
   assert.match(content, /onSchedulerNotification:\s*\(listener/);
   assert.match(content, /ipcRenderer\.on\(SCHEDULER_NOTIFICATION_CHANNEL, wrapped\)/);
   assert.match(content, /silent: options\?\.silent === true/);
+  assert.match(content, /freshContext: options\?\.freshContext === true/);
   assert.match(content, /backendSessionId/);
   assert.match(content, /listSchedules:\s*async \(\)/);
   assert.match(content, /ipcRenderer\.invoke\("scheduler:list"\)/);
@@ -29,6 +30,7 @@ test("renderer app は backendSessionId または conversationId で scheduler n
   assert.match(content, /_runSchedulerFollowUp/);
   assert.match(content, /_runConditionalSchedulerFollowUp/);
   assert.match(content, /silent: true/);
+  assert.match(content, /freshContext: true/);
   assert.match(content, /parseSchedulerNotificationDecision/);
   assert.match(content, /shouldRunConditionalSchedulerFollowUp/);
   assert.match(content, /buildConditionalSchedulerFollowUpPrompt/);

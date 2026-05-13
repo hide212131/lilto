@@ -152,7 +152,7 @@ declare global {
         text: string,
         conversationId?: string | null,
         backendSessionId?: string | null,
-        options?: { silent?: boolean }
+        options?: { silent?: boolean; freshContext?: boolean }
       ) => Promise<
         // 既存契約との互換性維持: submitPrompt の戻り値は変更しない。
         | { ok: true; response: { text: string } }

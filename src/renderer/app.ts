@@ -687,7 +687,8 @@ export class LiltApp extends LitElement {
       const result = await window.lilto.submitPrompt(
         this._buildSchedulerFollowUpPrompt(event),
         conversationId,
-        session?.backendSessionId ?? null
+          session?.backendSessionId ?? null,
+          { freshContext: true }
       );
       if (result.ok) {
         this._updateSessionMessage(conversationId, pendingMessageId, {
@@ -720,7 +721,7 @@ export class LiltApp extends LitElement {
         buildConditionalSchedulerFollowUpPrompt(event),
         conversationId,
         session?.backendSessionId ?? null,
-        { silent: true }
+          { silent: true, freshContext: true }
       );
       if (result.ok) {
         const decision = parseSchedulerNotificationDecision(result.response.text);

@@ -406,6 +406,52 @@ test("backendSessionId が渡されれば再起動後でも既存 thread を res
   assert.equal(calls[0].schedulerSessionId, "thread-restored-1");
 });
 
+test("freshContext では既存 thread を resume せず会話への再バインドもしない", async () => {
+  const calls = [];
+  const runtime = new AgentRuntime({
+    authService: createAuthService("authenticated"),
+    createSession: async (options) => {
+      calls.push(options);
+      return {
+        id: "thread-fresh-1",
+        async runStreamed() {
+          async function* stream() {
+            yield { type: "thread.started", thread_id: "thread-fresh-1" };
+            yield { type: "item.completed", item: { id: "m1", type: "agent_message", text: "fresh" } };
+          }
+          return { events: stream() };
+        }
+      };
+    },
+    logger: { info() {}, error() {} }
+  });
+
+  const first = await runtime.submitPrompt("again", createProviderSettings(), {
+    requestId: "req-1",
+    conversationId: "conv-1",
+    backendSessionId: "thread-restored-1",
+    freshContext: true
+  });
+  const second = await runtime.submitPrompt("again-2", createProviderSettings(), {
+    requestId: "req-2",
+    conversationId: "conv-1",
+    freshContext: true
+  });
+  const resumed = await runtime.submitPrompt("resume", createProviderSettings(), {
+    requestId: "req-3",
+    conversationId: "conv-1",
+    backendSessionId: "thread-restored-1"
+  });
+
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  assert.equal(resumed.ok, true);
+  assert.equal(calls.length, 3);
+  assert.equal(calls[0].threadId, undefined);
+  assert.equal(calls[1].threadId, undefined);
+  assert.equal(calls[2].threadId, "thread-restored-1");
+});
+
 test("refreshPlugins 後は次回送信で session を再作成する", async () => {
   let sessionCount = 0;
   const runtime = new AgentRuntime({

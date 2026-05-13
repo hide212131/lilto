@@ -637,12 +637,14 @@ export class AgentRuntime {
     cwd?: string;
     conversationId?: string;
     backendSessionId?: string;
+    freshContext?: boolean;
     threadOptions: SessionThreadOptions;
   }): Promise<CodexSession> {
     const cwd = options.cwd ?? process.cwd();
-    const threadId =
-      (options.conversationId ? this.conversationThreads.get(options.conversationId) : undefined)
-      ?? options.backendSessionId;
+    const threadId = options.freshContext
+      ? undefined
+      : (options.conversationId ? this.conversationThreads.get(options.conversationId) : undefined)
+        ?? options.backendSessionId;
     const signature = JSON.stringify({
       conversationId: options.conversationId ?? "default",
       apiKey: options.apiKey ?? "",
@@ -650,11 +652,14 @@ export class AgentRuntime {
       baseUrl: options.model?.baseUrl ?? "",
       sandboxMode: options.threadOptions.sandboxMode,
       config: options.threadOptions.config ?? null,
-      cwd
+      cwd,
+      freshContext: options.freshContext === true
     });
-    const existing = this.sessionCache.get(signature);
-    if (existing) {
-      return existing;
+    if (!options.freshContext) {
+      const existing = this.sessionCache.get(signature);
+      if (existing) {
+        return existing;
+      }
     }
 
     const thread = await this.createSession({
@@ -671,7 +676,9 @@ export class AgentRuntime {
       config: options.threadOptions.config
     });
     const session = { signature, thread };
-    this.sessionCache.set(signature, session);
+    if (!options.freshContext) {
+      this.sessionCache.set(signature, session);
+    }
     return session;
   }
 
@@ -684,11 +691,16 @@ export class AgentRuntime {
       textOutput: string;
       thinkingActive: Set<string>;
     },
-    hooks?: { requestId: string; conversationId?: string; onLoopEvent?: (event: AgentLoopEvent) => void }
+    hooks?: {
+      requestId: string;
+      conversationId?: string;
+      freshContext?: boolean;
+      onLoopEvent?: (event: AgentLoopEvent) => void;
+    }
   ): { textOutput: string; fatalError?: string } {
     if (event.type === "thread.started") {
       const started = event as { thread_id: string };
-      if (hooks?.conversationId) {
+      if (hooks?.conversationId && !hooks.freshContext) {
         this.conversationThreads.set(hooks.conversationId, started.thread_id);
       }
       hooks?.onLoopEvent?.({
@@ -793,11 +805,19 @@ export class AgentRuntime {
 
   private async runSessionPrompt(
     text: string,
-    options: { apiKey: string | null; model?: RuntimeModel; cwd?: string; conversationId?: string; backendSessionId?: string },
+    options: {
+      apiKey: string | null;
+      model?: RuntimeModel;
+      cwd?: string;
+      conversationId?: string;
+      backendSessionId?: string;
+      freshContext?: boolean;
+    },
     providerSettings: ProviderSettings,
     hooks?: {
       requestId: string;
       conversationId?: string;
+      freshContext?: boolean;
       onLoopEvent?: (event: AgentLoopEvent) => void;
       mode?: "default" | "heartbeat";
     }
@@ -868,6 +888,7 @@ export class AgentRuntime {
       requestId: string;
       conversationId?: string;
       backendSessionId?: string;
+      freshContext?: boolean;
       onLoopEvent?: (event: AgentLoopEvent) => void;
       mode?: "default" | "heartbeat";
     }
@@ -957,7 +978,14 @@ export class AgentRuntime {
 
         return await this.runSessionPrompt(
           text,
-          { apiKey, model, conversationId: hooks?.conversationId, backendSessionId: hooks?.backendSessionId, ...runOptionsBase },
+          {
+            apiKey,
+            model,
+            conversationId: hooks?.conversationId,
+            backendSessionId: hooks?.backendSessionId,
+            freshContext: hooks?.freshContext,
+            ...runOptionsBase
+          },
           providerSettings,
           hooks
         );
@@ -983,6 +1011,7 @@ export class AgentRuntime {
           model: buildOauthModel(providerSettings),
           conversationId: hooks?.conversationId,
           backendSessionId: hooks?.backendSessionId,
+          freshContext: hooks?.freshContext,
           ...runOptionsBase
         },
         providerSettings,
