@@ -48,6 +48,7 @@ function createProviderSettings(overrides = {}) {
 function createService({ providerSettings, runtimeResult, listSchedules = [] }) {
   const notifications = [];
   const schedulerCalls = [];
+  const runtimeCalls = [];
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "lilto-heartbeat-"));
   const service = new HeartbeatAssistantService({
     logger: { info() {}, error() {} },
@@ -70,7 +71,8 @@ function createService({ providerSettings, runtimeResult, listSchedules = [] }) 
       async start() {}
     },
     agentRuntime: {
-      async submitPrompt() {
+      async submitPrompt(...args) {
+        runtimeCalls.push(args);
         return runtimeResult();
       }
     },
@@ -89,7 +91,7 @@ function createService({ providerSettings, runtimeResult, listSchedules = [] }) 
     },
     getFocusedWindow: () => null
   });
-  return { service, notifications, schedulerCalls, userDataDir };
+  return { service, notifications, schedulerCalls, runtimeCalls, userDataDir };
 }
 
 test("syncManagedSchedule は 30 分既定の internal schedule を作成する", async () => {
@@ -160,6 +162,32 @@ test("runPatrol は HEARTBEAT_OK のとき user-facing notification を追加せ
   assert.equal(state.version, 1);
   assert.equal(typeof state.lastChecks.patrol, "number");
   assert.equal(service.getStatus().level, "ok");
+});
+
+test("runPatrol は heartbeat session に結果を書き戻しつつ model 実行は fresh context で行う", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "lilto-heartbeat-"));
+  const heartbeatPath = path.join(tempDir, "HEARTBEAT.md");
+  fs.writeFileSync(heartbeatPath, "check quietly", "utf8");
+  const providerSettings = createProviderSettings({
+    heartbeatSettings: {
+      enabled: true,
+      filePath: heartbeatPath,
+      intervalMinutes: 30,
+      showDesktopNotifications: true
+    }
+  });
+  const { service, runtimeCalls } = createService({
+    providerSettings,
+    runtimeResult: async () => ({ ok: true, text: "HEARTBEAT_OK" })
+  });
+
+  await service.runPatrol();
+
+  assert.equal(runtimeCalls.length, 1);
+  const [_prompt, _settings, hooks] = runtimeCalls[0];
+  assert.match(hooks.conversationId, new RegExp(`^${HEARTBEAT_ASSISTANT_SESSION_PREFIX}`));
+  assert.equal(hooks.freshContext, true);
+  assert.equal(hooks.mode, "heartbeat");
 });
 
 test("runPatrol は stable key で duplicate finding の再通知を抑制する", async () => {

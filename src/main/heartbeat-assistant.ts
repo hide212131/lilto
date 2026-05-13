@@ -400,6 +400,7 @@ export class HeartbeatAssistantService {
     const result = await this.agentRuntime.submitPrompt(prompt, settings, {
       requestId: `heartbeat-${Date.now()}`,
       conversationId: sessionId,
+      freshContext: true,
       mode: "heartbeat"
     });
 

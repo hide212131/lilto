@@ -1,5 +1,11 @@
 # Lessons
 
+## 2026-05-13 heartbeat patrol fresh context parity
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| heartbeat assistant の巡回実行でも `freshContext` を渡し、heartbeat session へ結果だけ書き戻しつつ LLM 実行は毎回新規 thread にした。 | scheduler follow-up だけ fresh context にしても、同じ「定期実行の裏側でモデルを呼ぶ」heartbeat 巡回が固定 conversationId のまま thread を再利用していると、古い巡回文脈が積み上がる経路が残る。 | 定期実行ジョブで会話 UI 上の grouping と LLM 実行文脈を分けたい場合は、scheduler だけでなく heartbeat など同種のバックグラウンド実行も同じ fresh-context 方針で揃える。 |
+
 ## 2026-05-13 scheduler follow-up fresh context isolation
 
 | Change | Mistake/Context | Rule to repeat |
