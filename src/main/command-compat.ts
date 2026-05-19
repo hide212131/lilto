@@ -26,6 +26,14 @@ export type CliInvocation = {
   source: CliInvocationSource;
 };
 
+function resolveNodeExecutable(): string {
+  const npmNodeExecPath = process.env.npm_node_execpath?.trim();
+  if (npmNodeExecPath) {
+    return npmNodeExecPath;
+  }
+  return process.execPath;
+}
+
 function hasExecutableSuffix(command: string): boolean {
   const lowered = command.toLowerCase();
   return lowered.endsWith(".cmd") || lowered.endsWith(".exe") || lowered.endsWith(".bat") || lowered.endsWith(".ps1");
@@ -212,10 +220,20 @@ export function resolveCliInvocation(
         source: "local-bin"
       };
     }
+
+    const bundledBin = resolveBundledCodexBinPath(platform, baseDir, pathExists);
+    if (bundledBin && !isWindowsPlatform(platform)) {
+      return {
+        command: bundledBin,
+        args: normalizedArgs,
+        source: "local-bin"
+      };
+    }
+
     const bundledScript = resolveBundledCodexScriptPath(platform, baseDir, pathExists);
     if (bundledScript) {
       return {
-        command: process.execPath,
+        command: resolveNodeExecutable(),
         args: [bundledScript, ...normalizedArgs],
         env: {
           ELECTRON_RUN_AS_NODE: "1"
@@ -224,7 +242,6 @@ export function resolveCliInvocation(
       };
     }
 
-    const bundledBin = resolveBundledCodexBinPath(platform, baseDir, pathExists);
     if (bundledBin) {
       return {
         command: bundledBin,

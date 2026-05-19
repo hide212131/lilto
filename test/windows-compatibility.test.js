@@ -41,19 +41,30 @@ test("PowerShell 実行ポリシーエラーを検出する", () => {
 });
 
 test("Windows の codex は .cmd ラッパーより同梱 package script を優先して解決する", () => {
-  const invocation = resolveCliInvocation("codex", ["app-server", "--listen", "stdio://"], {
-    platform: "win32",
-    baseDir: "C:/tmp/lilto",
-    pathExists: (filePath) =>
-      filePath === "C:\\tmp\\lilto\\node_modules\\.bin\\codex.cmd" ||
-      filePath === "C:\\tmp\\lilto\\node_modules\\@openai\\codex\\bin\\codex.js"
-  });
+  const previousNodeExecPath = process.env.npm_node_execpath;
+  process.env.npm_node_execpath = "C:\\Program Files\\nodejs\\node.exe";
 
-  assert.equal(invocation.command, process.execPath);
-  assert.equal(invocation.args[0], "C:\\tmp\\lilto\\node_modules\\@openai\\codex\\bin\\codex.js");
-  assert.deepEqual(invocation.args.slice(1), ["app-server", "--listen", "stdio://"]);
-  assert.deepEqual(invocation.env, { ELECTRON_RUN_AS_NODE: "1" });
-  assert.equal(invocation.source, "package-script");
+  try {
+    const invocation = resolveCliInvocation("codex", ["app-server", "--listen", "stdio://"], {
+      platform: "win32",
+      baseDir: "C:/tmp/lilto",
+      pathExists: (filePath) =>
+        filePath === "C:\\tmp\\lilto\\node_modules\\.bin\\codex.cmd" ||
+        filePath === "C:\\tmp\\lilto\\node_modules\\@openai\\codex\\bin\\codex.js"
+    });
+
+    assert.equal(invocation.command, "C:\\Program Files\\nodejs\\node.exe");
+    assert.equal(invocation.args[0], "C:\\tmp\\lilto\\node_modules\\@openai\\codex\\bin\\codex.js");
+    assert.deepEqual(invocation.args.slice(1), ["app-server", "--listen", "stdio://"]);
+    assert.deepEqual(invocation.env, { ELECTRON_RUN_AS_NODE: "1" });
+    assert.equal(invocation.source, "package-script");
+  } finally {
+    if (previousNodeExecPath === undefined) {
+      delete process.env.npm_node_execpath;
+    } else {
+      process.env.npm_node_execpath = previousNodeExecPath;
+    }
+  }
 });
 
 test("codex package script が無い場合は node_modules/.bin ラッパーへフォールバックする", () => {
@@ -86,6 +97,21 @@ test("packaged macOS app では unpacked codex binary を直接使う", () => {
   assert.deepEqual(invocation.args, ["app-server", "--listen", "stdio://"]);
   assert.equal(invocation.env?.CODEX_MANAGED_BY_NPM, "1");
   assert.match((invocation.env?.PATH ?? "").replace(/\\/g, "/"), /aarch64-apple-darwin\/path/);
+  assert.equal(invocation.source, "local-bin");
+});
+
+test("開発中の macOS では codex package script より node_modules/.bin を優先する", () => {
+  const invocation = resolveCliInvocation("codex", ["app-server", "--listen", "stdio://"], {
+    platform: "darwin",
+    arch: "arm64",
+    baseDir: "/tmp/lilto",
+    pathExists: (filePath) =>
+      filePath === "/tmp/lilto/node_modules/.bin/codex" ||
+      filePath === "/tmp/lilto/node_modules/@openai/codex/bin/codex.js"
+  });
+
+  assert.equal(invocation.command, "/tmp/lilto/node_modules/.bin/codex");
+  assert.deepEqual(invocation.args, ["app-server", "--listen", "stdio://"]);
   assert.equal(invocation.source, "local-bin");
 });
 

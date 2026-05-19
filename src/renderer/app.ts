@@ -30,6 +30,8 @@ const DEFAULT_SIDEBAR_WIDTH = 272;
 const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 480;
 
+type StoredSession = Partial<Session> & Pick<Session, "id" | "title">;
+
 @customElement("lilt-app")
 export class LiltApp extends LitElement {
   @property({ type: Object }) authState: AuthState | null = null;
@@ -237,7 +239,8 @@ export class LiltApp extends LitElement {
     try {
       const raw = localStorage.getItem(SESSIONS_STORAGE_KEY);
       if (raw) {
-        this.sessions = JSON.parse(raw) as Session[];
+        const parsed = JSON.parse(raw) as StoredSession[];
+        this.sessions = this._sortSessions(parsed.map((session) => this._normalizeSession(session)));
       }
     } catch {
       this.sessions = [];
@@ -246,10 +249,64 @@ export class LiltApp extends LitElement {
 
   private _saveSessions() {
     try {
-      localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(this.sessions));
+      const sortedSessions = this._sortSessions(this.sessions);
+      this.sessions = sortedSessions;
+      localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(sortedSessions));
     } catch {
       // ストレージ容量超過などは無視
     }
+  }
+
+  private _normalizeSession(session: StoredSession): Session {
+    const createdAt = typeof session.createdAt === "number" ? session.createdAt : Date.now();
+    const updatedAt = typeof session.updatedAt === "number" ? session.updatedAt : createdAt;
+
+    return {
+      id: session.id,
+      title: session.title,
+      createdAt,
+      updatedAt,
+      hasUnread: session.hasUnread === true,
+      backendSessionId: typeof session.backendSessionId === "string" ? session.backendSessionId : undefined,
+      messages: Array.isArray(session.messages) ? session.messages : []
+    };
+  }
+
+  private _sortSessions(sessions: Session[]): Session[] {
+    return [...sessions].sort((left, right) => {
+      if (right.updatedAt !== left.updatedAt) {
+        return right.updatedAt - left.updatedAt;
+      }
+      return right.createdAt - left.createdAt;
+    });
+  }
+
+  private _updateSession(sessionId: string, mutate: (session: Session) => Session): Session | null {
+    let updatedSession: Session | null = null;
+    this.sessions = this.sessions.map((session) => {
+      if (session.id !== sessionId) {
+        return session;
+      }
+      updatedSession = mutate(session);
+      return updatedSession;
+    });
+    if (!updatedSession) {
+      return null;
+    }
+    this._saveSessions();
+    return updatedSession;
+  }
+
+  private _shouldMarkSessionUnread(sessionId: string, role: Message["role"]): boolean {
+    return sessionId !== this._currentSessionId && (role === "assistant" || role === "system" || role === "error");
+  }
+
+  private _shouldTouchSessionForMessagePatch(patch: Partial<Message>): boolean {
+    return Object.prototype.hasOwnProperty.call(patch, "text") || Object.prototype.hasOwnProperty.call(patch, "role");
+  }
+
+  private _markSessionRead(sessionId: string): Session | null {
+    return this._updateSession(sessionId, (session) => ({ ...session, hasUnread: false }));
   }
 
   private _loadSidebarWidth() {
@@ -293,15 +350,18 @@ export class LiltApp extends LitElement {
       // 既存セッションを更新
       this.sessions = this.sessions.map((s) =>
         s.id === this._currentSessionId
-          ? { ...s, title, messages: [...this.messages] }
+          ? { ...s, title, messages: [...this.messages], updatedAt: Date.now(), hasUnread: false }
           : s
       );
     } else {
       // 新しいセッションを追加
+      const now = Date.now();
       const newSession: Session = {
-        id: `session-${Date.now()}`,
+        id: `session-${now}`,
         title,
-        createdAt: Date.now(),
+        createdAt: now,
+        updatedAt: now,
+        hasUnread: false,
         messages: [...this.messages]
       };
       this._currentSessionId = newSession.id;
@@ -448,10 +508,18 @@ export class LiltApp extends LitElement {
       return;
     }
 
+    const targetSessionId = session.id;
     this._saveCurrentSession();
-    this.messages = [...session.messages];
-    this._currentSessionId = session.id;
-    this.activeSessionId = session.id;
+    const nextSession = this._markSessionRead(targetSessionId)
+      ?? this.sessions.find((entry) => entry.id === targetSessionId)
+      ?? null;
+    if (!nextSession) {
+      return;
+    }
+
+    this.messages = [...nextSession.messages];
+    this._currentSessionId = nextSession.id;
+    this.activeSessionId = nextSession.id;
     this.loopState = createInitialLoopState();
     this._resetForegroundRequestState();
   }
@@ -952,56 +1020,61 @@ export class LiltApp extends LitElement {
   }
 
   private _appendMessageToSession(sessionId: string, message: Message): string {
-    this.sessions = this.sessions.map((session) =>
-      session.id === sessionId
-        ? { ...session, messages: [...session.messages, message] }
-        : session
-    );
+    const shouldMarkUnread = this._shouldMarkSessionUnread(sessionId, message.role);
+    this._updateSession(sessionId, (session) => ({
+      ...session,
+      messages: [...session.messages, message],
+      updatedAt: Date.now(),
+      hasUnread: shouldMarkUnread ? true : session.hasUnread
+    }));
 
     if (this._currentSessionId === sessionId) {
       this.messages = [...this.messages, message];
     }
 
-    this._saveSessions();
     return message.id;
   }
 
   private _updateSessionMessage(sessionId: string, messageId: string, patch: Partial<Message>) {
-    this.sessions = this.sessions.map((session) =>
-      session.id === sessionId
-        ? {
-          ...session,
-          messages: session.messages.map((message) =>
-            message.id === messageId ? { ...message, ...patch } : message
-          )
+    this._updateSession(sessionId, (session) => {
+      let nextRole: Message["role"] | null = null;
+      const messages = session.messages.map((message) => {
+        if (message.id !== messageId) {
+          return message;
         }
-        : session
-    );
+        const nextMessage = { ...message, ...patch };
+        nextRole = nextMessage.role;
+        return nextMessage;
+      });
+
+      const shouldTouch = this._shouldTouchSessionForMessagePatch(patch);
+      const shouldMarkUnread = nextRole ? this._shouldMarkSessionUnread(sessionId, nextRole) && shouldTouch : false;
+
+      return {
+        ...session,
+        messages,
+        updatedAt: shouldTouch ? Date.now() : session.updatedAt,
+        hasUnread: shouldMarkUnread ? true : session.hasUnread
+      };
+    });
 
     if (this._currentSessionId === sessionId) {
       this.messages = this.messages.map((message) =>
         message.id === messageId ? { ...message, ...patch } : message
       );
     }
-
-    this._saveSessions();
   }
 
   private _removeSessionMessage(sessionId: string, messageId: string) {
-    this.sessions = this.sessions.map((session) =>
-      session.id === sessionId
-        ? {
-          ...session,
-          messages: session.messages.filter((message) => message.id !== messageId)
-        }
-        : session
-    );
+    this._updateSession(sessionId, (session) => ({
+      ...session,
+      messages: session.messages.filter((message) => message.id !== messageId),
+      updatedAt: Date.now()
+    }));
 
     if (this._currentSessionId === sessionId) {
       this._removePendingMessage(messageId);
     }
-
-    this._saveSessions();
   }
 
   private _bindBackendSession(conversationId: string, backendSessionId: string) {
@@ -1034,6 +1107,8 @@ export class LiltApp extends LitElement {
       id: sessionId,
       title: dateKey ? buildHeartbeatAssistantSessionTitle(dateKey) : "Heartbeat assistant",
       createdAt: Date.now(),
+      updatedAt: Date.now(),
+      hasUnread: false,
       messages: []
     };
     this.sessions = [session, ...this.sessions];

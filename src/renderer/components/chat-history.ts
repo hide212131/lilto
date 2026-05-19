@@ -103,6 +103,14 @@ export class LiltChatHistory extends LitElement {
       font-size: 11px;
       color: var(--muted, #6b7280);
     }
+    .unread-dot {
+      flex-shrink: 0;
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: #2f6df6;
+      box-shadow: 0 0 0 2px #ffffff;
+    }
     .session-title-input {
       font-size: 14px;
       font-weight: 500;
@@ -189,7 +197,7 @@ export class LiltChatHistory extends LitElement {
   private _renderItem(session: Session) {
     const isActive = session.id === this.activeSessionId;
     const isEditing = this._editingId === session.id;
-    const date = new Date(session.createdAt);
+    const date = new Date(session.updatedAt);
     const dateLabel = this._formatDate(date);
     const menuOpen = this._menuOpenId === session.id;
     return html`
@@ -213,6 +221,9 @@ export class LiltChatHistory extends LitElement {
             `
           }
         </div>
+        ${session.hasUnread && !isActive && !isEditing
+          ? html`<span class="unread-dot" aria-label="未読"></span>`
+          : ""}
         ${!isEditing ? html`
           <button
             class="menu-btn ${menuOpen ? "open" : ""}"

@@ -88,7 +88,7 @@
     ]
   },
   "dependencies": {
-    "@openai/codex-sdk": "^0.117.0",
+    "@openai/codex-sdk": "^0.131.0",
     "marked": "^17.0.4",
     "skills": "^1.4.4"
   },

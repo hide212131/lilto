@@ -1,5 +1,17 @@
 # Lessons
 
+## 2026-05-20 OpenSpec delta spec sync completeness
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| `sort-session-history-and-unread-indicator` の delta spec sync では、一覧ソートと未読表示の見出しだけでなく、legacy metadata fallback と active session を未読化しない境界条件まで現行 spec へ同期する必要があった。 | OpenSpec の archive/sync で大きい要件名だけ移すと、既存データ互換や active session の除外条件のような回帰防止シナリオが抜け、後続 change が仕様上の境界を読み落とす。 | OpenSpec の delta spec sync では、要件タイトルだけでなく fallback・除外条件・状態遷移解除条件まで change spec から現行 spec へ一緒に移す。特に unread や sort のような UI state 変更は legacy data と active state の scenario を落とさない。 |
+
+## 2026-05-19 session history unread recency sync
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| 会話履歴を更新順ソートしつつ未読マークを足す変更で、最初は `load/save` の metadata 追加だけを入れ、通知クリック契約テストが `session.id` 固定のまま落ちたため `_openConversation()` の既読化フローに合わせてテストも更新した。 | セッション一覧の並び替えや未読制御は UI 見た目だけではなく `openConversation` の state 遷移まで変わる。内部変数や開封フローが変わるのに古い契約テストの代入先だけを前提にすると、実装は正しくてもテストが偽失敗する。 | セッション履歴の state 遷移を変えるときは、表示コンポーネントだけでなく「通知クリックや一覧クリックで active/unread がどう遷移するか」を契約テストごと更新する。特に既読化を追加したら、`_openConversation()` の最終代入先ではなく read-marking helper を含む遷移全体を検証する。 |
+
 ## 2026-05-13 heartbeat patrol fresh context parity
 
 | Change | Mistake/Context | Rule to repeat |

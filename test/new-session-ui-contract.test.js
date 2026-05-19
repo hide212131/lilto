@@ -49,5 +49,29 @@ test("lilt-app が通知クリックで対象セッションを開く", () => {
   assert.match(content, /this\._openConversation\(conversationId\);/);
   assert.match(content, /private _openConversation\(conversationId: string\)/);
   assert.match(content, /entry\.backendSessionId === conversationId/);
-  assert.match(content, /this\._currentSessionId = session\.id/);
+  assert.match(content, /const nextSession = this\._markSessionRead\(targetSessionId\)/);
+  assert.match(content, /this\._currentSessionId = nextSession\.id/);
+});
+
+test("lilt-app が legacy session を正規化して updatedAt 降順で保存する", () => {
+  const content = fs.readFileSync("src/renderer/app.ts", "utf8");
+  assert.match(content, /private _normalizeSession\(session: StoredSession\): Session/);
+  assert.match(content, /this\.sessions = this\._sortSessions\(parsed\.map\(\(session\) => this\._normalizeSession\(session\)\)\)/);
+  assert.match(content, /if \(right\.updatedAt !== left\.updatedAt\)/);
+  assert.match(content, /localStorage\.setItem\(SESSIONS_STORAGE_KEY, JSON\.stringify\(sortedSessions\)\)/);
+});
+
+test("lilt-app が非表示 session の assistant 系更新を unread にする", () => {
+  const content = fs.readFileSync("src/renderer/app.ts", "utf8");
+  assert.match(content, /private _shouldMarkSessionUnread\(sessionId: string, role: Message\["role"\]\): boolean/);
+  assert.match(content, /role === "assistant" \|\| role === "system" \|\| role === "error"/);
+  assert.match(content, /private _markSessionRead\(sessionId: string\): Session \| null/);
+  assert.match(content, /const nextSession = this\._markSessionRead\(targetSessionId\)/);
+});
+
+test("chat-history が active 以外の unread dot と updatedAt 表示を持つ", () => {
+  const content = fs.readFileSync("src/renderer/components/chat-history.ts", "utf8");
+  assert.match(content, /const date = new Date\(session\.updatedAt\);/);
+  assert.match(content, /session\.hasUnread && !isActive && !isEditing/);
+  assert.match(content, /class="unread-dot"/);
 });
