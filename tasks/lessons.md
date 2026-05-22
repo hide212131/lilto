@@ -1,5 +1,11 @@
 # Lessons
 
+## 2026-05-23 history click reorder regression
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| 会話履歴一覧クリックで行の位置が動く不具合を、renderer の `_saveCurrentSession()` が会話切替だけで `updatedAt` と title を更新していた問題として修正した。 | 会話を開くだけの操作でも、表示中 session を保存する共通処理が `Date.now()` と first-user 由来 title 再計算を無条件で走らせると、更新順ソートの一覧が跳ねる。履歴 UI の click 回帰はスクロールではなく保存副作用が原因になりうる。 | 更新順ソートの履歴一覧では、会話切替時の snapshot 保存で `updatedAt` や title を無条件更新しない。backend が正として持つ title は renderer で再生成せず、本文か title が実際に変わった場合だけ timestamp を進める。 |
+
 ## 2026-05-22 Codex App Server history migration
 
 | Change | Mistake/Context | Rule to repeat |

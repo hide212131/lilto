@@ -35,6 +35,13 @@ test("lilt-app が user 送信前と retry 巻き戻し直後に session snapsho
   assert.match(content, /this\.messages = this\.messages\.slice\(0, idx \+ 1\);\s*this\._saveCurrentSession\(\);\s*await this\._doSend\(text\);/s);
 });
 
+test("lilt-app は会話切替だけでは session updatedAt を更新しない", () => {
+  const content = fs.readFileSync("src/renderer/app.ts", "utf8");
+  assert.match(content, /private _messagesEqual\(left: Message\[], right: Message\[\]\): boolean/);
+  assert.match(content, /session\.title === title && this\._messagesEqual\(session\.messages, this\.messages\)/);
+  assert.match(content, /\? session\.updatedAt\s*:\s*Date\.now\(\)/);
+});
+
 test("lilt-app がドラッグでサイドバー幅を変更して保存できる", () => {
   const content = fs.readFileSync("src/renderer/app.ts", "utf8");
   assert.match(content, /SIDEBAR_WIDTH_STORAGE_KEY/);

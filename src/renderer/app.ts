@@ -336,20 +336,30 @@ export class LiltApp extends LitElement {
     return Math.min(Math.max(width, MIN_SIDEBAR_WIDTH), maxWidth);
   }
 
+  private _messagesEqual(left: Message[], right: Message[]): boolean {
+    return JSON.stringify(left) === JSON.stringify(right);
+  }
+
   private _saveCurrentSession() {
     if (!this._currentSessionId) {
       return;
     }
 
     const existingSession = this.sessions.find((session) => session.id === this._currentSessionId) ?? null;
-    const firstUser = this.messages.find((m) => m.role === "user");
-    const title = firstUser
-      ? firstUser.text.slice(0, 40) + (firstUser.text.length > 40 ? "…" : "")
-      : existingSession?.title ?? "会話";
+    const title = existingSession?.title ?? "会話";
 
     this.sessions = this.sessions.map((session) =>
       session.id === this._currentSessionId
-        ? { ...session, title, messages: [...this.messages], updatedAt: Date.now(), hasUnread: false }
+        ? {
+            ...session,
+            title,
+            messages: [...this.messages],
+            updatedAt:
+              session.title === title && this._messagesEqual(session.messages, this.messages)
+                ? session.updatedAt
+                : Date.now(),
+            hasUnread: false
+          }
         : session
     );
     this._saveSessions();
