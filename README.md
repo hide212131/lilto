@@ -12,11 +12,11 @@ PC作業を人間の代わりに実行する、軽量なAIアシスタント。
   - テキスト入力の代わりに音声入力を受け付ける
 
 ## 実装方針
-- AIエージェント機能は [OpenAI Codex TypeScript SDK](https://github.com/openai/codex/tree/main/sdk/typescript) を利用する
+- AIエージェント機能は [Codex App Server](https://developers.openai.com/codex/app-server) を利用してアプリへ統合する
 - アプリ基盤は Electron を利用する
-- Electron の Main プロセスで動くAIエージェントは `@openai/codex-sdk` を活用し、既定では `~/.codex` を `CODEX_HOME` として認証・skill・session を管理する
+- Electron の Main プロセスでは `codex app-server` を起動し、既定では `~/.codex` を `CODEX_HOME` として認証・skill・session・thread history を管理する
 - Electron の Renderer プロセスで動くUIは、過去の [pi-web-ui](https://github.com/badlogic/pi-mono/tree/main/packages/web-ui) / [pi-web-ui-example](https://github.com/badlogic/pi-mono/blob/main/packages/web-ui/example) の責務分割を参考にしつつ、現行の Codex runtime に合わせて Main/Renderer 間 IPC を設計する
-- ファイル入出力、認証、Codex 実行、MCP server 連携など Renderer で直接扱えない処理は Main 側へ集約する
+- ファイル入出力、認証、Codex 実行、会話履歴取得、MCP server 連携など Renderer で直接扱えない処理は Main 側へ集約する
 
 ## UIポーティング方針
 - 詳細は `docs/ui-porting-guidelines.md` を参照
@@ -51,9 +51,10 @@ PC作業を人間の代わりに実行する、軽量なAIアシスタント。
 
 ## 現在の実装スコープ（初期）
 - Electron の Main/Renderer 最小構成
-- Renderer から Main への IPC 経由で Codex runtime を呼び出す Agent Bridge
+- Renderer から Main への IPC 経由で Codex App Server を呼び出す Agent Bridge
 - Codex の ChatGPT OAuth 認証と API key 認証の導線（外部ブラウザ起動 / `codex login` / 状態表示）
 - Settings の `Agent Skills` / `Plugins` タブから Codex skill と plugin marketplace を管理する導線
+- 会話履歴を App Server thread history から取得・再開する導線
 - 固定間隔ハートビートと登録ジョブ実行
 - エラーの標準化レスポンスとログ出力
 

@@ -29,7 +29,9 @@ test("lilt-app は送信開始時の session に assistant 応答を書き戻す
 
 test("lilt-app が user 送信前と retry 巻き戻し直後に session snapshot を保存する", () => {
   const content = fs.readFileSync("src/renderer/app.ts", "utf8");
-  assert.match(content, /this\._addMessage\("user", text\);\s*this\._saveCurrentSession\(\);\s*await this\._doSend\(text\);/s);
+  assert.match(content, /this\._addMessage\("user", text\);/);
+  assert.match(content, /const conversationId = await this\._ensureConversation\(title\);/);
+  assert.match(content, /this\._saveCurrentSession\(\);\s*await this\._doSend\(text\);/s);
   assert.match(content, /this\.messages = this\.messages\.slice\(0, idx \+ 1\);\s*this\._saveCurrentSession\(\);\s*await this\._doSend\(text\);/s);
 });
 
@@ -46,19 +48,20 @@ test("lilt-app がドラッグでサイドバー幅を変更して保存でき�
 test("lilt-app が通知クリックで対象セッションを開く", () => {
   const content = fs.readFileSync("src/renderer/app.ts", "utf8");
   assert.match(content, /window\.lilto\.onOpenConversation\(\(conversationId\) => \{/);
-  assert.match(content, /this\._openConversation\(conversationId\);/);
-  assert.match(content, /private _openConversation\(conversationId: string\)/);
+  assert.match(content, /void this\._openConversation\(conversationId\);/);
+  assert.match(content, /private async _openConversation\(conversationId: string\)/);
   assert.match(content, /entry\.backendSessionId === conversationId/);
   assert.match(content, /const nextSession = this\._markSessionRead\(targetSessionId\)/);
   assert.match(content, /this\._currentSessionId = nextSession\.id/);
 });
 
-test("lilt-app が legacy session を正規化して updatedAt 降順で保存する", () => {
+test("lilt-app が App Server 会話一覧を正規化して updatedAt 降順で保持する", () => {
   const content = fs.readFileSync("src/renderer/app.ts", "utf8");
   assert.match(content, /private _normalizeSession\(session: StoredSession\): Session/);
-  assert.match(content, /this\.sessions = this\._sortSessions\(parsed\.map\(\(session\) => this\._normalizeSession\(session\)\)\)/);
+  assert.match(content, /const result = await window\.lilto\.listConversations\(\);/);
+  assert.match(content, /const backendSessions = result\.conversations\.map\(\(session\) => \{/);
   assert.match(content, /if \(right\.updatedAt !== left\.updatedAt\)/);
-  assert.match(content, /localStorage\.setItem\(SESSIONS_STORAGE_KEY, JSON\.stringify\(sortedSessions\)\)/);
+  assert.doesNotMatch(content, /localStorage\.setItem\(SESSIONS_STORAGE_KEY/);
 });
 
 test("lilt-app が非表示 session の assistant 系更新を unread にする", () => {

@@ -161,6 +161,26 @@ declare global {
         | { ok: false; error?: { code?: string; message?: string; retryable?: boolean } }
       >;
       abortPrompt: () => Promise<{ ok: boolean }>;
+      listConversations: () => Promise<
+        | { ok: true; conversations: Session[] }
+        | { ok: false; error: { code: string; message: string } }
+      >;
+      readConversation: (conversationId: string) => Promise<
+        | { ok: true; conversation: Session }
+        | { ok: false; error: { code: string; message: string } }
+      >;
+      createConversation: (title?: string) => Promise<
+        | { ok: true; conversation: Session }
+        | { ok: false; error: { code: string; message: string } }
+      >;
+      renameConversation: (conversationId: string, title: string) => Promise<
+        | { ok: true }
+        | { ok: false; error: { code: string; message: string } }
+      >;
+      archiveConversation: (conversationId: string) => Promise<
+        | { ok: true }
+        | { ok: false; error: { code: string; message: string } }
+      >;
       getAgentsFile: () => Promise<{ ok: true; path: string; exists: boolean }>;
       openAgentsFile: () => Promise<
         | { ok: true; path: string; created: boolean }

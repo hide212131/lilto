@@ -4,6 +4,7 @@ import { BrowserWindow, ipcMain, shell } from "electron";
 import { randomUUID } from "node:crypto";
 import type { AgentRuntime } from "./agent-sdk";
 import type { ClaudeAuthService } from "./auth-service";
+import { ConversationHistoryService } from "./conversation-history";
 import { AGENT_LOOP_EVENT_CHANNEL, validatePrompt } from "./ipc-contract";
 import { createLogger } from "./logger";
 import type { NotificationService } from "./notifications";
@@ -99,6 +100,11 @@ export function registerAgentIpcHandlers({
 }): void {
   const logger = createLogger("ipc");
   const agentsFilePath = path.join(workspaceDir, "AGENTS.md");
+  const conversationHistory = new ConversationHistoryService({
+    workspaceDir,
+    homeDir,
+    codexHomeDir
+  });
   authService.subscribe(() => {
     broadcastAuthState(authService);
   });
@@ -198,6 +204,79 @@ export function registerAgentIpcHandlers({
   ipcMain.handle("agent:abort", () => {
     agentRuntime.abort();
     return { ok: true };
+  });
+
+  ipcMain.handle("conversations:list", async () => {
+    try {
+      const conversations = await conversationHistory.listConversations();
+      return { ok: true, conversations };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, error: { code: "CONVERSATIONS_LIST_FAILED", message } };
+    }
+  });
+
+  ipcMain.handle("conversations:read", async (_event, payload: unknown) => {
+    if (!payload || typeof payload !== "object" || typeof (payload as { conversationId?: unknown }).conversationId !== "string") {
+      return { ok: false, error: { code: "INVALID_REQUEST", message: "conversationId は必須です" } };
+    }
+    try {
+      const conversation = await conversationHistory.readConversation((payload as { conversationId: string }).conversationId);
+      if (!conversation) {
+        return { ok: false, error: { code: "CONVERSATION_NOT_FOUND", message: "会話が見つかりません" } };
+      }
+      return { ok: true, conversation };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, error: { code: "CONVERSATION_READ_FAILED", message } };
+    }
+  });
+
+  ipcMain.handle("conversations:create", async (_event, payload: unknown) => {
+    const title = payload && typeof payload === "object" && typeof (payload as { title?: unknown }).title === "string"
+      ? (payload as { title: string }).title
+      : undefined;
+    try {
+      const conversation = await conversationHistory.createConversation(title);
+      return { ok: true, conversation };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, error: { code: "CONVERSATION_CREATE_FAILED", message } };
+    }
+  });
+
+  ipcMain.handle("conversations:rename", async (_event, payload: unknown) => {
+    if (
+      !payload ||
+      typeof payload !== "object" ||
+      typeof (payload as { conversationId?: unknown }).conversationId !== "string" ||
+      typeof (payload as { title?: unknown }).title !== "string"
+    ) {
+      return { ok: false, error: { code: "INVALID_REQUEST", message: "conversationId と title は必須です" } };
+    }
+    try {
+      await conversationHistory.renameConversation(
+        (payload as { conversationId: string }).conversationId,
+        (payload as { title: string }).title
+      );
+      return { ok: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, error: { code: "CONVERSATION_RENAME_FAILED", message } };
+    }
+  });
+
+  ipcMain.handle("conversations:archive", async (_event, payload: unknown) => {
+    if (!payload || typeof payload !== "object" || typeof (payload as { conversationId?: unknown }).conversationId !== "string") {
+      return { ok: false, error: { code: "INVALID_REQUEST", message: "conversationId は必須です" } };
+    }
+    try {
+      await conversationHistory.archiveConversation((payload as { conversationId: string }).conversationId);
+      return { ok: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, error: { code: "CONVERSATION_ARCHIVE_FAILED", message } };
+    }
   });
 
   ipcMain.handle("auth:getState", () => {

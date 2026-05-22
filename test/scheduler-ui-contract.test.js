@@ -4,6 +4,12 @@ const fs = require("node:fs");
 
 test("preload は scheduler notification listener を公開する", () => {
   const content = fs.readFileSync("src/preload.ts", "utf8");
+  assert.match(content, /listConversations:\s*async \(\)/);
+  assert.match(content, /ipcRenderer\.invoke\("conversations:list"\)/);
+  assert.match(content, /createConversation: async \(title\?: string\)/);
+  assert.match(content, /ipcRenderer\.invoke\("conversations:create", \{ title \}\)/);
+  assert.match(content, /archiveConversation: async \(conversationId: string\)/);
+  assert.match(content, /ipcRenderer\.invoke\("conversations:archive", \{ conversationId \}\)/);
   assert.match(content, /onSchedulerNotification:\s*\(listener/);
   assert.match(content, /ipcRenderer\.on\(SCHEDULER_NOTIFICATION_CHANNEL, wrapped\)/);
   assert.match(content, /silent: options\?\.silent === true/);
@@ -68,6 +74,11 @@ test("settings-modal は Schedules タブから schedule 一覧取得と削除�
 
 test("main ipc は scheduler 一覧取得と削除ハンドラを公開する", () => {
   const content = fs.readFileSync("src/main/ipc.ts", "utf8");
+  assert.match(content, /new ConversationHistoryService/);
+  assert.match(content, /ipcMain\.handle\("conversations:list"/);
+  assert.match(content, /ipcMain\.handle\("conversations:read"/);
+  assert.match(content, /ipcMain\.handle\("conversations:create"/);
+  assert.match(content, /ipcMain\.handle\("conversations:archive"/);
   assert.match(content, /ipcMain\.handle\("scheduler:list"/);
   assert.match(content, /isHeartbeatInternalScheduleId/);
   assert.match(content, /await scheduler\.listSchedules\(\)/);

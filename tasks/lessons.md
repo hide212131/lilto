@@ -1,5 +1,12 @@
 # Lessons
 
+## 2026-05-22 Codex App Server history migration
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| Codex SDK 直結の会話実行を Codex App Server へ切り替え、renderer の `localStorage` 会話履歴を main IPC 経由の `thread/list` / `thread/read` / `thread/start` / `thread/name/set` / `thread/archive` に置き換えた。 | 会話実行だけ App Server 化しても、renderer が `lilto-sessions` を正として持ち続けると、再起動後の履歴・rename/delete・通知復帰が二重管理になる。 | Codex App Server へ移行するときは、送信経路だけで止めず、履歴一覧・会話読込・rename/delete も同じ thread API に揃える。renderer localStorage は補助 state に留め、永続化の正は main 側 App Server に一本化する。 |
+| `thread/list` の既定 `sourceKinds` が `cli` / `vscode` で、App Server 由来の会話が自動では出ない仕様を設計段階で補正した。 | `thread/list` をそのまま叩くだけでは、自前クライアントの会話が空に見える可能性がある。 | App Server 履歴 UI を実装するときは、`thread/list` の filter 既定値を必ず確認し、自前クライアント用には `sourceKinds: ["appServer"]` を明示する。 |
+
 ## 2026-05-20 OpenSpec delta spec sync completeness
 
 | Change | Mistake/Context | Rule to repeat |

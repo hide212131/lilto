@@ -4,6 +4,7 @@ import { createLogger, type Logger } from "./logger";
 import type { ClaudeAuthService } from "./auth-service";
 import type { ProviderSettings } from "./provider-settings";
 import { isCustomProviderReady } from "./provider-settings";
+import { CodexAppServerClient } from "./codex-app-server-client";
 import type { SchedulerBridgeServer } from "./scheduler-bridge";
 import { resolveCodexProcessEnvironment, WINDOWS_POWERSHELL_PATHS } from "./codex-environment";
 import { resolveCronMcpServerPath, resolvePackagedCodexBinary } from "./app-paths";
@@ -534,6 +535,362 @@ export async function createCodexThreadFromSdk(options: {
   return options.threadId ? codex.resumeThread(options.threadId, threadOptions) : codex.startThread(threadOptions);
 }
 
+function buildAppServerSandboxPolicy(options: {
+  sandboxMode?: "danger-full-access" | "workspace-write";
+  cwd: string;
+  additionalDirectories?: string[];
+}): Record<string, unknown> {
+  if (options.sandboxMode === "workspace-write") {
+    const writableRoots = Array.from(new Set([options.cwd, ...(options.additionalDirectories ?? [])]));
+    return {
+      type: "workspaceWrite",
+      writableRoots,
+      networkAccess: true
+    };
+  }
+
+  return {
+    type: "dangerFullAccess",
+    networkAccess: true
+  };
+}
+
+function buildReasoningText(item: Record<string, unknown>): string {
+  if (typeof item.text === "string") {
+    return item.text;
+  }
+
+  const summary = Array.isArray(item.summary)
+    ? item.summary
+        .map((entry) => (entry && typeof entry === "object" && typeof (entry as { text?: unknown }).text === "string")
+          ? (entry as { text: string }).text
+          : "")
+        .filter(Boolean)
+        .join("\n")
+    : "";
+  if (summary) {
+    return summary;
+  }
+
+  const content = Array.isArray(item.content)
+    ? item.content
+        .map((entry) => {
+          if (!entry || typeof entry !== "object") {
+            return "";
+          }
+          if (typeof (entry as { text?: unknown }).text === "string") {
+            return (entry as { text: string }).text;
+          }
+          if (typeof (entry as { summary?: unknown }).summary === "string") {
+            return (entry as { summary: string }).summary;
+          }
+          return "";
+        })
+        .filter(Boolean)
+        .join("\n")
+    : "";
+  return content;
+}
+
+function normalizeAppServerItemStatus(status: unknown): "in_progress" | "completed" | "failed" {
+  if (status === "completed") {
+    return "completed";
+  }
+  if (status === "failed" || status === "declined") {
+    return "failed";
+  }
+  return "in_progress";
+}
+
+function normalizeCommandPreview(command: unknown): string {
+  if (typeof command === "string") {
+    return command;
+  }
+  if (Array.isArray(command)) {
+    return command.map((entry) => String(entry)).join(" ");
+  }
+  return "";
+}
+
+function translateAppServerItem(item: unknown): ThreadItem | null {
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+
+  const record = item as Record<string, unknown>;
+  const id = typeof record.id === "string" ? record.id : "unknown-item";
+  switch (record.type) {
+    case "agentMessage":
+      return {
+        id,
+        type: "agent_message",
+        text: typeof record.text === "string" ? record.text : ""
+      };
+    case "reasoning":
+      return {
+        id,
+        type: "reasoning",
+        text: buildReasoningText(record)
+      };
+    case "commandExecution":
+      return {
+        id,
+        type: "command_execution",
+        command: normalizeCommandPreview(record.command),
+        status: normalizeAppServerItemStatus(record.status)
+      };
+    case "mcpToolCall":
+      return {
+        id,
+        type: "mcp_tool_call",
+        tool: typeof record.tool === "string" ? record.tool : "unknown",
+        server: typeof record.server === "string" ? record.server : "unknown",
+        arguments: record.arguments,
+        status: normalizeAppServerItemStatus(record.status)
+      };
+    case "error":
+      return {
+        id,
+        type: "error",
+        message:
+          typeof record.message === "string"
+            ? record.message
+            : record.error && typeof record.error === "object" && typeof (record.error as { message?: unknown }).message === "string"
+              ? (record.error as { message: string }).message
+              : undefined,
+        error: record.error && typeof record.error === "object"
+          ? record.error as { message?: string; code?: string }
+          : undefined
+      };
+    default:
+      return {
+        id,
+        type: typeof record.type === "string" ? record.type : "unknown"
+      };
+  }
+}
+
+export async function createCodexThreadFromAppServer(options: {
+  apiKey: string | null;
+  model?: RuntimeModel;
+  cwd?: string;
+  threadId?: string;
+  additionalDirectories?: string[];
+  codexHomeDir?: string;
+  homeDir?: string;
+  schedulerBridge?: SchedulerBridgeServer;
+  schedulerSessionId?: string;
+  sandboxMode?: "danger-full-access" | "workspace-write";
+  config?: CodexConfig;
+}): Promise<Thread> {
+  const packagedCodex = resolvePackagedCodexBinary();
+  const bridgeEnv = options.schedulerBridge
+    ? options.schedulerBridge.getBridgeEnv(options.schedulerSessionId ?? options.threadId ?? "default")
+    : {};
+  const envOverrides = options.schedulerBridge && process.versions.electron
+    ? { ...bridgeEnv, ELECTRON_RUN_AS_NODE: "1" }
+    : bridgeEnv;
+  const invocationEnv = await resolveCodexProcessEnvironment({
+    codexHomeDir: options.codexHomeDir,
+    prependPathEntries: packagedCodex?.extraPath ? [packagedCodex.extraPath] : undefined,
+    appendPathEntries: process.platform === "win32" ? WINDOWS_POWERSHELL_PATHS : undefined,
+    overrides: envOverrides
+  });
+  const mcpConfig = options.schedulerBridge
+    ? {
+        mcp_servers: {
+          cron: {
+            command: process.execPath,
+            args: [resolveCronMcpServerPath()],
+            env: {
+              ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
+              ...bridgeEnv
+            },
+            enabled: true
+          }
+        }
+      }
+    : undefined;
+  const sandboxPolicy = buildAppServerSandboxPolicy({
+    sandboxMode: options.sandboxMode,
+    cwd: options.cwd ?? process.cwd(),
+    additionalDirectories: options.additionalDirectories
+  });
+
+  return {
+    id: options.threadId ?? null,
+    async runStreamed(input: string, runOptions?: { signal?: AbortSignal }) {
+      const client = new CodexAppServerClient({
+        codexHomeDir: options.codexHomeDir ?? path.join(options.homeDir ?? process.env.HOME ?? process.cwd(), ".codex"),
+        codexCommand: packagedCodex?.command,
+        invocationEnv
+      });
+
+      let activeThreadId = options.threadId ?? null;
+      let activeTurnId: string | null = null;
+      let closed = false;
+      const textByItemId = new Map<string, string>();
+      const reasoningByItemId = new Map<string, string>();
+
+      const closeClient = () => {
+        if (closed) {
+          return;
+        }
+        closed = true;
+        client.close();
+      };
+
+      const abortHandler = () => {
+        if (!activeThreadId || !activeTurnId) {
+          closeClient();
+          return;
+        }
+        void client.request("turn/interrupt", {
+          threadId: activeThreadId,
+          turnId: activeTurnId
+        }, 5000).catch(() => {
+          closeClient();
+        });
+      };
+
+      if (runOptions?.signal) {
+        if (runOptions.signal.aborted) {
+          abortHandler();
+        } else {
+          runOptions.signal.addEventListener("abort", abortHandler, { once: true });
+        }
+      }
+
+      await client.start();
+
+      const threadParams: Record<string, unknown> = {
+        model: options.model?.id,
+        cwd: options.cwd ?? process.cwd(),
+        approvalPolicy: "never",
+        sandbox: options.sandboxMode === "workspace-write" ? "workspaceWrite" : "dangerFullAccess",
+        serviceName: "lilto",
+        ...(mergeCodexConfig(mcpConfig, options.config) ? { config: mergeCodexConfig(mcpConfig, options.config) } : {})
+      };
+
+      if (activeThreadId) {
+        await client.request("thread/resume", {
+          threadId: activeThreadId,
+          ...threadParams
+        });
+      } else {
+        const result = await client.request<{ thread?: { id?: string | null } }>("thread/start", threadParams);
+        activeThreadId = typeof result?.thread?.id === "string" ? result.thread.id : null;
+      }
+
+      if (!activeThreadId) {
+        closeClient();
+        throw new Error("codex app-server did not return a thread id");
+      }
+
+      const turnResult = await client.request<{ turn?: { id?: string | null } }>("turn/start", {
+        threadId: activeThreadId,
+        input: [{ type: "text", text: input }],
+        cwd: options.cwd ?? process.cwd(),
+        approvalPolicy: "never",
+        sandboxPolicy,
+        ...(options.model?.id ? { model: options.model.id } : {}),
+        ...(mergeCodexConfig(mcpConfig, options.config) ? { config: mergeCodexConfig(mcpConfig, options.config) } : {})
+      });
+      activeTurnId = typeof turnResult?.turn?.id === "string" ? turnResult.turn.id : null;
+
+      const events = (async function* (): AsyncGenerator<ThreadEvent> {
+        try {
+          for (;;) {
+            const notification = await client.nextNotification();
+            const params = notification.params && typeof notification.params === "object"
+              ? notification.params as Record<string, unknown>
+              : {};
+
+            if (notification.method === "thread/started") {
+              const threadId = params.thread && typeof params.thread === "object" && typeof (params.thread as { id?: unknown }).id === "string"
+                ? (params.thread as { id: string }).id
+                : activeThreadId;
+              yield { type: "thread.started", thread_id: threadId };
+              continue;
+            }
+
+            if (notification.method === "turn/completed") {
+              const turn = params.turn && typeof params.turn === "object" ? params.turn as Record<string, unknown> : {};
+              const status = typeof turn.status === "string" ? turn.status : "failed";
+              if (status === "completed") {
+                return;
+              }
+              const errorMessage = turn.error && typeof turn.error === "object" && typeof (turn.error as { message?: unknown }).message === "string"
+                ? (turn.error as { message: string }).message
+                : status === "interrupted"
+                  ? "interrupted"
+                  : `turn ${status}`;
+              if (status === "failed") {
+                yield { type: "turn.failed", error: { message: errorMessage } };
+              } else {
+                yield { type: "error", message: errorMessage };
+              }
+              return;
+            }
+
+            if (notification.method === "item/agentMessage/delta") {
+              const itemId = typeof params.itemId === "string" ? params.itemId : null;
+              const delta = typeof params.delta === "string" ? params.delta : "";
+              if (itemId) {
+                const nextText = `${textByItemId.get(itemId) ?? ""}${delta}`;
+                textByItemId.set(itemId, nextText);
+                yield {
+                  type: "item.updated",
+                  item: { id: itemId, type: "agent_message", text: nextText }
+                };
+              }
+              continue;
+            }
+
+            if (notification.method === "item/reasoning/summaryTextDelta") {
+              const itemId = typeof params.itemId === "string" ? params.itemId : null;
+              const delta = typeof params.delta === "string" ? params.delta : "";
+              if (itemId) {
+                const nextText = `${reasoningByItemId.get(itemId) ?? ""}${delta}`;
+                reasoningByItemId.set(itemId, nextText);
+                yield {
+                  type: "item.updated",
+                  item: { id: itemId, type: "reasoning", text: nextText }
+                };
+              }
+              continue;
+            }
+
+            if (notification.method === "item/started" || notification.method === "item/completed") {
+              const item = translateAppServerItem(params.item);
+              if (!item) {
+                continue;
+              }
+              if (item.type === "agent_message") {
+                textByItemId.set(item.id, (item as { text?: string }).text ?? "");
+              }
+              if (item.type === "reasoning") {
+                reasoningByItemId.set(item.id, (item as { text?: string }).text ?? "");
+              }
+              yield {
+                type: notification.method === "item/started" ? "item.started" : "item.completed",
+                item
+              };
+            }
+          }
+        } finally {
+          if (runOptions?.signal) {
+            runOptions.signal.removeEventListener("abort", abortHandler);
+          }
+          closeClient();
+        }
+      })();
+
+      return { events };
+    }
+  };
+}
+
 export class AgentRuntime {
   private readonly createSession: (options: {
     apiKey: string | null;
@@ -560,7 +917,7 @@ export class AgentRuntime {
   private currentAbortController: AbortController | null = null;
 
   constructor({
-    createSession = createCodexThreadFromSdk,
+    createSession = createCodexThreadFromAppServer,
     authService,
     workspaceDir,
     codexHomeDir,

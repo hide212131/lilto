@@ -19,6 +19,13 @@ type NotificationWaiter<T> = {
   timeout: NodeJS.Timeout;
 };
 
+type NextNotificationWaiter = {
+  methods?: string[];
+  resolve: (message: { method: string; params: unknown }) => void;
+  reject: (error: Error) => void;
+  timeout: NodeJS.Timeout;
+};
+
 function buildCodexAppServerEnvironment(options: {
   invocationEnv?: NodeJS.ProcessEnv;
   codexHomeDir: string;
@@ -44,6 +51,8 @@ export class CodexAppServerClient {
   }>();
   private readonly notificationWaiters = new Set<NotificationWaiter<unknown>>();
   private readonly queuedNotifications = new Map<string, unknown[]>();
+  private readonly notificationQueue: Array<{ method: string; params: unknown }> = [];
+  private readonly nextNotificationWaiters = new Set<NextNotificationWaiter>();
   private started = false;
 
   constructor(
@@ -51,6 +60,7 @@ export class CodexAppServerClient {
       homeDir?: string;
       codexHomeDir: string;
       codexCommand?: string;
+      invocationEnv?: NodeJS.ProcessEnv;
       logger?: Logger;
       spawnImpl?: typeof spawn;
     }
@@ -67,7 +77,10 @@ export class CodexAppServerClient {
     const invocation = resolveCliInvocation(this.options.codexCommand ?? "codex", ["app-server", "--listen", "stdio://"]);
     const child = spawnImpl(invocation.command, invocation.args, {
       env: buildCodexAppServerEnvironment({
-        invocationEnv: invocation.env,
+        invocationEnv: {
+          ...(this.options.invocationEnv ?? {}),
+          ...(invocation.env ?? {})
+        },
         codexHomeDir: this.options.codexHomeDir
       }),
       stdio: ["pipe", "pipe", "pipe"]
@@ -107,6 +120,12 @@ export class CodexAppServerClient {
         experimentalApi: true
       }
     });
+    this.notify("initialized", {});
+  }
+
+  notify(method: string, params: Record<string, unknown> | undefined): void {
+    const child = this.assertChild();
+    child.stdin.write(`${JSON.stringify({ method, params })}\n`);
   }
 
   async request<T>(method: string, params: Record<string, unknown> | undefined, timeoutMs = 15000): Promise<T> {
@@ -170,6 +189,45 @@ export class CodexAppServerClient {
     });
   }
 
+  async nextNotification(
+    options: { methods?: string[]; timeoutMs?: number } = {}
+  ): Promise<{ method: string; params: unknown }> {
+    const queueIndex = this.notificationQueue.findIndex((candidate) => {
+      if (!options.methods || options.methods.length === 0) {
+        return true;
+      }
+      return options.methods.includes(candidate.method);
+    });
+    if (queueIndex >= 0) {
+      const [message] = this.notificationQueue.splice(queueIndex, 1);
+      return message;
+    }
+
+    return await new Promise<{ method: string; params: unknown }>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.nextNotificationWaiters.delete(waiter);
+        reject(new Error(`Timed out waiting for notification stream. stderr=${this.stderrTail()}`));
+      }, options.timeoutMs ?? 120000);
+
+      const waiter: NextNotificationWaiter = {
+        methods: options.methods,
+        resolve: (message) => {
+          clearTimeout(timeout);
+          this.nextNotificationWaiters.delete(waiter);
+          resolve(message);
+        },
+        reject: (error) => {
+          clearTimeout(timeout);
+          this.nextNotificationWaiters.delete(waiter);
+          reject(error);
+        },
+        timeout
+      };
+
+      this.nextNotificationWaiters.add(waiter);
+    });
+  }
+
   close(): void {
     this.readline?.close();
     this.readline = null;
@@ -216,6 +274,22 @@ export class CodexAppServerClient {
     }
 
     const params = message.params;
+    const queuedMessage = { method: message.method, params };
+    const nextWaiter = [...this.nextNotificationWaiters].find((waiter) => {
+      if (!waiter.methods || waiter.methods.length === 0) {
+        return true;
+      }
+      return waiter.methods.includes(message.method!);
+    });
+    if (nextWaiter) {
+      nextWaiter.resolve(queuedMessage);
+    } else {
+      this.notificationQueue.push(queuedMessage);
+      if (this.notificationQueue.length > 100) {
+        this.notificationQueue.shift();
+      }
+    }
+
     let resolved = false;
     for (const waiter of [...this.notificationWaiters]) {
       if (waiter.method !== message.method) {
@@ -263,6 +337,12 @@ export class CodexAppServerClient {
       waiter.reject(error);
     }
     this.notificationWaiters.clear();
+
+    for (const waiter of this.nextNotificationWaiters) {
+      clearTimeout(waiter.timeout);
+      waiter.reject(error);
+    }
+    this.nextNotificationWaiters.clear();
 
     this.child = null;
     this.started = false;

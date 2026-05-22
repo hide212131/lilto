@@ -25,15 +25,19 @@ TBD - created by archiving change build-renderer-chat-ui-and-ui-guidelines. Upda
 - **THEN** UI は失敗理由を表示し、入力欄と送信操作を再び利用可能にする
 
 ### Requirement: セッション一覧は会話更新順で表示される
-システムは、会話履歴の一覧を各セッションの最後の会話更新時刻が新しい順に表示しなければならない（MUST）。
+システムは、会話履歴の一覧を Main が返す App Server 永続会話の `updatedAt` が新しい順に表示しなければならない（MUST）。Renderer は会話一覧の正として独自の `localStorage` を使ってはならず（MUST NOT）、Main から返る永続会話一覧を基準に表示しなければならない（MUST）。
+
+#### Scenario: 起動時に永続会話が更新順で並ぶ
+- **WHEN** Main から複数の永続会話が `updatedAt` 付きで返る
+- **THEN** 会話履歴は `updatedAt` 降順で表示される
 
 #### Scenario: バックグラウンド更新されたセッションが先頭へ移動する
 - **WHEN** 現在表示していないセッションに cron 通知または長時間推論の結果メッセージが追加される
 - **THEN** 会話履歴はそのセッションを一覧の先頭へ移動して表示する
 
-#### Scenario: 既存保存データに更新時刻が無くても一覧を表示できる
-- **WHEN** 更新時刻 metadata を持たない既存セッション配列をアプリが読み込む
-- **THEN** システムは互換値を補完して会話履歴を表示し、その後の保存で会話更新順を維持する
+#### Scenario: legacy localStorage 履歴は移行せず無視する
+- **WHEN** renderer 側に旧来の会話 `localStorage` が残っているが、Main が別の永続会話一覧または空配列を返す
+- **THEN** システムは Main が返した結果だけを表示し、legacy localStorage を会話一覧へ混ぜない
 
 ### Requirement: 非表示セッションの新着会話は未読として示される
 システムは、メイン画面に表示していないセッションへ新しい会話内容が到着した場合、そのセッションを未読として識別できる表示を会話履歴に出さなければならない（MUST）。
@@ -49,4 +53,19 @@ TBD - created by archiving change build-renderer-chat-ui-and-ui-guidelines. Upda
 #### Scenario: 表示中セッションには未読マークを付けない
 - **WHEN** 現在メイン画面に表示しているセッションで会話内容が更新される
 - **THEN** システムはそのセッションを未読として表示しない
+
+### Requirement: 会話履歴から永続会話を再開し、rename と archive を実行できる
+システムは、会話履歴サイドバーから永続会話の選択、rename、archive を行えなければならない（MUST）。これらの操作は Renderer 単独で完結してはならず（MUST NOT）、Main の IPC を通じて永続状態へ反映されなければならない（MUST）。
+
+#### Scenario: 履歴クリックで永続会話を再開する
+- **WHEN** ユーザーが履歴サイドバーの会話行をクリックする
+- **THEN** システムは Main から会話本文を再取得し、選択会話をメイン画面に表示する
+
+#### Scenario: rename が永続会話へ反映される
+- **WHEN** ユーザーが履歴サイドバーから会話タイトルを変更する
+- **THEN** システムは Main の rename API を呼び出し、更新後タイトルを一覧と再読込結果の両方に反映する
+
+#### Scenario: archive 後は一覧から除外される
+- **WHEN** ユーザーが履歴サイドバーから会話の削除相当操作を行う
+- **THEN** システムは Main の archive API を呼び出し、対象会話を通常一覧から除外する
 

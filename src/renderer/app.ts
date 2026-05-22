@@ -24,7 +24,6 @@ import type { LiltComposer } from "./components/composer.js";
 import type { AgentLoopEvent, LoopState } from "../shared/agent-loop.js";
 import { createInitialLoopState, reduceLoopState } from "../shared/agent-loop.js";
 
-const SESSIONS_STORAGE_KEY = "lilto-sessions";
 const SIDEBAR_WIDTH_STORAGE_KEY = "lilto-sidebar-width";
 const DEFAULT_SIDEBAR_WIDTH = 272;
 const MIN_SIDEBAR_WIDTH = 220;
@@ -187,7 +186,7 @@ export class LiltApp extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
-    this._loadSessions();
+    void this._loadSessions();
     this._loadSidebarWidth();
     void this._hydrate();
     this._unsubscribeAuthListener = window.lilto.onAuthStateChanged((state) => {
@@ -206,7 +205,7 @@ export class LiltApp extends LitElement {
       });
     });
     this._unsubscribeOpenConversationListener = window.lilto.onOpenConversation((conversationId) => {
-      this._openConversation(conversationId);
+      void this._openConversation(conversationId);
     });
   }
 
@@ -235,26 +234,29 @@ export class LiltApp extends LitElement {
     this._pendingLabel = "";
   }
 
-  private _loadSessions() {
-    try {
-      const raw = localStorage.getItem(SESSIONS_STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as StoredSession[];
-        this.sessions = this._sortSessions(parsed.map((session) => this._normalizeSession(session)));
-      }
-    } catch {
-      this.sessions = [];
+  private async _loadSessions() {
+    const result = await window.lilto.listConversations();
+    if (!result.ok) {
+      this.sessions = this.sessions.filter((session) => isHeartbeatAssistantSessionId(session.id));
+      return;
     }
+
+    const existingById = new Map(this.sessions.map((session) => [session.id, session]));
+    const backendSessions = result.conversations.map((session) => {
+      const normalized = this._normalizeSession(session);
+      const existing = existingById.get(normalized.id);
+      return {
+        ...normalized,
+        hasUnread: existing?.hasUnread ?? normalized.hasUnread,
+        messages: existing?.messages ?? normalized.messages
+      };
+    });
+    const localOnlySessions = this.sessions.filter((session) => isHeartbeatAssistantSessionId(session.id));
+    this.sessions = this._sortSessions([...backendSessions, ...localOnlySessions]);
   }
 
   private _saveSessions() {
-    try {
-      const sortedSessions = this._sortSessions(this.sessions);
-      this.sessions = sortedSessions;
-      localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(sortedSessions));
-    } catch {
-      // ストレージ容量超過などは無視
-    }
+    this.sessions = this._sortSessions(this.sessions);
   }
 
   private _normalizeSession(session: StoredSession): Session {
@@ -335,41 +337,64 @@ export class LiltApp extends LitElement {
   }
 
   private _saveCurrentSession() {
-    const userMessages = this.messages.filter((m) => m.role === "user" || m.role === "assistant");
-    if (userMessages.length === 0) return;
+    if (!this._currentSessionId) {
+      return;
+    }
 
-    const existingSession = this._currentSessionId
-      ? this.sessions.find((session) => session.id === this._currentSessionId)
-      : null;
+    const existingSession = this.sessions.find((session) => session.id === this._currentSessionId) ?? null;
     const firstUser = this.messages.find((m) => m.role === "user");
     const title = firstUser
       ? firstUser.text.slice(0, 40) + (firstUser.text.length > 40 ? "…" : "")
       : existingSession?.title ?? "会話";
 
-    if (this._currentSessionId) {
-      // 既存セッションを更新
-      this.sessions = this.sessions.map((s) =>
-        s.id === this._currentSessionId
-          ? { ...s, title, messages: [...this.messages], updatedAt: Date.now(), hasUnread: false }
-          : s
-      );
-    } else {
-      // 新しいセッションを追加
-      const now = Date.now();
-      const newSession: Session = {
-        id: `session-${now}`,
-        title,
-        createdAt: now,
-        updatedAt: now,
-        hasUnread: false,
-        messages: [...this.messages]
-      };
-      this._currentSessionId = newSession.id;
-      this.activeSessionId = newSession.id;
-      // 最新が上に来るよう先頭に追加
-      this.sessions = [newSession, ...this.sessions];
-    }
+    this.sessions = this.sessions.map((session) =>
+      session.id === this._currentSessionId
+        ? { ...session, title, messages: [...this.messages], updatedAt: Date.now(), hasUnread: false }
+        : session
+    );
     this._saveSessions();
+  }
+
+  private async _ensureConversation(titleHint?: string): Promise<string | null> {
+    if (this._currentSessionId) {
+      return this._currentSessionId;
+    }
+
+    const result = await window.lilto.createConversation(titleHint);
+    if (!result.ok) {
+      this._addMessage("error", `${result.error.code}: ${result.error.message}`);
+      return null;
+    }
+
+    const session = this._normalizeSession(result.conversation);
+    session.messages = [...this.messages];
+    this.sessions = this._sortSessions([session, ...this.sessions.filter((entry) => entry.id !== session.id)]);
+    this._currentSessionId = session.id;
+    this.activeSessionId = session.id;
+    return session.id;
+  }
+
+  private async _refreshConversation(conversationId: string) {
+    const result = await window.lilto.readConversation(conversationId);
+    if (!result.ok) {
+      return;
+    }
+
+    const nextSession = this._normalizeSession(result.conversation);
+    const existing = this.sessions.find((session) => session.id === conversationId) ?? null;
+    this.sessions = this._sortSessions([
+      nextSession,
+      ...this.sessions.filter((session) => session.id !== conversationId)
+    ].map((session) =>
+      session.id === nextSession.id
+        ? { ...session, hasUnread: existing?.hasUnread ?? nextSession.hasUnread }
+        : session
+    ));
+
+    if (this._currentSessionId === conversationId) {
+      this.messages = [...nextSession.messages];
+      this.activeSessionId = conversationId;
+    }
   }
 
   private async _hydrate() {
@@ -494,10 +519,10 @@ export class LiltApp extends LitElement {
   }
 
   private _onSelectSession(e: CustomEvent<Session>) {
-    this._openConversation(e.detail.id);
+    void this._openConversation(e.detail.id);
   }
 
-  private _openConversation(conversationId: string) {
+  private async _openConversation(conversationId: string) {
     const session = this.sessions.find((entry) =>
       entry.id === conversationId || entry.backendSessionId === conversationId
     ) ?? null;
@@ -517,7 +542,14 @@ export class LiltApp extends LitElement {
       return;
     }
 
-    this.messages = [...nextSession.messages];
+    const loaded = await window.lilto.readConversation(nextSession.backendSessionId ?? nextSession.id);
+    const hydratedSession = loaded.ok ? this._normalizeSession(loaded.conversation) : nextSession;
+    this.sessions = this._sortSessions([
+      { ...hydratedSession, hasUnread: false },
+      ...this.sessions.filter((entry) => entry.id !== hydratedSession.id)
+    ]);
+
+    this.messages = [...hydratedSession.messages];
     this._currentSessionId = nextSession.id;
     this.activeSessionId = nextSession.id;
     this.loopState = createInitialLoopState();
@@ -526,22 +558,32 @@ export class LiltApp extends LitElement {
 
   private _onRenameSession(e: CustomEvent<{ sessionId: string; newTitle: string }>) {
     const { sessionId, newTitle } = e.detail;
-    this.sessions = this.sessions.map((s) =>
-      s.id === sessionId ? { ...s, title: newTitle } : s
-    );
-    this._saveSessions();
+    void window.lilto.renameConversation(sessionId, newTitle).then((result) => {
+      if (!result.ok) {
+        return;
+      }
+      this.sessions = this.sessions.map((s) =>
+        s.id === sessionId ? { ...s, title: newTitle } : s
+      );
+      this._saveSessions();
+    });
   }
 
   private _onDeleteSession(e: CustomEvent<{ sessionId: string }>) {
     const { sessionId } = e.detail;
-    this.sessions = this.sessions.filter((s) => s.id !== sessionId);
-    this._saveSessions();
-    if (sessionId === this._currentSessionId) {
-      this.messages = [];
-      this.loopState = createInitialLoopState();
-      this._currentSessionId = null;
-      this.activeSessionId = null;
-    }
+    void window.lilto.archiveConversation(sessionId).then((result) => {
+      if (!result.ok) {
+        return;
+      }
+      this.sessions = this.sessions.filter((s) => s.id !== sessionId);
+      this._saveSessions();
+      if (sessionId === this._currentSessionId) {
+        this.messages = [];
+        this.loopState = createInitialLoopState();
+        this._currentSessionId = null;
+        this.activeSessionId = null;
+      }
+    });
   }
 
   private _onAuthStateUpdated(e: CustomEvent<AuthState>) {
@@ -607,6 +649,7 @@ export class LiltApp extends LitElement {
           pending: false,
           progress: this._buildProgress()
         });
+        await this._refreshConversation(conversationId);
         await this.updateComplete;
         if (this._currentSessionId === conversationId) {
           this._composer?.focusInput();
@@ -665,6 +708,11 @@ export class LiltApp extends LitElement {
     }
 
     this._addMessage("user", text);
+    const title = text.slice(0, 40) + (text.length > 40 ? "…" : "");
+    const conversationId = await this._ensureConversation(title);
+    if (!conversationId) {
+      return;
+    }
     this._saveCurrentSession();
     await this._doSend(text);
   }

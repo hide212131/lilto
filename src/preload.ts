@@ -22,6 +22,13 @@ contextBridge.exposeInMainWorld("lilto", {
       freshContext: options?.freshContext === true
     }),
   abortPrompt: async () => ipcRenderer.invoke("agent:abort"),
+  listConversations: async () => ipcRenderer.invoke("conversations:list"),
+  readConversation: async (conversationId: string) => ipcRenderer.invoke("conversations:read", { conversationId }),
+  createConversation: async (title?: string) => ipcRenderer.invoke("conversations:create", { title }),
+  renameConversation: async (conversationId: string, title: string) =>
+    ipcRenderer.invoke("conversations:rename", { conversationId, title }),
+  archiveConversation: async (conversationId: string) =>
+    ipcRenderer.invoke("conversations:archive", { conversationId }),
   getAgentsFile: async () => ipcRenderer.invoke("app:getAgentsFile"),
   openAgentsFile: async () => ipcRenderer.invoke("app:openAgentsFile"),
   openExternalUrl: async (url: string) => ipcRenderer.invoke("app:openExternal", { url }),
