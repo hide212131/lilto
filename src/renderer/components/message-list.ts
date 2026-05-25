@@ -3,6 +3,7 @@ import { customElement, property } from "lit/decorators.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { marked } from "marked";
 import type { Message } from "../types.js";
+import { formatMessageTimestamp } from "../../shared/format-message-timestamp.js";
 
 const MASCOT_URL = "./mascot.png";
 
@@ -20,6 +21,7 @@ export class LiltMessageList extends LitElement {
       flex-direction: column;
       flex: 1;
       min-height: 0;
+      --message-bubble-max-width: min(52rem, calc(100vw - 220px));
     }
     .chat {
       flex: 1;
@@ -47,7 +49,7 @@ export class LiltMessageList extends LitElement {
       background: #faf6f2;
       border: 1px solid #f0d8c5;
       width: fit-content;
-      max-width: min(75%, calc(100% - 16px));
+      max-width: var(--message-bubble-max-width);
     }
     .msg-assistant {
       margin-right: auto;
@@ -77,10 +79,54 @@ export class LiltMessageList extends LitElement {
       display: flex;
       flex-direction: column;
       align-items: flex-end;
+      align-self: flex-end;
       gap: 4px;
+      width: fit-content;
+      max-width: 100%;
+      margin-left: auto;
     }
-    .msg-wrapper-assistant {
-      display: contents;
+    .msg-wrapper-error {
+      display: flex;
+      justify-content: flex-start;
+      align-self: flex-start;
+      max-width: 100%;
+    }
+    .msg-shell {
+      position: relative;
+      display: inline-flex;
+      width: fit-content;
+      min-width: 0;
+      max-width: 100%;
+    }
+    .msg-shell-user {
+      align-self: flex-end;
+    }
+    .msg-shell-error {
+      max-width: var(--message-bubble-max-width);
+    }
+    .assistant-main {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      flex: 0 1 auto;
+      min-width: 0;
+      max-width: var(--message-bubble-max-width);
+    }
+    .msg-timestamp {
+      position: absolute;
+      font-size: 11px;
+      line-height: 1.2;
+      color: #9ca3af;
+      white-space: nowrap;
+      user-select: none;
+      bottom: 0;
+    }
+    .msg-shell-user .msg-timestamp {
+      right: calc(100% + 8px);
+    }
+    .msg-shell-assistant .msg-timestamp,
+    .msg-shell-error .msg-timestamp {
+      left: calc(100% + 8px);
     }
     .msg-actions {
       display: flex;
@@ -311,8 +357,17 @@ export class LiltMessageList extends LitElement {
       }
     }
     @media (max-width: 720px) {
+      :host {
+        --message-bubble-max-width: calc(100vw - 128px);
+      }
       .msg {
         width: calc(100% - 8px);
+      }
+      .assistant-row {
+        gap: 8px;
+      }
+      .msg-timestamp {
+        font-size: 10px;
       }
     }
     .assistant-row {
@@ -343,10 +398,16 @@ export class LiltMessageList extends LitElement {
       100% { transform: scaleY(1.06) translateY(-2px); }
     }
     .assistant-row .msg-assistant {
-      flex: 1;
+      flex: 0 1 auto;
       min-width: 0;
-      width: auto;
-      max-width: calc(100% - 54px);
+      width: fit-content;
+      max-width: 100%;
+    }
+    .msg-shell-error .msg-error {
+      flex: 0 1 auto;
+      min-width: 0;
+      width: fit-content;
+      max-width: 100%;
     }
   `;
 
@@ -534,6 +595,10 @@ export class LiltMessageList extends LitElement {
     }));
   }
 
+  private _renderMessageTimestamp(message: Message, side: "user" | "assistant" | "error") {
+    return html`<div class="msg-timestamp msg-timestamp-${side}">${formatMessageTimestamp(message.createdAt)}</div>`;
+  }
+
   render() {
     return html`
       <div class="chat" aria-live="polite" @click=${this._handleChatClick}>
@@ -544,8 +609,11 @@ export class LiltMessageList extends LitElement {
                   <div class="mascot-avatar ${m.pending ? "talking" : ""}">
                     <img src=${MASCOT_URL} alt="" aria-hidden="true" draggable="false"/>
                   </div>
-                  <div style="display:flex;flex-direction:column;flex:1;min-width:0;">
-                    <div class="msg msg-assistant ${m.pending ? "msg-pending" : ""}">${this._renderAssistantBody(m)}</div>
+                  <div class="assistant-main">
+                    <div class="msg-shell msg-shell-assistant">
+                      <div class="msg msg-assistant ${m.pending ? "msg-pending" : ""}">${this._renderAssistantBody(m)}</div>
+                      ${this._renderMessageTimestamp(m, "assistant")}
+                    </div>
                     ${!m.pending && m.text ? html`
                       <div class="msg-actions msg-actions-assistant">
                         <button class="action-btn" title="コピー" @click=${() => this._copyText(m.text ?? "")}>
@@ -559,7 +627,10 @@ export class LiltMessageList extends LitElement {
             : m.role === "user"
               ? html`
                   <div class="msg-wrapper-user">
-                    <div class="msg msg-user ${m.pending ? "msg-pending" : ""}">${this._renderMarkdown(m.text ?? "")}</div>
+                    <div class="msg-shell msg-shell-user">
+                      ${this._renderMessageTimestamp(m, "user")}
+                      <div class="msg msg-user ${m.pending ? "msg-pending" : ""}">${this._renderMarkdown(m.text ?? "")}</div>
+                    </div>
                     <div class="msg-actions">
                       <button class="action-btn" title="再送信" @click=${() => this._retryMessage(m)}>
                         ${this._reloadIcon()}
@@ -570,6 +641,15 @@ export class LiltMessageList extends LitElement {
                     </div>
                   </div>
                 `
+              : m.role === "error"
+                ? html`
+                    <div class="msg-wrapper-error">
+                      <div class="msg-shell msg-shell-error">
+                        <div class="msg msg-error ${m.pending ? "msg-pending" : ""}">${this._renderMarkdown(m.text ?? "")}</div>
+                        ${this._renderMessageTimestamp(m, "error")}
+                      </div>
+                    </div>
+                  `
               : html`<div class="msg msg-${m.role} ${m.pending ? "msg-pending" : ""}">${this._renderMarkdown(m.text ?? "")}</div>`
         )}
       </div>

@@ -130,6 +130,7 @@ export type AssistantProgress = {
 
 export type Message = {
   id: string;
+  createdAt: number;
   requestId?: string;
   role: "user" | "assistant" | "system" | "error";
   text: string;

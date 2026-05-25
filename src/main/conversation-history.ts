@@ -6,6 +6,7 @@ import { resolvePackagedCodexBinary } from "./app-paths";
 
 type ConversationMessage = {
   id: string;
+  createdAt: number;
   role: "user" | "assistant" | "system" | "error";
   text: string;
 };
@@ -19,11 +20,21 @@ export type ConversationRecord = {
   messages: ConversationMessage[];
 };
 
-function normalizeTimestamp(value: unknown): number {
+function normalizeTimestamp(value: unknown, fallback = Date.now()): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
-    return Date.now();
+    return fallback;
   }
   return value < 10_000_000_000 ? value * 1000 : value;
+}
+
+function resolveRecordTimestamp(record: Record<string, unknown>, fallback: number): number {
+  const candidates = [record.createdAt, record.updatedAt, record.timestamp, record.time];
+  for (const candidate of candidates) {
+    if (typeof candidate === "number" && Number.isFinite(candidate)) {
+      return normalizeTimestamp(candidate, fallback);
+    }
+  }
+  return fallback;
 }
 
 function fallbackTitleFromThread(thread: Record<string, unknown>): string {
@@ -57,7 +68,7 @@ function extractUserMessageText(item: Record<string, unknown>): string {
     .join("\n");
 }
 
-function parseMessagesFromTurns(turns: unknown): ConversationMessage[] {
+function parseMessagesFromTurns(turns: unknown, fallbackTimestamp: number): ConversationMessage[] {
   if (!Array.isArray(turns)) {
     return [];
   }
@@ -68,6 +79,7 @@ function parseMessagesFromTurns(turns: unknown): ConversationMessage[] {
       continue;
     }
     const turnRecord = turn as Record<string, unknown>;
+    const turnTimestamp = resolveRecordTimestamp(turnRecord, fallbackTimestamp);
     const items = Array.isArray(turnRecord.items) ? turnRecord.items : [];
     for (const item of items) {
       if (!item || typeof item !== "object") {
@@ -75,18 +87,19 @@ function parseMessagesFromTurns(turns: unknown): ConversationMessage[] {
       }
       const record = item as Record<string, unknown>;
       const id = typeof record.id === "string" ? record.id : `msg-${messages.length + 1}`;
+      const createdAt = resolveRecordTimestamp(record, turnTimestamp);
       switch (record.type) {
         case "userMessage": {
           const text = extractUserMessageText(record);
           if (text) {
-            messages.push({ id, role: "user", text });
+            messages.push({ id, createdAt, role: "user", text });
           }
           break;
         }
         case "agentMessage": {
           const text = typeof record.text === "string" ? record.text : "";
           if (text) {
-            messages.push({ id, role: "assistant", text });
+            messages.push({ id, createdAt, role: "assistant", text });
           }
           break;
         }
@@ -97,7 +110,7 @@ function parseMessagesFromTurns(turns: unknown): ConversationMessage[] {
               ? (record.error as { message: string }).message
               : "";
           if (text) {
-            messages.push({ id, role: "error", text });
+            messages.push({ id, createdAt, role: "error", text });
           }
           break;
         }
@@ -109,6 +122,7 @@ function parseMessagesFromTurns(turns: unknown): ConversationMessage[] {
     if (turnRecord.error && typeof turnRecord.error === "object" && typeof (turnRecord.error as { message?: unknown }).message === "string") {
       messages.push({
         id: typeof turnRecord.id === "string" ? `${turnRecord.id}-error` : `turn-error-${messages.length + 1}`,
+        createdAt: turnTimestamp,
         role: "error",
         text: (turnRecord.error as { message: string }).message
       });
@@ -161,13 +175,14 @@ export class ConversationHistoryService {
       if (!thread || typeof thread !== "object") {
         return null;
       }
+      const threadCreatedAt = normalizeTimestamp(thread.createdAt);
       return {
         id: typeof thread.id === "string" ? thread.id : conversationId,
         title: fallbackTitleFromThread(thread),
-        createdAt: normalizeTimestamp(thread.createdAt),
+        createdAt: threadCreatedAt,
         updatedAt: normalizeTimestamp(thread.updatedAt ?? thread.createdAt),
         backendSessionId: typeof thread.id === "string" ? thread.id : conversationId,
-        messages: parseMessagesFromTurns(thread.turns)
+        messages: parseMessagesFromTurns(thread.turns, threadCreatedAt)
       };
     } finally {
       client.close();

@@ -35,6 +35,15 @@ test("lilt-app が user 送信前と retry 巻き戻し直後に session snapsho
   assert.match(content, /this\.messages = this\.messages\.slice\(0, idx \+ 1\);\s*this\._saveCurrentSession\(\);\s*await this\._doSend\(text\);/s);
 });
 
+test("message 型と session 正規化が message createdAt を扱う", () => {
+  const typesContent = fs.readFileSync("src/renderer/types.ts", "utf8");
+  const appContent = fs.readFileSync("src/renderer/app.ts", "utf8");
+  assert.match(typesContent, /createdAt: number;/);
+  assert.match(appContent, /private _normalizeMessage\(/);
+  assert.match(appContent, /createdAt: typeof message\.createdAt === "number" && Number\.isFinite\(message\.createdAt\)/);
+  assert.match(appContent, /session\.messages\.map\(\(message\) => this\._normalizeMessage\(message, createdAt\)\)/);
+});
+
 test("lilt-app は会話切替だけでは session updatedAt を更新しない", () => {
   const content = fs.readFileSync("src/renderer/app.ts", "utf8");
   assert.match(content, /private _messagesEqual\(left: Message\[], right: Message\[\]\): boolean/);
@@ -84,4 +93,15 @@ test("chat-history が active 以外の unread dot と updatedAt 表示を持つ
   assert.match(content, /const date = new Date\(session\.updatedAt\);/);
   assert.match(content, /session\.hasUnread && !isActive && !isEditing/);
   assert.match(content, /class="unread-dot"/);
+});
+
+test("message-list が user 左 / assistant・error 右の timestamp を描画する", () => {
+  const content = fs.readFileSync("src/renderer/components/message-list.ts", "utf8");
+  assert.match(content, /formatMessageTimestamp/);
+  assert.match(content, /class="msg-shell msg-shell-user"/);
+  assert.match(content, /class="msg-shell msg-shell-assistant"/);
+  assert.match(content, /class="msg-shell msg-shell-error"/);
+  assert.match(content, /_renderMessageTimestamp\(m, "user"\)/);
+  assert.match(content, /_renderMessageTimestamp\(m, "assistant"\)/);
+  assert.match(content, /_renderMessageTimestamp\(m, "error"\)/);
 });

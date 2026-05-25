@@ -259,6 +259,15 @@ export class LiltApp extends LitElement {
     this.sessions = this._sortSessions(this.sessions);
   }
 
+  private _normalizeMessage(message: Omit<Message, "createdAt"> & { createdAt?: number }, fallbackCreatedAt = Date.now()): Message {
+    return {
+      ...message,
+      createdAt: typeof message.createdAt === "number" && Number.isFinite(message.createdAt)
+        ? message.createdAt
+        : fallbackCreatedAt
+    };
+  }
+
   private _normalizeSession(session: StoredSession): Session {
     const createdAt = typeof session.createdAt === "number" ? session.createdAt : Date.now();
     const updatedAt = typeof session.updatedAt === "number" ? session.updatedAt : createdAt;
@@ -270,7 +279,9 @@ export class LiltApp extends LitElement {
       updatedAt,
       hasUnread: session.hasUnread === true,
       backendSessionId: typeof session.backendSessionId === "string" ? session.backendSessionId : undefined,
-      messages: Array.isArray(session.messages) ? session.messages : []
+      messages: Array.isArray(session.messages)
+        ? session.messages.map((message) => this._normalizeMessage(message, createdAt))
+        : []
     };
   }
 
@@ -1029,6 +1040,7 @@ export class LiltApp extends LitElement {
   private _addMessage(role: Message["role"], text: string, progress?: AssistantProgress): string {
     const msg: Message = {
       id: this._nextMessageId(),
+      createdAt: Date.now(),
       requestId: this._activeRequestId ?? undefined,
       role,
       text,
@@ -1041,6 +1053,7 @@ export class LiltApp extends LitElement {
   private _addPendingMessage(role: Message["role"], text: string, progress?: AssistantProgress): string {
     const msg: Message = {
       id: this._nextMessageId(),
+      createdAt: Date.now(),
       requestId: this._activeRequestId ?? undefined,
       role,
       text,
@@ -1077,20 +1090,21 @@ export class LiltApp extends LitElement {
     this.messages = this.messages.filter((message) => message.id !== messageId);
   }
 
-  private _appendMessageToSession(sessionId: string, message: Message): string {
-    const shouldMarkUnread = this._shouldMarkSessionUnread(sessionId, message.role);
+  private _appendMessageToSession(sessionId: string, message: Omit<Message, "createdAt"> & { createdAt?: number }): string {
+    const normalizedMessage = this._normalizeMessage(message, Date.now());
+    const shouldMarkUnread = this._shouldMarkSessionUnread(sessionId, normalizedMessage.role);
     this._updateSession(sessionId, (session) => ({
       ...session,
-      messages: [...session.messages, message],
+      messages: [...session.messages, normalizedMessage],
       updatedAt: Date.now(),
       hasUnread: shouldMarkUnread ? true : session.hasUnread
     }));
 
     if (this._currentSessionId === sessionId) {
-      this.messages = [...this.messages, message];
+      this.messages = [...this.messages, normalizedMessage];
     }
 
-    return message.id;
+    return normalizedMessage.id;
   }
 
   private _updateSessionMessage(sessionId: string, messageId: string, patch: Partial<Message>) {

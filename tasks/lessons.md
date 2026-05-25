@@ -1,5 +1,17 @@
 # Lessons
 
+## 2026-05-26 bubble-adjacent timestamp width basis
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| 吹き出し横の timestamp 表示を追加した後、送信側 timestamp が本文長に応じて遠く離れ、受信側も吹き出しが不必要に広がった問題を `message-list` の幅計算として修正した。 | bubble を shrink-wrap したい wrapper の中で `max-width: 75%` のような親比率を使うと、比率の基準が wrapper 自身になり、bubble より wrapper が大きく膨らむ。そこへ横並びや absolute timestamp を載せると、timestamp は常に離れ、assistant 側は full-width っぽく見える。 | 吹き出し横に補助要素を置く UI では、bubble の最大幅を親 percentage ではなく viewport か明示的な外側基準で決める。shrink-wrap wrapper と percent max-width を組み合わせるときは、DOM の実測幅まで確認して「wrapper 幅 = bubble 幅」になっていることを先に確かめる。 |
+
+## 2026-05-26 message timestamp metadata boundary
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| メッセージ吹き出しの横に日時を表示する変更で、最初は renderer の見た目調整だけで済むように見えたが、実際には `Message` 型に個別 `createdAt` が無く、session 全体の `createdAt` / `updatedAt` だけでは送受信ごとの時刻を正しく出せなかった。 | 会話 UI の補助メタデータを session 単位 timestamp で代用すると、過去履歴の各 message が同じ時刻になったり、pending/error/cron 由来 message の表示時刻が不安定になる。見た目の要求でも、データ粒度が 1 段浅いと後方互換込みで崩れる。 | message 単位の日時や状態を UI に出す変更では、先に `Message` 自体へ必要な metadata を追加し、renderer 新規生成・main 側履歴読込・legacy fallback を同時に揃える。session timestamp は一覧ソート用であって、bubble 横の補助情報の代用にはしない。 |
+
 ## 2026-05-26 chat markdown newline preservation
 
 | Change | Mistake/Context | Rule to repeat |
