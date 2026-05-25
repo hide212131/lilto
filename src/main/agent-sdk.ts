@@ -767,7 +767,7 @@ export async function createCodexThreadFromAppServer(options: {
         model: options.model?.id,
         cwd: options.cwd ?? process.cwd(),
         approvalPolicy: "never",
-        sandbox: options.sandboxMode === "workspace-write" ? "workspaceWrite" : "dangerFullAccess",
+        sandbox: options.sandboxMode === "workspace-write" ? "workspace-write" : "danger-full-access",
         serviceName: "lilto",
         ...(mergeCodexConfig(mcpConfig, options.config) ? { config: mergeCodexConfig(mcpConfig, options.config) } : {})
       };

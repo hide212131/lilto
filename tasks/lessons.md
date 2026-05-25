@@ -1,5 +1,11 @@
 # Lessons
 
+## 2026-05-26 Codex App Server sandbox schema split
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| チャット送信時の `AGENT_EXECUTION_FAILED` を、Codex App Server へ渡す sandbox enum の表記ずれとして修正した。live probe の結果、`thread/start.sandbox` は `danger-full-access` / `workspace-write` の kebab-case を受け付ける一方、`turn/start.sandboxPolicy.type` は `dangerFullAccess` / `workspaceWrite` の camelCase を要求していた。 | 過去設計や片側の失敗ログだけで App Server の schema を一様だと決め打ちすると、片方の RPC を直した瞬間にもう片方を壊す。unit test を単純モックだけで書くと、この種の mixed schema を見落とす。 | Codex App Server の request schema は RPC ごとに実 probe で確認する。特に `thread/start` と `turn/start` は別 schema の可能性を前提にし、live で受理された enum 表記を回帰テストへ固定する。 |
+
 ## 2026-05-23 history click reorder regression
 
 | Change | Mistake/Context | Rule to repeat |

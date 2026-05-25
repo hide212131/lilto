@@ -1,8 +1,10 @@
 const test = require("node:test");
+const { mock } = require("node:test");
 const assert = require("node:assert/strict");
 const http = require("node:http");
 
-const { AgentRuntime, createCodexThreadFromSdk } = require("../dist/main/agent-sdk.js");
+const { AgentRuntime, createCodexThreadFromSdk, createCodexThreadFromAppServer } = require("../dist/main/agent-sdk.js");
+const { CodexAppServerClient } = require("../dist/main/codex-app-server-client.js");
 const {
   mergePathValues,
   mergeWindowsEnvironment,
@@ -616,6 +618,76 @@ test("Windows sandbox 有効時は workspace-write と Codex config override を
       sandbox_private_desktop: false
     }
   });
+});
+
+test("createCodexThreadFromAppServer は app-server の混在 sandbox schema へ合わせる", async () => {
+  const requests = [];
+  const startMock = mock.method(CodexAppServerClient.prototype, "start", async function () {});
+  const requestMock = mock.method(CodexAppServerClient.prototype, "request", async function (method, params) {
+    requests.push({ method, params });
+    if (method === "thread/start") {
+      return { thread: { id: `thread-${requests.length}` } };
+    }
+    if (method === "turn/start") {
+      return { turn: { id: `turn-${requests.length}` } };
+    }
+    return {};
+  });
+  const nextNotificationMock = mock.method(CodexAppServerClient.prototype, "nextNotification", async function () {
+    if (!this.__testDeliveredThreadStarted) {
+      this.__testDeliveredThreadStarted = true;
+      return { method: "thread/started", params: { thread: { id: "thread-test" } } };
+    }
+    return { method: "turn/completed", params: { turn: { status: "completed" } } };
+  });
+  const closeMock = mock.method(CodexAppServerClient.prototype, "close", function () {});
+
+  try {
+    const defaultThread = await createCodexThreadFromAppServer({
+      apiKey: "sk-test",
+      cwd: "C:\\workspace",
+      additionalDirectories: ["C:\\extra"],
+      codexHomeDir: "C:\\codex-home",
+      homeDir: "C:\\home"
+    });
+    const defaultRun = await defaultThread.runStreamed("hello");
+    for await (const _event of defaultRun.events) {
+      // drain
+    }
+
+    const workspaceThread = await createCodexThreadFromAppServer({
+      apiKey: "sk-test",
+      cwd: "C:\\workspace",
+      additionalDirectories: ["C:\\extra"],
+      codexHomeDir: "C:\\codex-home",
+      homeDir: "C:\\home",
+      sandboxMode: "workspace-write"
+    });
+    const workspaceRun = await workspaceThread.runStreamed("hello");
+    for await (const _event of workspaceRun.events) {
+      // drain
+    }
+
+    const threadStarts = requests.filter((entry) => entry.method === "thread/start");
+    const turnStarts = requests.filter((entry) => entry.method === "turn/start");
+
+    assert.equal(threadStarts[0]?.params?.sandbox, "danger-full-access");
+    assert.deepEqual(turnStarts[0]?.params?.sandboxPolicy, {
+      type: "dangerFullAccess",
+      networkAccess: true
+    });
+    assert.equal(threadStarts[1]?.params?.sandbox, "workspace-write");
+    assert.deepEqual(turnStarts[1]?.params?.sandboxPolicy, {
+      type: "workspaceWrite",
+      writableRoots: ["C:\\workspace", "C:\\extra"],
+      networkAccess: true
+    });
+  } finally {
+    closeMock.mock.restore();
+    nextNotificationMock.mock.restore();
+    requestMock.mock.restore();
+    startMock.mock.restore();
+  }
 });
 
 test("Windows sandbox setup required エラーを標準化する", async () => {
