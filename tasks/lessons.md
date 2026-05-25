@@ -1,5 +1,11 @@
 # Lessons
 
+## 2026-05-26 chat markdown newline preservation
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| テキスト入力欄で入れた改行がメッセージ表示時に潰れる不具合を、renderer の markdown 描画で `marked.parse()` が既定では単一改行を `<br>` にしない設定だった問題として修正した。 | メッセージ本文コンテナ側に `white-space: pre-wrap` があっても、先に markdown parser が単一改行を通常の空白へ畳むと表示では復元できない。入力保持と CSS だけ見ていると、描画変換層の既定挙動を見落とす。 | textarea の複数行入力を markdown 表示へ通すときは、CSS ではなく parser 設定まで確認する。プレーンテキストの改行を見せたい UI では `marked` などの line-break option を有効化し、単一改行が保持される前提を固定する。 |
+
 ## 2026-05-26 Codex App Server sandbox schema split
 
 | Change | Mistake/Context | Rule to repeat |

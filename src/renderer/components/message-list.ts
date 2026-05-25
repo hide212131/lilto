@@ -383,7 +383,7 @@ export class LiltMessageList extends LitElement {
   }
 
   private _renderMarkdown(text: string) {
-    const html = marked.parse(text, { async: false }) as string;
+    const html = marked.parse(text, { async: false, breaks: true }) as string;
     return unsafeHTML(`<div class="markdown">${html}</div>`);
   }
 
