@@ -28,6 +28,7 @@ const SIDEBAR_WIDTH_STORAGE_KEY = "lilto-sidebar-width";
 const DEFAULT_SIDEBAR_WIDTH = 272;
 const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 480;
+const HYDRATION_MERGE_TIME_WINDOW_MS = 5000;
 
 type StoredSession = Partial<Session> & Pick<Session, "id" | "title">;
 
@@ -89,6 +90,7 @@ export class LiltApp extends LitElement {
   private _toolProgress: AssistantToolProgress[] = [];
   private _pendingLabel = "";
   private _currentSessionId: string | null = null;
+  private _seenSchedulerNotifications = new Map<string, number>();
   private _isResizingSidebar = false;
   private _onSidebarResize = (event: PointerEvent) => {
     if (!this._isResizingSidebar) return;
@@ -294,6 +296,64 @@ export class LiltApp extends LitElement {
     });
   }
 
+  private _mergeSessionMessages(hydratedMessages: Message[], localMessages: Message[]): Message[] {
+    if (localMessages.length === 0) {
+      return hydratedMessages;
+    }
+
+    const hydratedSignatures = new Set(hydratedMessages.map((message) => this._messageMergeSignature(message)));
+    const merged = [...hydratedMessages];
+    for (const message of localMessages) {
+      if (this._hasEquivalentHydratedMessage(hydratedMessages, hydratedSignatures, message)) {
+        continue;
+      }
+      hydratedSignatures.add(this._messageMergeSignature(message));
+      merged.push(message);
+    }
+
+    return merged.sort((left, right) => {
+      if (left.createdAt !== right.createdAt) {
+        return left.createdAt - right.createdAt;
+      }
+      return left.id.localeCompare(right.id);
+    });
+  }
+
+  private _messageMergeSignature(message: Message): string {
+    return JSON.stringify([message.role, message.text, message.createdAt]);
+  }
+
+  private _hasEquivalentHydratedMessage(
+    hydratedMessages: Message[],
+    hydratedSignatures: Set<string>,
+    localMessage: Message
+  ): boolean {
+    const exactSignature = this._messageMergeSignature(localMessage);
+    if (hydratedSignatures.has(exactSignature)) {
+      return true;
+    }
+
+    // Freshly-sent local user/assistant messages can have slightly different ids/timestamps
+    // from the backend-hydrated conversation, but should still collapse into one message.
+    return hydratedMessages.some((hydratedMessage) =>
+      hydratedMessage.role === localMessage.role
+      && hydratedMessage.text === localMessage.text
+      && Math.abs(hydratedMessage.createdAt - localMessage.createdAt) <= HYDRATION_MERGE_TIME_WINDOW_MS
+    );
+  }
+
+  private _mergeHydratedSession(hydratedSession: Session, localSession: Session | null): Session {
+    if (!localSession) {
+      return hydratedSession;
+    }
+
+    return {
+      ...hydratedSession,
+      hasUnread: localSession.hasUnread,
+      messages: this._mergeSessionMessages(hydratedSession.messages, localSession.messages)
+    };
+  }
+
   private _updateSession(sessionId: string, mutate: (session: Session) => Session): Session | null {
     let updatedSession: Session | null = null;
     this.sessions = this.sessions.map((session) => {
@@ -401,8 +461,9 @@ export class LiltApp extends LitElement {
       return;
     }
 
-    const nextSession = this._normalizeSession(result.conversation);
+    const hydratedSession = this._normalizeSession(result.conversation);
     const existing = this.sessions.find((session) => session.id === conversationId) ?? null;
+    const nextSession = this._mergeHydratedSession(hydratedSession, existing);
     this.sessions = this._sortSessions([
       nextSession,
       ...this.sessions.filter((session) => session.id !== conversationId)
@@ -564,7 +625,9 @@ export class LiltApp extends LitElement {
     }
 
     const loaded = await window.lilto.readConversation(nextSession.backendSessionId ?? nextSession.id);
-    const hydratedSession = loaded.ok ? this._normalizeSession(loaded.conversation) : nextSession;
+    const hydratedSession = loaded.ok
+      ? this._mergeHydratedSession(this._normalizeSession(loaded.conversation), nextSession)
+      : nextSession;
     this.sessions = this._sortSessions([
       { ...hydratedSession, hasUnread: false },
       ...this.sessions.filter((entry) => entry.id !== hydratedSession.id)
@@ -775,6 +838,10 @@ export class LiltApp extends LitElement {
   }
 
   private _onSchedulerNotification(event: SchedulerNotificationEvent) {
+    if (this._markSchedulerNotificationSeen(event)) {
+      return;
+    }
+
     if (event.id === HEARTBEAT_INTERNAL_SCHEDULE_ID || isHeartbeatAssistantSessionId(event.sessionId)) {
       const heartbeatSessionId = this._ensureHeartbeatSession(event.sessionId);
       this._appendMessageToSession(heartbeatSessionId, {
@@ -917,6 +984,25 @@ export class LiltApp extends LitElement {
       text: userMessage
     });
     await window.lilto.showSchedulerNotification(userMessage, conversationId);
+  }
+
+  private _markSchedulerNotificationSeen(event: SchedulerNotificationEvent): boolean {
+    const key = `${event.id}:${event.sessionId}:${event.firedAt}`;
+    if (this._seenSchedulerNotifications.has(key)) {
+      return true;
+    }
+
+    this._seenSchedulerNotifications.set(key, Date.now());
+    if (this._seenSchedulerNotifications.size > 200) {
+      const staleKeys = [...this._seenSchedulerNotifications.entries()]
+        .sort((left, right) => left[1] - right[1])
+        .slice(0, this._seenSchedulerNotifications.size - 200)
+        .map(([staleKey]) => staleKey);
+      for (const staleKey of staleKeys) {
+        this._seenSchedulerNotifications.delete(staleKey);
+      }
+    }
+    return false;
   }
 
   private _appendProgressLineFromLoopEvent(event: AgentLoopEvent) {

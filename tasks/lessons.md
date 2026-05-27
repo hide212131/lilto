@@ -1,5 +1,29 @@
 # Lessons
 
+## 2026-05-27 hydration merge timestamp drift
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| 通常送信の user / assistant message が 2 回見える不具合を、renderer が fresh local message と backend hydrated message を `createdAt` 完全一致でしか同一視していなかった問題として修正した。 | backend の `item-*` message と renderer が直前に積んだ `msg-*` message は role/text が同じでも timestamp が数百 ms ずれる。scheduler の local-only message 保持のために merge を入れても、同一判定が厳しすぎると通常会話まで二重化する。 | hydration merge で backend persisted message と直前 local optimistic message を突き合わせるときは、`createdAt` 完全一致を前提にしない。role/text と小さい timestamp window を使って persisted duplicate を畳み、local-only scheduler message だけを残す。 |
+
+## 2026-05-27 scheduler notification dedupe boundary
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| conditional scheduler notification の user-facing message が 2 回出る不具合を、renderer が同一 `event.id + sessionId + firedAt` の scheduler fire を重複処理していた前提で dedupe して修正した。 | fresh-context thread leak を止めても、renderer 側に event-level dedupe が無いと、同じ fire が IPC や再通知経路で二重に届いた時に plain notification / conditional decision がそのまま二重描画される。 | scheduler notification を会話へ反映する入口では、文面や sessionId だけでなく fire 単位の stable key で重複防止を持つ。follow-up 実行前に dedupe し、同じ fire で assistant message と follow-up が二重に走らないようにする。 |
+
+## 2026-05-27 auxiliary fresh-context thread leakage
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| scheduler follow-up と heartbeat の `freshContext` 実行で補助 thread を毎回新規作成していた結果、backend 履歴一覧へ auxiliary session が次々と出る問題を、補助 thread の service 名分離と実行後 archive で修正した。 | `freshContext` は「既存会話へ再バインドしない」だけで、「backend 履歴へ残さない」までは保証しない。background follow-up が app-server thread を通常 service 名のまま残すと、履歴 UI はそれを新しい会話として列挙してしまう。 | fresh-context を scheduler/heartbeat の補助実行に使うときは、会話 resume 抑止だけで終わらせず、その thread を履歴からも隠す。補助 thread には専用 service 名を付け、完了後 archive し、履歴一覧側でも auxiliary 判定を持って防御する。 |
+
+## 2026-05-27 scheduler local message hydration loss
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| cron 通知メッセージが別セッション表示中には local state へ積まれるのに、対象会話を開いた瞬間に消える不具合を、renderer の会話再hydrate時に backend `readConversation` の messages で丸ごと上書きしていた問題として修正した。 | scheduler/notification 由来の assistant message は renderer local state にしか存在しないのに、`_openConversation()` や `_refreshConversation()` が backend 会話を正として全 messages を差し替えると、非表示中に積まれた local-only message が開封時に消える。未読だけ残るので「通知は来たが会話に無い」ように見える。 | backend 会話を renderer へ再hydrateする処理では、backend record をそのまま正本として全 message を置換しない。scheduler や pending follow-up のような local-only message を識別してマージし、会話 open/refresh の両経路で同じ保持ルールを適用する。 |
+
 ## 2026-05-26 bubble-adjacent timestamp width basis
 
 | Change | Mistake/Context | Rule to repeat |

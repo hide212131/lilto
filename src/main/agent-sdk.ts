@@ -61,6 +61,7 @@ type CodexSession = {
 const EVENT_LOG_PREVIEW_LIMIT = 160;
 const OAUTH_MODEL_IDS = new Set(["gpt-5.3-codex"]);
 const SCHEDULER_FOLLOW_UP_PROMPT_PREFIX = "以下はこの会話で発火した scheduler 通知です。";
+const AUXILIARY_THREAD_SERVICE_NAME = "lilto-background";
 const SCHEDULER_PROMPT_GUIDANCE = [
   "[Scheduler execution rule]",
   "If this request is about reminding/notifying later or on a schedule, you MUST use the `cron` MCP tool.",
@@ -682,6 +683,8 @@ export async function createCodexThreadFromAppServer(options: {
   schedulerSessionId?: string;
   sandboxMode?: "danger-full-access" | "workspace-write";
   config?: CodexConfig;
+  ephemeralThread?: boolean;
+  serviceName?: string;
 }): Promise<Thread> {
   const packagedCodex = resolvePackagedCodexBinary();
   const bridgeEnv = options.schedulerBridge
@@ -728,6 +731,7 @@ export async function createCodexThreadFromAppServer(options: {
 
       let activeThreadId = options.threadId ?? null;
       let activeTurnId: string | null = null;
+      let startedEphemeralThread = false;
       let closed = false;
       const textByItemId = new Map<string, string>();
       const reasoningByItemId = new Map<string, string>();
@@ -768,7 +772,7 @@ export async function createCodexThreadFromAppServer(options: {
         cwd: options.cwd ?? process.cwd(),
         approvalPolicy: "never",
         sandbox: options.sandboxMode === "workspace-write" ? "workspace-write" : "danger-full-access",
-        serviceName: "lilto",
+        serviceName: options.serviceName ?? "lilto",
         ...(mergeCodexConfig(mcpConfig, options.config) ? { config: mergeCodexConfig(mcpConfig, options.config) } : {})
       };
 
@@ -780,6 +784,7 @@ export async function createCodexThreadFromAppServer(options: {
       } else {
         const result = await client.request<{ thread?: { id?: string | null } }>("thread/start", threadParams);
         activeThreadId = typeof result?.thread?.id === "string" ? result.thread.id : null;
+        startedEphemeralThread = options.ephemeralThread === true && Boolean(activeThreadId);
       }
 
       if (!activeThreadId) {
@@ -882,6 +887,11 @@ export async function createCodexThreadFromAppServer(options: {
           if (runOptions?.signal) {
             runOptions.signal.removeEventListener("abort", abortHandler);
           }
+          if (startedEphemeralThread && activeThreadId) {
+            await client.request("thread/archive", {
+              threadId: activeThreadId
+            }, 5000).catch(() => {});
+          }
           closeClient();
         }
       })();
@@ -904,6 +914,8 @@ export class AgentRuntime {
     schedulerSessionId?: string;
     sandboxMode?: "danger-full-access" | "workspace-write";
     config?: CodexConfig;
+    ephemeralThread?: boolean;
+    serviceName?: string;
   }) => Promise<Thread>;
   private readonly authService: Pick<ClaudeAuthService, "getState" | "getApiKey">;
   private readonly logger: Logger;
@@ -938,6 +950,8 @@ export class AgentRuntime {
       schedulerSessionId?: string;
       sandboxMode?: "danger-full-access" | "workspace-write";
       config?: CodexConfig;
+      ephemeralThread?: boolean;
+      serviceName?: string;
     }) => Promise<Thread>;
     authService: Pick<ClaudeAuthService, "getState" | "getApiKey">;
     workspaceDir?: string;
@@ -995,6 +1009,8 @@ export class AgentRuntime {
     conversationId?: string;
     backendSessionId?: string;
     freshContext?: boolean;
+    ephemeralThread?: boolean;
+    serviceName?: string;
     threadOptions: SessionThreadOptions;
   }): Promise<CodexSession> {
     const cwd = options.cwd ?? process.cwd();
@@ -1030,7 +1046,9 @@ export class AgentRuntime {
       schedulerBridge: this.schedulerBridge,
       schedulerSessionId: threadId ?? options.conversationId ?? "default",
       sandboxMode: options.threadOptions.sandboxMode,
-      config: options.threadOptions.config
+      config: options.threadOptions.config,
+      ephemeralThread: options.ephemeralThread,
+      serviceName: options.serviceName
     });
     const session = { signature, thread };
     if (!options.freshContext) {
@@ -1169,6 +1187,8 @@ export class AgentRuntime {
       conversationId?: string;
       backendSessionId?: string;
       freshContext?: boolean;
+      ephemeralThread?: boolean;
+      serviceName?: string;
     },
     providerSettings: ProviderSettings,
     hooks?: {
@@ -1246,11 +1266,16 @@ export class AgentRuntime {
       conversationId?: string;
       backendSessionId?: string;
       freshContext?: boolean;
+      ephemeralThread?: boolean;
+      serviceName?: string;
       onLoopEvent?: (event: AgentLoopEvent) => void;
       mode?: "default" | "heartbeat";
     }
   ): Promise<AgentResult> {
     try {
+      const usesAuxiliaryThread = hooks?.freshContext === true
+        && (hooks.mode === "heartbeat" || text.startsWith(SCHEDULER_FOLLOW_UP_PROMPT_PREFIX));
+
       if (process.env.LILTO_E2E_MOCK === "1") {
         await runProxyPrecheckIfEnabled(providerSettings);
         if (hooks?.onLoopEvent) {
@@ -1341,6 +1366,8 @@ export class AgentRuntime {
             conversationId: hooks?.conversationId,
             backendSessionId: hooks?.backendSessionId,
             freshContext: hooks?.freshContext,
+            ephemeralThread: hooks?.ephemeralThread ?? usesAuxiliaryThread,
+            serviceName: hooks?.serviceName ?? (usesAuxiliaryThread ? AUXILIARY_THREAD_SERVICE_NAME : undefined),
             ...runOptionsBase
           },
           providerSettings,
@@ -1369,6 +1396,8 @@ export class AgentRuntime {
           conversationId: hooks?.conversationId,
           backendSessionId: hooks?.backendSessionId,
           freshContext: hooks?.freshContext,
+          ephemeralThread: hooks?.ephemeralThread ?? usesAuxiliaryThread,
+          serviceName: hooks?.serviceName ?? (usesAuxiliaryThread ? AUXILIARY_THREAD_SERVICE_NAME : undefined),
           ...runOptionsBase
         },
         providerSettings,

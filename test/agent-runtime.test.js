@@ -454,6 +454,45 @@ test("freshContext では既存 thread を resume せず会話への再バイン
   assert.equal(calls[2].threadId, "thread-restored-1");
 });
 
+test("scheduler follow-up と heartbeat freshContext は補助 thread として作成する", async () => {
+  const calls = [];
+  const runtime = new AgentRuntime({
+    authService: createAuthService("authenticated"),
+    createSession: async (options) => {
+      calls.push(options);
+      return {
+        id: "thread-aux-1",
+        async runStreamed() {
+          async function* stream() {
+            yield { type: "thread.started", thread_id: "thread-aux-1" };
+            yield { type: "item.completed", item: { id: "m1", type: "agent_message", text: "ok" } };
+          }
+          return { events: stream() };
+        }
+      };
+    },
+    logger: { info() {}, error() {} }
+  });
+
+  await runtime.submitPrompt(
+    "以下はこの会話で発火した scheduler 通知です。\n通知文言: test\n続きの処理: noop",
+    createProviderSettings(),
+    { requestId: "req-1", conversationId: "conv-1", freshContext: true }
+  );
+  await runtime.submitPrompt("heartbeat", createProviderSettings(), {
+    requestId: "req-2",
+    conversationId: "conv-2",
+    freshContext: true,
+    mode: "heartbeat"
+  });
+
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].ephemeralThread, true);
+  assert.equal(calls[0].serviceName, "lilto-background");
+  assert.equal(calls[1].ephemeralThread, true);
+  assert.equal(calls[1].serviceName, "lilto-background");
+});
+
 test("refreshPlugins 後は次回送信で session を再作成する", async () => {
   let sessionCount = 0;
   const runtime = new AgentRuntime({

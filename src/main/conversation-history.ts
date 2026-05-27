@@ -11,6 +11,9 @@ type ConversationMessage = {
   text: string;
 };
 
+const AUXILIARY_THREAD_SERVICE_NAME = "lilto-background";
+const SCHEDULER_FOLLOW_UP_THREAD_PREFIX = "以下はこの会話で発火した scheduler 通知です。";
+
 export type ConversationRecord = {
   id: string;
   title: string;
@@ -45,6 +48,14 @@ function fallbackTitleFromThread(thread: Record<string, unknown>): string {
     return thread.preview.trim().slice(0, 40);
   }
   return "会話";
+}
+
+function isAuxiliaryConversationThread(thread: Record<string, unknown>): boolean {
+  if (thread.serviceName === AUXILIARY_THREAD_SERVICE_NAME) {
+    return true;
+  }
+
+  return fallbackTitleFromThread(thread).startsWith(SCHEDULER_FOLLOW_UP_THREAD_PREFIX);
 }
 
 function extractUserMessageText(item: Record<string, unknown>): string {
@@ -158,7 +169,7 @@ export class ConversationHistoryService {
         updatedAt: normalizeTimestamp(thread.updatedAt ?? thread.createdAt),
         backendSessionId: typeof thread.id === "string" ? thread.id : "",
         messages: []
-      })).filter((thread) => thread.id);
+      })).filter((thread, index) => thread.id && !isAuxiliaryConversationThread(data[index] ?? {}));
     } finally {
       client.close();
     }

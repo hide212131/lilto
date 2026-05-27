@@ -30,6 +30,8 @@ test("renderer app は backendSessionId または conversationId で scheduler n
   assert.match(content, /event\.type === "run_start" && event\.conversationId === this\._pendingConversationId/);
   assert.match(content, /backendSessionId/);
   assert.match(content, /_onSchedulerNotification/);
+  assert.match(content, /_markSchedulerNotificationSeen\(event\)/);
+  assert.match(content, /const key = `\$\{event\.id\}:\$\{event\.sessionId\}:\$\{event\.firedAt\}`/);
   assert.match(content, /session\.backendSessionId === event\.sessionId/);
   assert.match(content, /session\.id === event\.sessionId/);
   assert.match(content, /followUpInstruction/);
@@ -48,6 +50,13 @@ test("renderer app は backendSessionId または conversationId で scheduler n
   assert.match(content, /role: "assistant",\s*text: notificationText/);
   assert.match(content, /role\?: "assistant" \| "error"/);
   assert.match(content, /role: decision\.role \?\? "assistant"/);
+  assert.match(content, /private _mergeSessionMessages\(hydratedMessages: Message\[], localMessages: Message\[]\): Message\[]/);
+  assert.match(content, /HYDRATION_MERGE_TIME_WINDOW_MS = 5000/);
+  assert.match(content, /private _hasEquivalentHydratedMessage\(/);
+  assert.match(content, /Math\.abs\(hydratedMessage\.createdAt - localMessage\.createdAt\) <= HYDRATION_MERGE_TIME_WINDOW_MS/);
+  assert.match(content, /private _mergeHydratedSession\(hydratedSession: Session, localSession: Session \| null\): Session/);
+  assert.match(content, /const nextSession = this\._mergeHydratedSession\(hydratedSession, existing\)/);
+  assert.match(content, /\? this\._mergeHydratedSession\(this\._normalizeSession\(loaded\.conversation\), nextSession\)/);
 });
 
 test("settings-modal は Schedules タブから schedule 一覧取得と削除を行える", () => {
@@ -87,6 +96,14 @@ test("main ipc は scheduler 一覧取得と削除ハンドラを公開する", 
   assert.match(content, /ipcMain\.handle\("scheduler:showNotification"/);
   assert.match(content, /openConversationWindow\(conversationId\)/);
   assert.match(content, /if \(!silent\)/);
+});
+
+test("conversation history は補助 scheduler thread を一覧から除外する", () => {
+  const content = fs.readFileSync("src/main/conversation-history.ts", "utf8");
+  assert.match(content, /AUXILIARY_THREAD_SERVICE_NAME = "lilto-background"/);
+  assert.match(content, /SCHEDULER_FOLLOW_UP_THREAD_PREFIX = "以下はこの会話で発火した scheduler 通知です。"/);
+  assert.match(content, /function isAuxiliaryConversationThread\(thread: Record<string, unknown>\): boolean/);
+  assert.match(content, /!isAuxiliaryConversationThread\(data\[index\] \?\? \{\}\)/);
 });
 
 test("renderer app は heartbeat assistant finding を専用セッションへ反映する", () => {
