@@ -1,5 +1,17 @@
 # Lessons
 
+## 2026-06-10 windows path tests need host-fs separation
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| `user-data-path` の Windows migration テストを macOS 上で回したとき、Windows 向けに返す `path.win32` の文字列と、実際に `fs` が読むホスト OS のパスを同一視していたため、`configureAppUserDataPath` のコピー確認が偽失敗した。 | Windows 文字列パスは `app.setPath("userData", ...)` の契約としては正しい一方、非 Windows ホスト上の `fs.existsSync` や `fs.cpSync` にはそのまま渡せない。返却契約とホスト側のファイル操作を分けないと、cross-platform テストだけが赤くなる。 | Windows path 契約を非 Windows ホストで検証するときは、「Windows として返す文字列」と「ホスト OS で実際に触る fs path」を分ける。実装でも migration 用の fs 操作は host-native path へ正規化し、テスト側の存在確認も `path.join(...)` などホスト準拠で行う。 |
+
+## 2026-06-10 OpenSpec artifact scaffold boundary
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| OpenSpec の proposal/design/specs/tasks を作る change で、scaffold 直後に artifact ファイルが既にある前提で patch を当てようとして失敗した。 | `openspec new change` は `.openspec.yaml` を作るが、各 artifact ファイルは自動生成しない。存在前提で `Update File` を使うと無駄に手戻りになる。 | OpenSpec change 作成直後は artifact ファイルが未作成の前提で進める。最初の書き込みは `Add File` を使い、artifact を 1 つ追加するたびに `openspec status --change <name>` で依存状態を即確認する。 |
+
 ## 2026-05-27 hydration merge timestamp drift
 
 | Change | Mistake/Context | Rule to repeat |

@@ -1,0 +1,35 @@
+name: Quality Gate
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  typecheck-and-unit:
+    name: Typecheck and unit test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-latest
+          - windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: TypeScript noEmit check
+        run: npx tsc --noEmit -p tsconfig.json
+
+      - name: Renderer-free unit tests
+        run: npm run test:unit

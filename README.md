@@ -42,6 +42,13 @@ PC作業を人間の代わりに実行する、軽量なAIアシスタント。
 - 配布後の成果物と native helper 同梱の確認は `npm run verify:dist`
 - packaging 前提の native helper は `npm run build:native` により `native/**/bin` へ配置され、配布時は `resources/bin` へ同梱される
 
+## テスト実行
+- 高速な unit 確認は `npm run test:unit`
+- `test:unit` は `npm run prebuild` と `tsc -p tsconfig.json` だけを実行し、renderer の Vite build を省略する
+- `test:unit` は main / shared のコンパイル成果物と、source を直接読む UI contract test を対象にした日常確認用フロー
+- フル検証は `npm test`
+- `npm test` は従来どおり `vite build` を含み、renderer bundle まで含めて全体を確認する
+
 ## Electron UI 検証方針
 - 障害解析や仕様確認では、まず `live-ui-manual-verification` を使ってライブ UI を観測する
 - 主要なユーザー操作は Playwright ベースで扱う

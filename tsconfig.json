@@ -5,6 +5,8 @@
     "moduleResolution": "Node",
     "rootDir": "src",
     "outDir": "dist",
+    "incremental": true,
+    "tsBuildInfoFile": ".tsbuildinfo/main.tsbuildinfo",
     "strict": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,

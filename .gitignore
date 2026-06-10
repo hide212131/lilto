@@ -16,3 +16,4 @@ native/speech-transcriber/target/
 skills-lock.json
 .agents/skills/*/.skill-source.json
 HEARTBEAT.md
+.tsbuildinfo/

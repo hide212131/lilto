@@ -60,6 +60,7 @@ test("configureAppUserDataPath sets Local Lilt-o and copies legacy Roaming data"
   }
 
   const expectedUserDataDir = path.win32.join(localAppData, "Lilt-o");
+  const expectedHostUserDataDir = path.join(localAppData, "Lilt-o");
   assert.deepEqual(calls, [{ name: "userData", value: expectedUserDataDir }]);
-  assert.equal(fs.existsSync(path.join(expectedUserDataDir, "provider-settings.json")), true);
+  assert.equal(fs.existsSync(path.join(expectedHostUserDataDir, "provider-settings.json")), true);
 });

@@ -6,6 +6,14 @@ import type { App } from "electron";
 const WINDOWS_USER_DATA_DIR_NAME = "Lilt-o";
 const WINDOWS_LEGACY_USER_DATA_DIR_NAMES = ["lilt-o", "Lilt-o"];
 
+function toHostFsPath(targetPath: string): string {
+  if (path.sep === "\\") {
+    return targetPath;
+  }
+
+  return targetPath.replaceAll("\\", path.sep);
+}
+
 export function resolveWindowsLocalAppDataDir(env: NodeJS.ProcessEnv = process.env): string {
   return env.LOCALAPPDATA || path.win32.join(env.USERPROFILE || os.homedir(), "AppData", "Local");
 }
@@ -20,17 +28,18 @@ function resolveLegacyWindowsUserDataDirs(env: NodeJS.ProcessEnv = process.env):
 }
 
 function migrateLegacyWindowsUserDataDir(targetDir: string, env: NodeJS.ProcessEnv = process.env): void {
-  if (fs.existsSync(targetDir)) {
+  const hostTargetDir = toHostFsPath(targetDir);
+  if (fs.existsSync(hostTargetDir)) {
     return;
   }
 
-  const legacyDir = resolveLegacyWindowsUserDataDirs(env).find((candidate) => fs.existsSync(candidate));
+  const legacyDir = resolveLegacyWindowsUserDataDirs(env).find((candidate) => fs.existsSync(toHostFsPath(candidate)));
   if (!legacyDir) {
     return;
   }
 
-  fs.mkdirSync(path.dirname(targetDir), { recursive: true });
-  fs.cpSync(legacyDir, targetDir, { recursive: true, errorOnExist: false });
+  fs.mkdirSync(path.dirname(hostTargetDir), { recursive: true });
+  fs.cpSync(toHostFsPath(legacyDir), hostTargetDir, { recursive: true, errorOnExist: false });
 }
 
 export function configureAppUserDataPath(app: App, env: NodeJS.ProcessEnv = process.env): void {
