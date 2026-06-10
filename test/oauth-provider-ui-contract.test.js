@@ -15,7 +15,7 @@ test("settings-modal が ChatGPT login を先に出し、Model 選択 UI を持�
   assert.match(content, /window\.lilto\.setupWindowsSandbox\(\{ mode: savedState\.windowsSandbox\.mode \}\)/);
   assert.match(content, /mode: "off"/);
   assert.match(content, /window\.lilto\.listModels\(\{/);
-  assert.match(content, /oauthModelId:\s*this\._oauthModelId\.trim\(\) \|\| "gpt-5\.3-codex"/);
+  assert.match(content, /oauthModelId:\s*this\._oauthModelId\.trim\(\)/);
   assert.match(content, /oauthProvider:\s*this\._oauthProvider/);
   assert.match(content, /const saveResult = await window\.lilto\.saveProviderSettings\(\{/);
   assert.match(content, /const result = await window\.lilto\.startClaudeOauth\(\)/);

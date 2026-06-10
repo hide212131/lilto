@@ -12,16 +12,18 @@ const {
   HEARTBEAT_ASSISTANT_SESSION_PREFIX
 } = require("../dist/shared/heartbeat-assistant.js");
 
+const TEST_MODEL_ID = "model-oauth-alpha";
+
 function createProviderSettings(overrides = {}) {
   return {
     activeProvider: "oauth",
     oauthProvider: "openai-codex",
-    oauthModelId: "gpt-5.3-codex",
+    oauthModelId: TEST_MODEL_ID,
     customProvider: {
       name: "OpenAI API Key",
       baseUrl: "",
       apiKey: "",
-      modelId: "gpt-5.3-codex"
+      modelId: TEST_MODEL_ID
     },
     networkProxy: {
       useProxy: false

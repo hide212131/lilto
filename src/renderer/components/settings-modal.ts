@@ -31,12 +31,12 @@ export class LiltSettingsModal extends LitElement {
   @property({ type: Object }) providerSettings: ProviderSettings = {
     activeProvider: "oauth",
     oauthProvider: "openai-codex",
-    oauthModelId: "gpt-5.3-codex",
+    oauthModelId: "",
     customProvider: {
       name: "OpenAI API Key",
       baseUrl: "",
       apiKey: "",
-      modelId: "gpt-5.3-codex"
+      modelId: ""
     },
     networkProxy: {
       useProxy: false
@@ -62,7 +62,7 @@ export class LiltSettingsModal extends LitElement {
   @state() private _customName = "";
   @state() private _customBaseUrl = "";
   @state() private _customApiKey = "";
-  @state() private _oauthModelId = "gpt-5.3-codex";
+  @state() private _oauthModelId = "";
   @state() private _customModelId = "";
   @state() private _useProxy = false;
   @state() private _saveStatus = "";
@@ -788,7 +788,7 @@ export class LiltSettingsModal extends LitElement {
               .disabled=${this._oauthModelsLoading || this._oauthModelOptions.length === 0}
               .value=${live(this._oauthModelId || "")}
               @change=${(e: Event) => {
-                this._oauthModelId = (e.target as HTMLSelectElement).value || "gpt-5.3-codex";
+                this._oauthModelId = (e.target as HTMLSelectElement).value || "";
               }}
             >
               ${this._oauthModelOptions.map((model) => html`<option value=${model.id}>${model.displayName}</option>`)}
@@ -1865,12 +1865,12 @@ export class LiltSettingsModal extends LitElement {
     return {
       ...this.providerSettings,
       oauthProvider: this._oauthProvider,
-      oauthModelId: this._oauthModelId.trim() || "gpt-5.3-codex",
+      oauthModelId: this._oauthModelId.trim(),
       customProvider: {
         name: this._customName.trim(),
         baseUrl: this._customBaseUrl.trim(),
         apiKey: this._customApiKey,
-        modelId: this._customModelId.trim() || "gpt-5.3-codex"
+        modelId: this._customModelId.trim()
       },
       networkProxy: {
         useProxy: this._useProxy
@@ -1962,10 +1962,10 @@ export class LiltSettingsModal extends LitElement {
       ...this.providerSettings,
       activeProvider: provider,
       oauthProvider: this._oauthProvider,
-      oauthModelId: this._oauthModelId.trim() || "gpt-5.3-codex",
+      oauthModelId: this._oauthModelId.trim(),
       customProvider: {
         ...this.providerSettings.customProvider,
-        modelId: this._customModelId.trim() || "gpt-5.3-codex"
+        modelId: this._customModelId.trim()
       }
     };
     const result = await window.lilto.saveProviderSettings(next);
@@ -2008,10 +2008,10 @@ export class LiltSettingsModal extends LitElement {
     const saveResult = await window.lilto.saveProviderSettings({
       ...this.providerSettings,
       oauthProvider: this._oauthProvider,
-      oauthModelId: this._oauthModelId.trim() || "gpt-5.3-codex",
+      oauthModelId: this._oauthModelId.trim(),
       customProvider: {
         ...this.providerSettings.customProvider,
-        modelId: this._customModelId.trim() || "gpt-5.3-codex"
+        modelId: this._customModelId.trim()
       }
     });
     if (saveResult.ok) {

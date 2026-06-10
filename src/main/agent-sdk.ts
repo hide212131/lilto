@@ -59,7 +59,6 @@ type CodexSession = {
 };
 
 const EVENT_LOG_PREVIEW_LIMIT = 160;
-const OAUTH_MODEL_IDS = new Set(["gpt-5.3-codex"]);
 const SCHEDULER_FOLLOW_UP_PROMPT_PREFIX = "以下はこの会話で発火した scheduler 通知です。";
 const AUXILIARY_THREAD_SERVICE_NAME = "lilto-background";
 const SCHEDULER_PROMPT_GUIDANCE = [
@@ -159,7 +158,7 @@ function extractThreadItemErrorMessage(item: ThreadItem): string {
 }
 
 function buildCustomModel(settings: ProviderSettings): RuntimeModel {
-  const modelId = settings.customProvider.modelId.trim() || "gpt-5.3-codex";
+  const modelId = settings.customProvider.modelId.trim();
   const baseUrlInput = settings.customProvider.baseUrl.trim();
   return {
     id: modelId,
@@ -168,9 +167,8 @@ function buildCustomModel(settings: ProviderSettings): RuntimeModel {
 }
 
 function buildOauthModel(settings: ProviderSettings): RuntimeModel {
-  const requestedModel = settings.oauthModelId.trim();
   return {
-    id: OAUTH_MODEL_IDS.has(requestedModel) ? requestedModel : "gpt-5.3-codex"
+    id: settings.oauthModelId.trim()
   };
 }
 
@@ -1337,7 +1335,7 @@ export class AgentRuntime {
             ok: false,
             error: {
               code: "PROVIDER_CONFIG_REQUIRED",
-              message: "API key を使うには API key の設定が必要です。",
+              message: "API key / Base URL を設定し、モデル一覧からモデルを選択してください。",
               details: null,
               retryable: true
             }
@@ -1382,6 +1380,18 @@ export class AgentRuntime {
           error: {
             code: "AUTH_REQUIRED",
             message: "Codex ChatGPT 認証が必要です。",
+            details: null,
+            retryable: true
+          }
+        };
+      }
+
+      if (!providerSettings.oauthModelId.trim()) {
+        return {
+          ok: false,
+          error: {
+            code: "PROVIDER_CONFIG_REQUIRED",
+            message: "モデル一覧を取得して、利用するモデルを選択してください。",
             details: null,
             retryable: true
           }

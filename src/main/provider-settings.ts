@@ -33,7 +33,7 @@ export type ProviderSettingsSaveResult =
   | { ok: true; state: ProviderSettings }
   | { ok: false; error: { code: "INVALID_PROVIDER_SETTINGS"; message: string } };
 
-const DEFAULT_MODEL_ID = "gpt-5.3-codex";
+const DEFAULT_MODEL_ID = "";
 const PROVIDER_SETTINGS_PATH_ENV = "LILTO_PROVIDER_SETTINGS_PATH";
 
 function defaultProviderSettingsPath(): string {
@@ -57,12 +57,12 @@ function createDefaultSettings(): ProviderSettings {
   return {
     activeProvider: "oauth",
     oauthProvider: "openai-codex",
-    oauthModelId: "gpt-5.3-codex",
+    oauthModelId: DEFAULT_MODEL_ID,
     customProvider: {
       name: "OpenAI API Key",
       baseUrl: "",
       apiKey: "",
-      modelId: "gpt-5.3-codex"
+      modelId: DEFAULT_MODEL_ID
     },
     networkProxy: { useProxy: hasProxyEnvironment() },
     windowsSandbox: { ...DEFAULT_WINDOWS_SANDBOX_SETTINGS },
@@ -144,14 +144,13 @@ function normalizeSettings(value: unknown): ProviderSettings {
       : {};
   const defaultUseProxy = hasProxyEnvironment();
   const useProxy = typeof proxy.useProxy === "boolean" ? proxy.useProxy : defaultUseProxy;
-  const rawModelId = toTrimmedString(custom.modelId, DEFAULT_MODEL_ID) || DEFAULT_MODEL_ID;
-  const rawOauthModelId = toTrimmedString(record.oauthModelId, rawModelId) || DEFAULT_MODEL_ID;
-  const normalizedOauthModelId = rawOauthModelId === "qwen2.5:0.5b" ? DEFAULT_MODEL_ID : rawOauthModelId;
+  const rawModelId = toTrimmedString(custom.modelId, DEFAULT_MODEL_ID);
+  const rawOauthModelId = toTrimmedString(record.oauthModelId, rawModelId);
 
   return {
     activeProvider,
     oauthProvider: normalizeOAuthProvider(record.oauthProvider),
-    oauthModelId: normalizedOauthModelId,
+    oauthModelId: rawOauthModelId,
     customProvider: {
       name: toTrimmedString(custom.name),
       baseUrl: toTrimmedString(custom.baseUrl),
@@ -317,5 +316,8 @@ export class ProviderSettingsService {
 }
 
 export function isCustomProviderReady(settings: ProviderSettings): boolean {
-  return Boolean(settings.customProvider.apiKey.trim() || settings.customProvider.baseUrl.trim());
+  return Boolean(
+    (settings.customProvider.apiKey.trim() || settings.customProvider.baseUrl.trim()) &&
+    settings.customProvider.modelId.trim()
+  );
 }

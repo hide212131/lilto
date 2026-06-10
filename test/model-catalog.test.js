@@ -5,6 +5,9 @@ const { PassThrough } = require("node:stream");
 
 const { ModelCatalogService } = require("../dist/main/model-catalog.js");
 
+const MODEL_ALPHA = "model-alpha";
+const MODEL_BETA = "model-beta";
+
 function createFakeChild(onRequest) {
   const child = new EventEmitter();
   child.stdin = new PassThrough();
@@ -38,8 +41,8 @@ test("ModelCatalogService は OpenAI 互換 /models 応答を一覧へ変換す�
       async json() {
         return {
           data: [
-            { id: "gpt-5.3-codex" },
-            { id: "gpt-4.1-mini" }
+            { id: MODEL_BETA },
+            { id: MODEL_ALPHA }
           ]
         };
       }
@@ -53,7 +56,7 @@ test("ModelCatalogService は OpenAI 互換 /models 応答を一覧へ変換す�
   );
 
   assert.equal(result.ok, true);
-  assert.deepEqual(result.models.map((model) => model.id), ["gpt-4.1-mini", "gpt-5.3-codex"]);
+  assert.deepEqual(result.models.map((model) => model.id), [MODEL_ALPHA, MODEL_BETA]);
 });
 
 test("ModelCatalogService は codex app-server の model/list を ChatGPT モデル一覧へ変換する", async () => {
@@ -70,8 +73,8 @@ test("ModelCatalogService は codex app-server の model/list を ChatGPT モデ
           id: request.id,
           result: {
             data: [
-              { id: "gpt-5.3-codex", displayName: "GPT-5.3 Codex" },
-              { id: "gpt-5", displayName: "GPT-5" }
+              { id: MODEL_BETA, displayName: "Model Beta" },
+              { id: MODEL_ALPHA, displayName: "Model Alpha" }
             ],
             nextCursor: null
           }
@@ -85,7 +88,7 @@ test("ModelCatalogService は codex app-server の model/list を ChatGPT モデ
 
   assert.equal(result.ok, true);
   assert.deepEqual(result.models, [
-    { id: "gpt-5", displayName: "GPT-5" },
-    { id: "gpt-5.3-codex", displayName: "GPT-5.3 Codex" }
+    { id: MODEL_ALPHA, displayName: "Model Alpha" },
+    { id: MODEL_BETA, displayName: "Model Beta" }
   ]);
 });

@@ -1,5 +1,11 @@
 # Lessons
 
+## 2026-06-10 Codex model default and allowlist drift
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| ChatGPT OAuth の修正で、`gpt-*` の具体モデル名を source に埋めて既定値や allowlist を作った結果、存在しないモデル名や表記違いで簡単に壊れる設計を入れてしまった。 | モデル名は API / app-server の `model/list` が唯一の正であり、source に固定値を持つと UI で選べるモデル・保存済みモデル・runtime 実送信の3経路がすぐ乖離する。今回の本質は「既定値をどれにするか」ではなく「source がモデル名を知っていること自体が誤り」だった。 | モデル ID は source に一切埋め込まない。既定は空文字にし、Settings で API から一覧取得後に選択させ、runtime は保存済み文字列をそのまま使う。未選択時は `PROVIDER_CONFIG_REQUIRED` で止め、既知モデルへの矯正や allowlist も持たない。 |
+
 ## 2026-06-10 OpenSpec spec-driven apply boundary
 
 | Change | Mistake/Context | Rule to repeat |

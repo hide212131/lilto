@@ -6,6 +6,10 @@ const path = require("node:path");
 
 const { ProviderSettingsService } = require("../dist/main/provider-settings.js");
 
+const TEST_OAUTH_MODEL_ID = "model-oauth-alpha";
+const TEST_CUSTOM_MODEL_ID = "model-custom-alpha";
+const TEST_LEGACY_MODEL_ID = "legacy-model-alpha";
+
 test("ProviderSettingsService は保存した設定を再読込できる", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "lilto-provider-"));
   const storagePath = path.join(tempDir, "providers.json");
@@ -18,12 +22,12 @@ test("ProviderSettingsService は保存した設定を再読込できる", () =>
   const saveResult = service.save({
     activeProvider: "custom-openai-completions",
     oauthProvider: "openai-codex",
-    oauthModelId: "gpt-5.3-codex",
+    oauthModelId: TEST_OAUTH_MODEL_ID,
     customProvider: {
       name: "my-custom",
       baseUrl: "https://example.com/v1",
       apiKey: "secret",
-      modelId: "gpt-4o-mini"
+      modelId: TEST_CUSTOM_MODEL_ID
     },
     networkProxy: {
       useProxy: true
@@ -51,7 +55,7 @@ test("ProviderSettingsService は保存した設定を再読込できる", () =>
   const state = reloaded.getState();
   assert.equal(state.activeProvider, "custom-openai-completions");
   assert.equal(state.oauthProvider, "openai-codex");
-  assert.equal(state.oauthModelId, "gpt-5.3-codex");
+  assert.equal(state.oauthModelId, TEST_OAUTH_MODEL_ID);
   assert.equal(state.customProvider.name, "my-custom");
   assert.equal(state.customProvider.baseUrl, "https://example.com/v1");
   assert.equal(state.networkProxy.useProxy, true);
@@ -77,12 +81,12 @@ test("ProviderSettingsService は環境変数の保存先を優先する", () =>
     const result = service.save({
       activeProvider: "custom-openai-completions",
       oauthProvider: "openai-codex",
-      oauthModelId: "gpt-5.3-codex",
+      oauthModelId: TEST_OAUTH_MODEL_ID,
       customProvider: {
         name: "env-path",
         baseUrl: "https://example.com/v1",
         apiKey: "secret",
-        modelId: "gpt-4o-mini"
+        modelId: TEST_CUSTOM_MODEL_ID
       },
       networkProxy: {
         useProxy: false
@@ -132,12 +136,12 @@ test("ProviderSettingsService は不正な oauthProvider を拒否する", () =>
   const result = service.save({
     activeProvider: "oauth",
     oauthProvider: "invalid-provider",
-    oauthModelId: "gpt-5.3-codex",
+    oauthModelId: TEST_OAUTH_MODEL_ID,
     customProvider: {
       name: "my-custom",
       baseUrl: "https://example.com/v1",
       apiKey: "secret",
-      modelId: "gpt-4o-mini"
+      modelId: TEST_CUSTOM_MODEL_ID
     },
     networkProxy: {
       useProxy: false
@@ -159,12 +163,12 @@ test("ProviderSettingsService は不正な networkProxy payload を拒否する"
   const result = service.save({
     activeProvider: "custom-openai-completions",
     oauthProvider: "anthropic",
-    oauthModelId: "gpt-5.3-codex",
+    oauthModelId: TEST_OAUTH_MODEL_ID,
     customProvider: {
       name: "my-custom",
       baseUrl: "https://example.com/v1",
       apiKey: "secret",
-      modelId: "gpt-4o-mini"
+      modelId: TEST_CUSTOM_MODEL_ID
     },
     networkProxy: {
       useProxy: "yes"
@@ -182,12 +186,12 @@ test("ProviderSettingsService は heartbeat interval を 30 分既定で補完�
     JSON.stringify({
       activeProvider: "oauth",
       oauthProvider: "openai-codex",
-      oauthModelId: "gpt-5.3-codex",
+      oauthModelId: TEST_OAUTH_MODEL_ID,
       customProvider: {
         name: "legacy",
         baseUrl: "",
         apiKey: "",
-        modelId: "gpt-5.3-codex"
+        modelId: TEST_CUSTOM_MODEL_ID
       },
       networkProxy: {
         useProxy: false
@@ -268,7 +272,7 @@ test("ProviderSettingsService は oauthProvider 未設定データを openai-cod
   assert.equal(state.oauthModelId, "legacy-model");
 });
 
-test("ProviderSettingsService は modelId 未設定データを gpt-5.3-codex へ補完する", () => {
+test("ProviderSettingsService は modelId 未設定データを空のまま保持する", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "lilto-provider-"));
   const storagePath = path.join(tempDir, "providers.json");
   fs.writeFileSync(
@@ -300,11 +304,11 @@ test("ProviderSettingsService は modelId 未設定データを gpt-5.3-codex �
     logger: { info() {}, error() {} }
   });
   const state = service.getState();
-  assert.equal(state.oauthModelId, "gpt-5.3-codex");
-  assert.equal(state.customProvider.modelId, "gpt-5.3-codex");
+  assert.equal(state.oauthModelId, "");
+  assert.equal(state.customProvider.modelId, "");
 });
 
-test("ProviderSettingsService は oauth モードの legacy qwen modelId を gpt-5.3-codex へ移行する", () => {
+test("ProviderSettingsService は未知の modelId をそのまま保持する", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "lilto-provider-"));
   const storagePath = path.join(tempDir, "providers.json");
   fs.writeFileSync(
@@ -312,12 +316,12 @@ test("ProviderSettingsService は oauth モードの legacy qwen modelId を gpt
     JSON.stringify({
       activeProvider: "oauth",
       oauthProvider: "openai-codex",
-      oauthModelId: "qwen2.5:0.5b",
+      oauthModelId: TEST_LEGACY_MODEL_ID,
       customProvider: {
         name: "legacy",
         baseUrl: "",
         apiKey: "",
-        modelId: "qwen2.5:0.5b"
+        modelId: TEST_LEGACY_MODEL_ID
       },
       networkProxy: {
         useProxy: false
@@ -332,8 +336,8 @@ test("ProviderSettingsService は oauth モードの legacy qwen modelId を gpt
     logger: { info() {}, error() {} }
   });
   const state = service.getState();
-  assert.equal(state.oauthModelId, "gpt-5.3-codex");
-  assert.equal(state.customProvider.modelId, "qwen2.5:0.5b");
+  assert.equal(state.oauthModelId, TEST_LEGACY_MODEL_ID);
+  assert.equal(state.customProvider.modelId, TEST_LEGACY_MODEL_ID);
 });
 
 test("ProviderSettingsService は windowsSandbox 未設定データを off / privateDesktop=true へ補完する", () => {
@@ -344,12 +348,12 @@ test("ProviderSettingsService は windowsSandbox 未設定データを off / pri
     JSON.stringify({
       activeProvider: "oauth",
       oauthProvider: "openai-codex",
-      oauthModelId: "gpt-5.3-codex",
+      oauthModelId: TEST_OAUTH_MODEL_ID,
       customProvider: {
         name: "legacy",
         baseUrl: "",
         apiKey: "",
-        modelId: "gpt-5.3-codex"
+        modelId: TEST_CUSTOM_MODEL_ID
       },
       networkProxy: {
         useProxy: false

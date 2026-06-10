@@ -38,12 +38,12 @@ export class LiltApp extends LitElement {
   @property({ type: Object }) providerSettings: ProviderSettings = {
     activeProvider: "oauth",
     oauthProvider: "openai-codex",
-    oauthModelId: "gpt-5.3-codex",
+    oauthModelId: "",
     customProvider: {
       name: "OpenAI API Key",
       baseUrl: "",
       apiKey: "",
-      modelId: "gpt-5.3-codex"
+      modelId: ""
     },
     networkProxy: {
       useProxy: false

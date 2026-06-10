@@ -12,16 +12,20 @@ const {
   resetWindowsPersistentEnvironmentCacheForTest
 } = require("../dist/main/codex-environment.js");
 
+const TEST_OAUTH_MODEL_ID = "model-oauth-alpha";
+const TEST_CUSTOM_MODEL_ID = "model-custom-alpha";
+const TEST_LEGACY_MODEL_ID = "legacy-model-alpha";
+
 function createProviderSettings(overrides = {}) {
   return {
     activeProvider: "oauth",
     oauthProvider: "openai-codex",
-    oauthModelId: "gpt-5.3-codex",
+    oauthModelId: TEST_OAUTH_MODEL_ID,
     customProvider: {
       name: "OpenAI API Key",
       baseUrl: "",
       apiKey: "",
-      modelId: "gpt-5.3-codex"
+      modelId: TEST_CUSTOM_MODEL_ID
     },
     networkProxy: {
       useProxy: false
@@ -139,7 +143,7 @@ test("createCodexThreadFromSdk passes normalized env into new Codex", async () =
   await createCodexThreadFromSdk(
     {
       apiKey: "sk-test",
-      model: { id: "gpt-5.3-codex", baseUrl: "https://example.com/v1" },
+      model: { id: TEST_CUSTOM_MODEL_ID, baseUrl: "https://example.com/v1" },
       cwd: "C:\\workspace",
       codexHomeDir: "C:\\Users\\hide\\AppData\\Local\\Lilt-o\\codex"
     },
@@ -252,7 +256,7 @@ test("API key モードでは保存済み API key と model/baseUrl を使う", 
         name: "OpenAI API Key",
         baseUrl: "https://example.com/v1",
         apiKey: "sk-test",
-        modelId: "gpt-5.3-codex"
+        modelId: TEST_CUSTOM_MODEL_ID
       }
     })
   );
@@ -260,7 +264,7 @@ test("API key モードでは保存済み API key と model/baseUrl を使う", 
   assert.equal(result.ok, true);
   assert.equal(result.text, "done");
   assert.equal(receivedOptions.apiKey, "sk-test");
-  assert.equal(receivedOptions.model.id, "gpt-5.3-codex");
+  assert.equal(receivedOptions.model.id, TEST_CUSTOM_MODEL_ID);
   assert.equal(receivedOptions.model.baseUrl, "https://example.com/v1");
 });
 
@@ -290,19 +294,19 @@ test("ChatGPT 認証モードでも保存済み modelId を使う", async () => 
         name: "OpenAI API Key",
         baseUrl: "",
         apiKey: "",
-        modelId: "gpt-5.3-codex"
+        modelId: TEST_CUSTOM_MODEL_ID
       },
-      oauthModelId: "gpt-5.3-codex"
+      oauthModelId: TEST_OAUTH_MODEL_ID
     })
   );
 
   assert.equal(result.ok, true);
   assert.equal(result.text, "done");
   assert.equal(receivedOptions.apiKey, null);
-  assert.equal(receivedOptions.model.id, "gpt-5.3-codex");
+  assert.equal(receivedOptions.model.id, TEST_OAUTH_MODEL_ID);
 });
 
-test("ChatGPT 認証モードでは legacy qwen modelId を gpt-5.3-codex へ矯正する", async () => {
+test("ChatGPT 認証モードでは保存済み modelId をそのまま使う", async () => {
   let receivedOptions = null;
   const runtime = new AgentRuntime({
     authService: createAuthService("authenticated"),
@@ -328,14 +332,14 @@ test("ChatGPT 認証モードでは legacy qwen modelId を gpt-5.3-codex へ矯
         name: "OpenAI API Key",
         baseUrl: "",
         apiKey: "",
-        modelId: "qwen2.5:0.5b"
+        modelId: TEST_LEGACY_MODEL_ID
       },
-      oauthModelId: "qwen2.5:0.5b"
+      oauthModelId: TEST_LEGACY_MODEL_ID
     })
   );
 
   assert.equal(result.ok, true);
-  assert.equal(receivedOptions.model.id, "gpt-5.3-codex");
+  assert.equal(receivedOptions.model.id, TEST_LEGACY_MODEL_ID);
 });
 
 test("同じ conversationId は thread.started 後の session を再利用する", async () => {
@@ -602,7 +606,7 @@ test("proxy precheck 失敗は PROXY_CONNECTION_FAILED に正規化する", asyn
           name: "OpenAI API Key",
           baseUrl: "https://example.com/v1",
           apiKey: "sk-test",
-          modelId: "gpt-5.3-codex"
+          modelId: TEST_CUSTOM_MODEL_ID
         },
         networkProxy: {
           useProxy: false
