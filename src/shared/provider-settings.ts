@@ -58,7 +58,7 @@ export type ProviderSettings = {
   updatedAt: number;
 };
 
-export const DEFAULT_NETWORK_PROXY_SETTINGS: NetworkProxySettings = {
+const DEFAULT_NETWORK_PROXY_SETTINGS: NetworkProxySettings = {
   useProxy: false
 };
 

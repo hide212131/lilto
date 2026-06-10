@@ -82,3 +82,30 @@ rg --files src test scripts native | xargs wc -l | tail -n 1
 
 - `knip` / `depcheck` の結果には Electron の entrypoint や dynamic import、packaging 用 script が未使用扱いされる false positive が含まれる可能性がある。
 - フェーズ 1 で削除判断を行うときは、この一覧を出発点にして `grep` と実行検証で確定する。
+
+## Phase 1 Review
+
+### Removed or narrowed in phase 1
+
+- `src/main/user-data-path.ts` を `src/main/app-paths.ts` へ統合し、path 決定点を一本化した
+- `src/renderer/components/loop-status.ts` を削除した
+- `scripts/e2e-cdp-command.js` を削除した
+- `scripts/render-runtime-icons-electron.js` を削除した
+- `src/main/agent-sdk.ts` の `standardizeError` / `PiAgentBridge` は export を外し、内部実装へ限定した
+- `src/main/command-compat.ts` の `isWindowsPlatform` は export を外し、内部実装へ限定した
+- `src/main/skill-runtime.ts` の `shouldPrioritizeAgentBrowser` / `shouldPrioritizeSkillCreator` は export を外し、内部実装へ限定した
+- `src/shared/provider-settings.ts` の `DEFAULT_NETWORK_PROXY_SETTINGS` は export を外し、内部実装へ限定した
+- `package.json` から `@openai/codex-sdk`、`skills`、`agent-browser` を削除し、`playwright-core` を直接使う dependency として明示した
+- `.claude/skills/` を正本とし、`scripts/sync-skills.js` により `.codex/skills/` と `.github/skills/` を生成物として同期する構成へ変更した
+
+### Retained as verified false positives or runtime-needed files
+
+- `scripts/render-build-icon-electron.js`: `scripts/prepare-build-assets.js` から参照される build asset 生成スクリプトのため保持
+- `src/main/cron-mcp-server.ts`: `dist/main/cron-mcp-server.js` が `asarUnpack` と `resolveCronMcpServerPath`、live/contract test から参照されるため保持
+- `src/preload.ts`: Electron preload の build entrypoint であり、IPC contract test 群も source を直接検証するため保持
+
+### Validation
+
+- `npm run test:unit`: pass
+- `npm test`: pass
+- `npm run dist:mac`: pass

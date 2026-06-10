@@ -20,10 +20,9 @@ import { SchedulerBridgeServer } from "./scheduler-bridge";
 import { resolveCodexHomeDir, setupSkillRuntime } from "./skill-runtime";
 import { WindowsSandboxSetupService } from "./windows-sandbox-setup";
 import { createCliCompatibilityMap } from "./command-compat";
-import { resolvePreloadPath, resolveRendererIndexPath } from "./app-paths";
+import { configureAppUserDataPath, resolvePreloadPath, resolveRendererIndexPath } from "./app-paths";
 import { resolveAppIcon, resolveWindowIcon } from "./icon-assets";
 import { SpeechTranscriptionService } from "./speech-transcription";
-import { configureAppUserDataPath } from "./user-data-path";
 import type { SchedulerNotificationEvent } from "../shared/scheduler";
 
 const config = readConfig();

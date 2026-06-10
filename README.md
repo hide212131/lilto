@@ -18,6 +18,11 @@ PC作業を人間の代わりに実行する、軽量なAIアシスタント。
 - Electron の Renderer プロセスで動くUIは、過去の [pi-web-ui](https://github.com/badlogic/pi-mono/tree/main/packages/web-ui) / [pi-web-ui-example](https://github.com/badlogic/pi-mono/blob/main/packages/web-ui/example) の責務分割を参考にしつつ、現行の Codex runtime に合わせて Main/Renderer 間 IPC を設計する
 - ファイル入出力、認証、Codex 実行、会話履歴取得、MCP server 連携など Renderer で直接扱えない処理は Main 側へ集約する
 
+## Skill 定義の同期
+- `.claude/skills/` を OpenSpec 関連 skill 定義の正本として扱う
+- `.codex/skills/` と `.github/skills/` は生成物であり、直接編集しない
+- `npm run prebuild` で `scripts/sync-skills.js` が正本から複製先を再生成する
+
 ## UIポーティング方針
 - 詳細は `docs/ui-porting-guidelines.md` を参照
 

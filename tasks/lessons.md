@@ -1,5 +1,11 @@
 # Lessons
 
+## 2026-06-10 OpenSpec spec-driven apply boundary
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| OpenSpec の spec-driven change を `/opsx:propose` 相当で作るとき、最初の prompt 文面では `proposal.md` / `design.md` / `tasks.md` だけが目立つが、実際の apply readiness は `openspec status --change <name> --json` の `applyRequires` と artifact graph に従う必要があった。 | `tasks` だけを最終成果物だと思い込むと、schema によっては `specs` が `tasks` の依存になっているケースを取りこぼす。spec-driven schema では proposal 後に `design` と `specs` の両方を満たして初めて `tasks` が `ready` になる。 | OpenSpec の artifact 生成では、prompt の一般説明よりも毎回 `openspec status --change <name> --json` の依存グラフを正とする。spec-driven schema では `proposal` の後に `design` と `specs` が `ready` になる前提で進め、`applyRequires` が満たされるまで status を都度確認する。 |
+
 ## 2026-06-10 windows path tests need host-fs separation
 
 | Change | Mistake/Context | Rule to repeat |

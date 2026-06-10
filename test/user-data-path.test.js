@@ -8,7 +8,7 @@ const {
   configureAppUserDataPath,
   resolveWindowsLocalAppDataDir,
   resolveWindowsUserDataDir
-} = require("../dist/main/user-data-path.js");
+} = require("../dist/main/app-paths.js");
 
 test("resolveWindowsUserDataDir uses AppData Local with uppercase Lilt-o", () => {
   const env = {

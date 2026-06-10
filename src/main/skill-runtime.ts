@@ -1511,7 +1511,7 @@ export async function installSkillFromUrl(options: {
   }
 }
 
-export function shouldPrioritizeAgentBrowser(text: string): boolean {
+function shouldPrioritizeAgentBrowser(text: string): boolean {
   const lowered = text.toLowerCase();
   return (
     lowered.includes("browser") ||
@@ -1523,7 +1523,7 @@ export function shouldPrioritizeAgentBrowser(text: string): boolean {
   );
 }
 
-export function shouldPrioritizeSkillCreator(text: string): boolean {
+function shouldPrioritizeSkillCreator(text: string): boolean {
   const lowered = text.toLowerCase();
   return (
     lowered.includes("make a skill") ||

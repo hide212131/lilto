@@ -65,7 +65,7 @@ function normalizeFlagValue(flagArg: string): string {
   return `${key}${normalizePathArgValue(value)}`;
 }
 
-export function isWindowsPlatform(platform = process.platform): boolean {
+function isWindowsPlatform(platform = process.platform): boolean {
   return platform === "win32";
 }
 

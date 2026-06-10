@@ -78,7 +78,7 @@ const ENGLISH_SCHEDULER_PATTERN =
   /\b(?:remind|reminder|notify|notification|timer|alarm|later|after|tomorrow|today|daily|every day|every week|in \d+\s*(?:second|seconds|minute|minutes|hour|hours))\b/i;
 const importEsm = new Function("specifier", "return import(specifier)") as (specifier: string) => Promise<unknown>;
 
-export function standardizeError(
+function standardizeError(
   error: unknown,
   code = "AGENT_EXECUTION_FAILED",
   retryable = true
@@ -1411,4 +1411,3 @@ export class AgentRuntime {
   }
 }
 
-export { AgentRuntime as PiAgentBridge };

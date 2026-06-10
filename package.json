@@ -6,7 +6,7 @@
   "description": "Lilt-o desktop shell with Codex SDK bridge",
   "main": "dist/main/index.js",
   "scripts": {
-    "prebuild": "node scripts/prepare-build-assets.js && node scripts/sync-skill-creator.js",
+    "prebuild": "node scripts/prepare-build-assets.js && node scripts/sync-skill-creator.js && node scripts/sync-skills.js",
     "build:native": "node scripts/build-native.js",
     "install:vs-build-tools": "powershell -ExecutionPolicy Bypass -File scripts/install-vs-build-tools.ps1",
     "build:unit": "npm run prebuild && tsc -p tsconfig.json",
@@ -90,16 +90,14 @@
     ]
   },
   "dependencies": {
-    "@openai/codex-sdk": "^0.131.0",
-    "marked": "^17.0.4",
-    "skills": "^1.4.4"
+    "marked": "^17.0.4"
   },
   "devDependencies": {
     "@types/node": "^25.3.5",
-    "agent-browser": "^0.13.0",
     "electron": "^31.7.7",
     "electron-builder": "^26.8.1",
     "lit": "^3.3.2",
+    "playwright-core": "^1.58.2",
     "typescript": "^5.7.3",
     "vite": "^7.3.1"
   }
