@@ -1,6 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const { readIpcSource } = require("./helpers/read-ipc-source");
 
 test("preload exposes provider and dictation IPC methods", () => {
   const content = fs.readFileSync("src/preload.ts", "utf8");
@@ -22,7 +23,7 @@ test("preload exposes provider and dictation IPC methods", () => {
 });
 
 test("ipc registers openai-codex auth and dictation handlers", () => {
-  const content = fs.readFileSync("src/main/ipc.ts", "utf8");
+  const content = readIpcSource();
   assert.match(content, /authService\.startOAuth\("openai-codex"\)/);
   assert.match(content, /ipcMain\.handle\("app:getAgentsFile"/);
   assert.match(content, /ipcMain\.handle\("app:openAgentsFile"/);

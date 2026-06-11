@@ -1,9 +1,10 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const { readIpcSource } = require("./helpers/read-ipc-source");
 
 const preloadContent = fs.readFileSync("src/preload.ts", "utf8");
-const ipcContent = fs.readFileSync("src/main/ipc.ts", "utf8");
+const ipcContent = readIpcSource();
 const ipcContractContent = fs.readFileSync("src/main/ipc-contract.ts", "utf8");
 
 const EXPECTED_HANDLE_CHANNELS = [

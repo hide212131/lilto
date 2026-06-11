@@ -1,12 +1,13 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const { listIpcFiles } = require("./helpers/read-ipc-source");
 
 const targets = [
   "src/main/agent-sdk.ts",
   "src/main/auth-service.ts",
   "src/main/index.ts",
-  "src/main/ipc.ts"
+  ...listIpcFiles()
 ];
 
 test("main code does not add unauthorized CLI subprocess spawns", () => {

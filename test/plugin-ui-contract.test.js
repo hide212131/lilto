@@ -1,6 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const { readIpcSource } = require("./helpers/read-ipc-source");
 
 test("preload は plugin 管理 API を公開する", () => {
   const content = fs.readFileSync("src/preload.ts", "utf8");
@@ -33,7 +34,7 @@ test("settings-modal は Plugins タブから plugin marketplace と installed s
 });
 
 test("main ipc は plugin list/install/uninstall handler を公開し runtime cache を refresh する", () => {
-  const content = fs.readFileSync("src/main/ipc.ts", "utf8");
+  const content = readIpcSource();
   assert.match(content, /ipcMain\.handle\("plugins:list"/);
   assert.match(content, /ipcMain\.handle\("plugins:read"/);
   assert.match(content, /await pluginService\.readPlugin\(/);

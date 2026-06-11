@@ -1,6 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const { readIpcSource } = require("./helpers/read-ipc-source");
 
 test("preload は scheduler notification listener を公開する", () => {
   const content = fs.readFileSync("src/preload.ts", "utf8");
@@ -82,7 +83,7 @@ test("settings-modal は Schedules タブから schedule 一覧取得と削除�
 });
 
 test("main ipc は scheduler 一覧取得と削除ハンドラを公開する", () => {
-  const content = fs.readFileSync("src/main/ipc.ts", "utf8");
+  const content = readIpcSource();
   assert.match(content, /new ConversationHistoryService/);
   assert.match(content, /ipcMain\.handle\("conversations:list"/);
   assert.match(content, /ipcMain\.handle\("conversations:read"/);

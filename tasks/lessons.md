@@ -1,5 +1,23 @@
 # Lessons
 
+## 2026-06-11 main bootstrap should return explicit dependencies
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| `src/main/index.ts` の bootstrap を `main-runtime.ts` へ抜いたとき、最初は `registerAgentIpcHandlers` に必要な `agentRuntime` を `HeartbeatAssistantService` インスタンスの内部プロパティ経由で取り出そうとして、分離境界を自分で崩しかけた。 | facade や service を返すだけで済ませると、後段の配線で足りない依存が出た瞬間に private-ish な内部状態を覗く逃げ道を作りやすい。これは分割直後は動いても、次の責務分離で壊れやすい。 | bootstrap / composition root を分割するときは、後続の配線で使う依存を戻り値として明示に返す。別 service の内部 state や実装詳細を経由して依存を取り出さない。 |
+
+## 2026-06-10 characterization tests should target the public slice, not one source file
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| `ipc.ts` を `src/main/ipc/` 配下へ分割したとき、既存契約テストの一部が公開契約ではなく `src/main/ipc.ts` 単一ファイルの文字列に直接依存していたため、実装を安全に分割してもテストが設計意図と別理由で壊れる境界があった。 | characterization test が「何を公開するか」ではなく「どのファイルにその文字列があるか」を固定すると、責務分離のような挙動保存リファクタで不要な赤が出る。 | 文字列ベースの characterization test を使うときは、単一ファイルではなく公開 surface 全体を読む helper を先に作る。ファイル配置に依存させず、チャネル名や契約文字列だけを固定する。 |
+
+## 2026-06-10 OpenSpec refactoring capability boundary
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| リファクタリング計画のフェーズ 2 を OpenSpec change に落とす際、最初は既存 spec の modified delta に寄せるか迷ったが、実際には公開挙動を変えずに内部構造の完了条件を定義する新しい capability として切る方が依存グラフと tasks を素直に組めた。 | 挙動保存のフェーズで既存の user-facing capability 変更として扱うと、差分 spec が実際には変えていない要求まで巻き込みやすく、proposal の capability と specs/tasks の対応も曖昧になる。 | OpenSpec で大規模リファクタリングのフェーズを起票するときは、既存挙動を変えない限り modified capability を無理に使わず、フェーズ固有の完了条件を表す新しい refactoring capability を proposal で先に定義する。 |
+
 ## 2026-06-10 Codex model default and allowlist drift
 
 | Change | Mistake/Context | Rule to repeat |

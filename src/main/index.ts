@@ -1,8 +1,5 @@
-import path from "node:path";
 import { app, BrowserWindow } from "electron";
 
-import { AgentRuntime } from "./agent-sdk";
-import { ClaudeAuthService } from "./auth-service";
 import { readConfig } from "./config";
 import { registerAppShortcut, unregisterAppShortcut } from "./global-shortcut";
 import { HeartbeatAssistantService } from "./heartbeat-assistant";
@@ -10,19 +7,12 @@ import { HeartbeatScheduler } from "./heartbeat";
 import { SCHEDULER_NOTIFICATION_CHANNEL } from "./ipc-contract";
 import { registerAgentIpcHandlers } from "./ipc";
 import { createLogger } from "./logger";
+import { initializeMainRuntime, type InitializedMainRuntime } from "./main-runtime";
 import { NotificationService } from "./notifications";
-import { ProviderSettingsService } from "./provider-settings";
-import { ModelCatalogService } from "./model-catalog";
-import { CodexPluginService } from "./plugin-service";
-import { SchedulerService } from "./scheduler";
-import { SchedulerUnavailableError } from "./scheduler";
 import { SchedulerBridgeServer } from "./scheduler-bridge";
-import { resolveCodexHomeDir, setupSkillRuntime } from "./skill-runtime";
-import { WindowsSandboxSetupService } from "./windows-sandbox-setup";
 import { createCliCompatibilityMap } from "./command-compat";
 import { configureAppUserDataPath, resolvePreloadPath, resolveRendererIndexPath } from "./app-paths";
 import { resolveAppIcon, resolveWindowIcon } from "./icon-assets";
-import { SpeechTranscriptionService } from "./speech-transcription";
 import type { SchedulerNotificationEvent } from "../shared/scheduler";
 
 const config = readConfig();
@@ -41,8 +31,8 @@ let heartbeatAssistant: HeartbeatAssistantService | null = null;
 
 const notificationService = new NotificationService();
 
-let authService: ClaudeAuthService | null = null;
-let providerSettingsService: ProviderSettingsService | null = null;
+let authService: InitializedMainRuntime["authService"] | null = null;
+let providerSettingsService: InitializedMainRuntime["providerSettingsService"] | null = null;
 
 function broadcastSchedulerNotification(event: SchedulerNotificationEvent): void {
   for (const window of BrowserWindow.getAllWindows()) {
@@ -138,176 +128,37 @@ if (hasSingleInstanceLock) {
       commands: createCliCompatibilityMap()
     });
 
-    providerSettingsService = new ProviderSettingsService({
-      logger: createLogger("providers"),
-      storagePath: path.join(app.getPath("userData"), "provider-settings.json")
-    });
-    const initializedProviderSettingsService = providerSettingsService;
-
-    let skillRuntime;
-    try {
-      skillRuntime = setupSkillRuntime({
-        appDataDir: app.getPath("userData"),
-        projectName: path.basename(defaultWorkspaceDir),
-        projectRoot: defaultWorkspaceDir,
-        workspaceTtlHours: Number(process.env.LILTO_WORKSPACE_TTL_HOURS || 24 * 7)
-      });
-      logger.info("skill_runtime_initialized", {
-        appSkillsDir: skillRuntime.appSkillsDir,
-        bundledSkillsDir: skillRuntime.bundledSkillsDir,
-        userSkillsDir: skillRuntime.userSkillsDir,
-        workspaceDir: skillRuntime.workspaceDir,
-        skills: skillRuntime.availableSkills.map((skill) => skill.name),
-        updatedSettings: skillRuntime.updatedSettings,
-        removedWorkspaces: skillRuntime.removedWorkspaces
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      logger.error("skill_runtime_init_failed", { message });
-      skillRuntime = {
-        appDataDir: app.getPath("userData"),
-        codexHomeDir: process.env.CODEX_HOME || resolveCodexHomeDir(app.getPath("userData")),
-        appSkillsDir: "",
-        bundledSkillsDir: "",
-        userSkillsDir: "",
-        workspaceDir: defaultWorkspaceDir,
-        availableSkills: [],
-        updatedSettings: [],
-        removedWorkspaces: []
-      };
-    }
-
-    const scheduler = new SchedulerService({
-      logger: createLogger("scheduler"),
-      userDataDir: app.getPath("userData"),
-      onNotification: (event) => {
-        const shouldDeferVisibleNotification = Boolean(
-          event.notificationDecisionCriteria && event.followUpInstruction
-        );
-        if (heartbeatAssistant) {
-          void heartbeatAssistant.handleSchedulerNotification(event).then((handled) => {
-            if (handled) {
-              return;
-            }
-            broadcastSchedulerNotification(event);
-            if (!shouldDeferVisibleNotification && BrowserWindow.getFocusedWindow() === null) {
-              notificationService.notify("lilto - スケジュール通知", event.message, {
-                onClick: () => {
-                  for (const window of BrowserWindow.getAllWindows()) {
-                    if (window.isMinimized()) {
-                      window.restore();
-                    } else if (!window.isVisible()) {
-                      window.show();
-                    }
-                    window.focus();
-                    window.webContents.send("app:openConversation", event.sessionId);
-                  }
-                }
-              });
-              notificationService.incrementBadge();
-            }
-          });
-          return;
-        }
-        broadcastSchedulerNotification(event);
-        if (!shouldDeferVisibleNotification && BrowserWindow.getFocusedWindow() === null) {
-          notificationService.notify("lilto - スケジュール通知", event.message, {
-            onClick: () => {
-              for (const window of BrowserWindow.getAllWindows()) {
-                if (window.isMinimized()) {
-                  window.restore();
-                } else if (!window.isVisible()) {
-                  window.show();
-                }
-                window.focus();
-                window.webContents.send("app:openConversation", event.sessionId);
-              }
-            }
-          });
-          notificationService.incrementBadge();
-        }
-      }
-    });
-    void scheduler.start().catch((error) => {
-      const message = error instanceof Error ? error.message : String(error);
-      if (error instanceof SchedulerUnavailableError) {
-        logger.info("scheduler_unavailable", { message });
-        return;
-      }
-      logger.error("scheduler_start_failed", { message });
-    });
-
-    schedulerBridge = new SchedulerBridgeServer({
-      logger: createLogger("scheduler-bridge"),
-      scheduler
-    });
-    await schedulerBridge.start().catch((error) => {
-      const message = error instanceof Error ? error.message : String(error);
-      logger.error("scheduler_bridge_start_failed", { message });
-    });
-
-    authService = new ClaudeAuthService({
-      logger: createLogger("auth"),
-      authPath: path.join(app.getPath("userData"), "auth-state.json"),
-      codexHome: skillRuntime.codexHomeDir,
-      fallbackCodexHome: skillRuntime.codexHomeDir
-    });
-    const modelCatalogService = new ModelCatalogService({
-      logger: createLogger("models"),
-      codexHomeDir: skillRuntime.codexHomeDir
-    });
-    const pluginService = new CodexPluginService({
-      logger: createLogger("plugins"),
-      workspaceDir: skillRuntime.workspaceDir,
-      homeDir: skillRuntime.appDataDir,
-      codexHomeDir: skillRuntime.codexHomeDir
-    });
-    const windowsSandboxSetupService = new WindowsSandboxSetupService({
-      logger: createLogger("windows-sandbox-setup"),
-      codexHomeDir: skillRuntime.codexHomeDir,
-      workspaceDir: skillRuntime.workspaceDir
-    });
-    const speechTranscriptionService = new SpeechTranscriptionService();
-
-    const agentRuntime = new AgentRuntime({
-      logger: createLogger("agent"),
-      authService,
-      workspaceDir: skillRuntime.workspaceDir,
-      codexHomeDir: skillRuntime.codexHomeDir,
-      schedulerBridge,
-      availableSkills: skillRuntime.availableSkills
-    });
-
-    heartbeatAssistant = new HeartbeatAssistantService({
-      logger: createLogger("heartbeat-assistant"),
-      scheduler,
-      agentRuntime,
+    const runtime = await initializeMainRuntime({
+      defaultWorkspaceDir,
+      logger,
       notificationService,
+      heartbeat,
       userDataDir: app.getPath("userData"),
-      getProviderSettings: () => {
-        return initializedProviderSettingsService.getState();
-      },
-      broadcastNotification: broadcastSchedulerNotification,
-      getFocusedWindow: () => BrowserWindow.getFocusedWindow()
+      broadcastSchedulerNotification,
+      mainWindow: () => mainWindow
     });
-    void heartbeatAssistant.syncManagedSchedule(initializedProviderSettingsService.getState());
+    authService = runtime.authService;
+    providerSettingsService = runtime.providerSettingsService;
+    schedulerBridge = runtime.schedulerBridge;
+    heartbeatAssistant = runtime.heartbeatAssistant;
+    const initializedProviderSettingsService = runtime.providerSettingsService;
 
     registerAgentIpcHandlers({
-      agentRuntime,
+      agentRuntime: runtime.agentRuntime,
       authService,
       providerSettingsService: initializedProviderSettingsService,
       notificationService,
-      scheduler,
+      scheduler: runtime.scheduler,
       heartbeatAssistant,
-      pluginService,
-      modelCatalogService,
-      speechTranscriptionService,
-      windowsSandboxSetupService,
-      bundledSkillsDir: skillRuntime.bundledSkillsDir,
-      userSkillsDir: skillRuntime.userSkillsDir,
-      workspaceDir: skillRuntime.workspaceDir,
-      homeDir: skillRuntime.appDataDir,
-      codexHomeDir: skillRuntime.codexHomeDir,
+      pluginService: runtime.pluginService,
+      modelCatalogService: runtime.modelCatalogService,
+      speechTranscriptionService: runtime.speechTranscriptionService,
+      windowsSandboxSetupService: runtime.windowsSandboxSetupService,
+      bundledSkillsDir: runtime.skillRuntime.bundledSkillsDir,
+      userSkillsDir: runtime.skillRuntime.userSkillsDir,
+      workspaceDir: runtime.skillRuntime.workspaceDir,
+      homeDir: runtime.skillRuntime.appDataDir,
+      codexHomeDir: runtime.skillRuntime.codexHomeDir,
       onSettingsSaved: (settings) => {
         registerAppShortcut(settings.chatSettings.globalShortcut, () => mainWindow);
         void heartbeatAssistant?.syncManagedSchedule(settings);
@@ -315,11 +166,6 @@ if (hasSingleInstanceLock) {
     });
     createWindow();
     notificationService.setupTray(() => mainWindow);
-    heartbeat.start();
-
-    // グローバルショートカットを設定
-    const initialShortcut = initializedProviderSettingsService.getState().chatSettings.globalShortcut;
-    registerAppShortcut(initialShortcut, () => mainWindow);
 
     app.on("activate", () => {
       if (!mainWindow) {
