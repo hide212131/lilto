@@ -31,6 +31,12 @@ const MAX_SIDEBAR_WIDTH = 480;
 const HYDRATION_MERGE_TIME_WINDOW_MS = 5000;
 
 type StoredSession = Partial<Session> & Pick<Session, "id" | "title">;
+type CompletedForegroundResponse = {
+  conversationId: string;
+  messageId: string;
+  progress?: AssistantProgress;
+  toolCallIds: Set<string>;
+};
 
 @customElement("lilt-app")
 export class LiltApp extends LitElement {
@@ -85,8 +91,9 @@ export class LiltApp extends LitElement {
   private _pendingAssistantMessageId: string | null = null;
   private _pendingConversationId: string | null = null;
   private _activeRequestId: string | null = null;
-  private _completedForegroundRequestIds = new Set<string>();
+  private _completedForegroundRequests = new Map<string, CompletedForegroundResponse | null>();
   private _foregroundResponseReceived = false;
+  private _foregroundToolCallIds = new Set<string>();
   private _messageSeq = 0;
   private _statusLines: string[] = [];
   private _thinkingText = "";
@@ -234,6 +241,7 @@ export class LiltApp extends LitElement {
     this._pendingConversationId = null;
     this._activeRequestId = null;
     this._foregroundResponseReceived = false;
+    this._foregroundToolCallIds.clear();
     this._statusLines = [];
     this._thinkingText = "";
     this._toolProgress = [];
@@ -719,6 +727,7 @@ export class LiltApp extends LitElement {
     this._thinkingText = "";
     this._toolProgress = [];
     this._pendingLabel = "";
+    this._foregroundToolCallIds.clear();
     this.loopState = {
       ...createInitialLoopState(),
       status: "running"
@@ -732,7 +741,17 @@ export class LiltApp extends LitElement {
         conversationId,
         activeSession?.backendSessionId ?? null
       );
-      this._markForegroundResponseReceived(result.requestId);
+      this._markForegroundResponseReceived(
+        result.requestId,
+        result.ok
+          ? {
+              conversationId,
+              messageId: pendingMessageId,
+              progress: this._buildProgress(),
+              toolCallIds: new Set(this._foregroundToolCallIds)
+            }
+          : null
+      );
       if (result.ok) {
         this._updateSessionMessage(conversationId, pendingMessageId, {
           text: result.response.text,
@@ -824,7 +843,8 @@ export class LiltApp extends LitElement {
       this._bindBackendSession(event.conversationId, event.agentSessionId);
     }
 
-    if (this._completedForegroundRequestIds.has(event.requestId)) {
+    if (this._completedForegroundRequests.has(event.requestId)) {
+      this._appendCompletedToolProgress(event, this._completedForegroundRequests.get(event.requestId) ?? null);
       return;
     }
 
@@ -852,16 +872,43 @@ export class LiltApp extends LitElement {
     return event.type === "run_start" && event.conversationId === this._pendingConversationId;
   }
 
-  private _markForegroundResponseReceived(requestId?: string) {
+  private _markForegroundResponseReceived(
+    requestId?: string,
+    completedResponse: CompletedForegroundResponse | null = null
+  ) {
     this._foregroundResponseReceived = true;
     const completedRequestId = requestId ?? this.loopState.requestId ?? this._activeRequestId;
     if (!completedRequestId) return;
 
-    this._completedForegroundRequestIds.add(completedRequestId);
-    if (this._completedForegroundRequestIds.size > 100) {
-      const oldestRequestId = this._completedForegroundRequestIds.values().next().value;
-      if (oldestRequestId) this._completedForegroundRequestIds.delete(oldestRequestId);
+    this._completedForegroundRequests.set(completedRequestId, completedResponse);
+    if (this._completedForegroundRequests.size > 100) {
+      const oldestRequestId = this._completedForegroundRequests.keys().next().value;
+      if (oldestRequestId) this._completedForegroundRequests.delete(oldestRequestId);
     }
+  }
+
+  private _appendCompletedToolProgress(
+    event: AgentLoopEvent,
+    completedResponse: CompletedForegroundResponse | null
+  ) {
+    if (event.type !== "tool_execution_start" || !completedResponse) return;
+    if (completedResponse.toolCallIds.has(event.toolCallId)) return;
+    completedResponse.toolCallIds.add(event.toolCallId);
+
+    const newTool: AssistantToolProgress = { toolName: event.toolName };
+    const detail = this._formatToolArgs(event.args);
+    if (detail) {
+      newTool.detail = detail;
+    }
+
+    const progress = completedResponse.progress ?? { statusLines: [], tools: [] };
+    completedResponse.progress = {
+      ...progress,
+      tools: [...progress.tools, newTool]
+    };
+    this._updateSessionMessage(completedResponse.conversationId, completedResponse.messageId, {
+      progress: completedResponse.progress
+    });
   }
 
   private _onSchedulerNotification(event: SchedulerNotificationEvent) {
@@ -1076,6 +1123,12 @@ export class LiltApp extends LitElement {
         break;
       case "tool_execution_start":
         {
+          if (this._foregroundToolCallIds.has(event.toolCallId)) {
+            changed = false;
+            break;
+          }
+          this._foregroundToolCallIds.add(event.toolCallId);
+
           const newTool: AssistantToolProgress = { toolName: event.toolName };
           const detail = this._formatToolArgs(event.args);
           if (detail) {
