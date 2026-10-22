@@ -23,12 +23,12 @@ import "./components/chat-history.js";
 import type { LiltComposer } from "./components/composer.js";
 import type { AgentLoopEvent, LoopState } from "../shared/agent-loop.js";
 import { createInitialLoopState, reduceLoopState } from "../shared/agent-loop.js";
+import { mergeSessionMessages } from "../shared/conversation-message-merge.js";
 
 const SIDEBAR_WIDTH_STORAGE_KEY = "lilto-sidebar-width";
 const DEFAULT_SIDEBAR_WIDTH = 272;
 const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 480;
-const HYDRATION_MERGE_TIME_WINDOW_MS = 5000;
 
 type StoredSession = Partial<Session> & Pick<Session, "id" | "title">;
 type CompletedForegroundResponse = {
@@ -309,49 +309,7 @@ export class LiltApp extends LitElement {
   }
 
   private _mergeSessionMessages(hydratedMessages: Message[], localMessages: Message[]): Message[] {
-    if (localMessages.length === 0) {
-      return hydratedMessages;
-    }
-
-    const hydratedSignatures = new Set(hydratedMessages.map((message) => this._messageMergeSignature(message)));
-    const merged = [...hydratedMessages];
-    for (const message of localMessages) {
-      if (this._hasEquivalentHydratedMessage(hydratedMessages, hydratedSignatures, message)) {
-        continue;
-      }
-      hydratedSignatures.add(this._messageMergeSignature(message));
-      merged.push(message);
-    }
-
-    return merged.sort((left, right) => {
-      if (left.createdAt !== right.createdAt) {
-        return left.createdAt - right.createdAt;
-      }
-      return left.id.localeCompare(right.id);
-    });
-  }
-
-  private _messageMergeSignature(message: Message): string {
-    return JSON.stringify([message.role, message.text, message.createdAt]);
-  }
-
-  private _hasEquivalentHydratedMessage(
-    hydratedMessages: Message[],
-    hydratedSignatures: Set<string>,
-    localMessage: Message
-  ): boolean {
-    const exactSignature = this._messageMergeSignature(localMessage);
-    if (hydratedSignatures.has(exactSignature)) {
-      return true;
-    }
-
-    // Freshly-sent local user/assistant messages can have slightly different ids/timestamps
-    // from the backend-hydrated conversation, but should still collapse into one message.
-    return hydratedMessages.some((hydratedMessage) =>
-      hydratedMessage.role === localMessage.role
-      && hydratedMessage.text === localMessage.text
-      && Math.abs(hydratedMessage.createdAt - localMessage.createdAt) <= HYDRATION_MERGE_TIME_WINDOW_MS
-    );
+    return mergeSessionMessages(hydratedMessages, localMessages);
   }
 
   private _mergeHydratedSession(hydratedSession: Session, localSession: Session | null): Session {

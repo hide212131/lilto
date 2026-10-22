@@ -52,9 +52,7 @@ test("renderer app は backendSessionId または conversationId で scheduler n
   assert.match(content, /role\?: "assistant" \| "error"/);
   assert.match(content, /role: decision\.role \?\? "assistant"/);
   assert.match(content, /private _mergeSessionMessages\(hydratedMessages: Message\[], localMessages: Message\[]\): Message\[]/);
-  assert.match(content, /HYDRATION_MERGE_TIME_WINDOW_MS = 5000/);
-  assert.match(content, /private _hasEquivalentHydratedMessage\(/);
-  assert.match(content, /Math\.abs\(hydratedMessage\.createdAt - localMessage\.createdAt\) <= HYDRATION_MERGE_TIME_WINDOW_MS/);
+  assert.match(content, /return mergeSessionMessages\(hydratedMessages, localMessages\)/);
   assert.match(content, /private _mergeHydratedSession\(hydratedSession: Session, localSession: Session \| null\): Session/);
   assert.match(content, /const nextSession = this\._mergeHydratedSession\(hydratedSession, existing\)/);
   assert.match(content, /\? this\._mergeHydratedSession\(this\._normalizeSession\(loaded\.conversation\), nextSession\)/);
