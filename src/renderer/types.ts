@@ -157,9 +157,8 @@ declare global {
         backendSessionId?: string | null,
         options?: { silent?: boolean; freshContext?: boolean }
       ) => Promise<
-        // 既存契約との互換性維持: submitPrompt の戻り値は変更しない。
-        | { ok: true; response: { text: string } }
-        | { ok: false; error?: { code?: string; message?: string; retryable?: boolean } }
+        | { ok: true; requestId: string; response: { text: string } }
+        | { ok: false; requestId?: string; error?: { code?: string; message?: string; retryable?: boolean } }
       >;
       abortPrompt: () => Promise<{ ok: boolean }>;
       listConversations: () => Promise<

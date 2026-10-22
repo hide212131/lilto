@@ -263,9 +263,6 @@ async function waitForResponse(page, expectedText, timeoutMs = 15000) {
           loopState: app.loopState,
           pendingAssistantMessageId: app._pendingAssistantMessageId,
           currentSessionId: app._currentSessionId,
-          submitWrapped: app.__e2eSubmitWrapped,
-          submitResult: app.__e2eSubmitResult ?? null,
-          messageUpdates: app.__e2eMessageUpdates ?? [],
           messages: app.messages.map(({ role, text, pending, progress }) => ({ role, text, pending, progress }))
         }
       : null;
@@ -428,28 +425,6 @@ async function main() {
     await waitForDictationStatusClear(page);
     console.log("✓ Dictation button toggles active status only while pressed");
 
-    await page.evaluate(() => {
-      const app = document.querySelector("lilt-app");
-      app.__e2eMessageUpdates = [];
-      const originalUpdate = app._updateSessionMessage.bind(app);
-      app._updateSessionMessage = (sessionId, messageId, patch) => {
-        app.__e2eMessageUpdates.push({ sessionId, messageId, patch });
-        return originalUpdate(sessionId, messageId, patch);
-      };
-
-      try {
-        const originalSubmit = window.lilto.submitPrompt;
-        window.lilto.submitPrompt = async (...args) => {
-          const result = await originalSubmit(...args);
-          app.__e2eSubmitResult = result;
-          return result;
-        };
-        app.__e2eSubmitWrapped = true;
-      } catch {
-        app.__e2eSubmitWrapped = false;
-      }
-    });
-
     const visibilityMessage = "E2E tool visibility check";
     console.log(`Sending mocked prompt: "${visibilityMessage}"...`);
     await fillComposerText(page, visibilityMessage);
@@ -457,6 +432,16 @@ async function main() {
 
     const expectedFinal = `[E2E_MOCK_FINAL] 要求「${visibilityMessage}」を処理し、複数コマンドを実行して回答しました。`;
     await waitForResponse(page, expectedFinal);
+    await page.waitForTimeout(500);
+    const finalMessageState = await page.evaluate((text) => {
+      const app = document.querySelector("lilt-app");
+      return app.messages
+        .filter((message) => message.role === "assistant")
+        .find((message) => message.text === text) ?? null;
+    }, expectedFinal);
+    if (finalMessageState?.pending !== false) {
+      throw new Error(`Late tool progress replaced the completed response: ${JSON.stringify(finalMessageState)}`);
+    }
     console.log(`✓ Mock final response received: "${expectedFinal}"`);
 
     const messageList = resolveNamedLocator(page, "app").locator("lilt-message-list");

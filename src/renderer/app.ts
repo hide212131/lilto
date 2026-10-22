@@ -85,6 +85,8 @@ export class LiltApp extends LitElement {
   private _pendingAssistantMessageId: string | null = null;
   private _pendingConversationId: string | null = null;
   private _activeRequestId: string | null = null;
+  private _completedForegroundRequestIds = new Set<string>();
+  private _foregroundResponseReceived = false;
   private _messageSeq = 0;
   private _statusLines: string[] = [];
   private _thinkingText = "";
@@ -231,6 +233,7 @@ export class LiltApp extends LitElement {
     this._pendingAssistantMessageId = null;
     this._pendingConversationId = null;
     this._activeRequestId = null;
+    this._foregroundResponseReceived = false;
     this._statusLines = [];
     this._thinkingText = "";
     this._toolProgress = [];
@@ -729,6 +732,7 @@ export class LiltApp extends LitElement {
         conversationId,
         activeSession?.backendSessionId ?? null
       );
+      this._markForegroundResponseReceived(result.requestId);
       if (result.ok) {
         this._updateSessionMessage(conversationId, pendingMessageId, {
           text: result.response.text,
@@ -767,6 +771,7 @@ export class LiltApp extends LitElement {
         }
       }
     } catch (err) {
+      this._markForegroundResponseReceived();
       this._removeSessionMessage(conversationId, pendingMessageId);
       this._appendMessageToSession(conversationId, {
         id: this._nextMessageId(),
@@ -819,6 +824,10 @@ export class LiltApp extends LitElement {
       this._bindBackendSession(event.conversationId, event.agentSessionId);
     }
 
+    if (this._completedForegroundRequestIds.has(event.requestId)) {
+      return;
+    }
+
     if (!this._shouldTrackForegroundLoopEvent(event)) {
       return;
     }
@@ -828,6 +837,10 @@ export class LiltApp extends LitElement {
   }
 
   private _shouldTrackForegroundLoopEvent(event: AgentLoopEvent): boolean {
+    if (this._foregroundResponseReceived) {
+      return false;
+    }
+
     if (this._activeRequestId) {
       return event.requestId === this._activeRequestId;
     }
@@ -837,6 +850,18 @@ export class LiltApp extends LitElement {
     }
 
     return event.type === "run_start" && event.conversationId === this._pendingConversationId;
+  }
+
+  private _markForegroundResponseReceived(requestId?: string) {
+    this._foregroundResponseReceived = true;
+    const completedRequestId = requestId ?? this.loopState.requestId ?? this._activeRequestId;
+    if (!completedRequestId) return;
+
+    this._completedForegroundRequestIds.add(completedRequestId);
+    if (this._completedForegroundRequestIds.size > 100) {
+      const oldestRequestId = this._completedForegroundRequestIds.values().next().value;
+      if (oldestRequestId) this._completedForegroundRequestIds.delete(oldestRequestId);
+    }
   }
 
   private _onSchedulerNotification(event: SchedulerNotificationEvent) {
