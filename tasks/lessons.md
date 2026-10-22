@@ -1,5 +1,11 @@
 # Lessons
 
+## 2026-10-22 Verify published native package layout before packaging
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| Codex CLI 0.163.0 moved platform binaries from `vendor/<target>/codex/` to `vendor/<target>/bin/`, and its helper directory from `path/` to `codex-path/`. Packaged app resolution and artifact verification still expected the old layout, causing the Windows release check to fail and leaving the macOS release path broken too. | I trusted the previous package layout and treated one platform's CI failure as a Windows-only issue before inspecting the published package itself. | When a native dependency's packaged path fails, inspect the exact locked platform tarball for every release platform, then update all runtime resolvers, artifact checks, and path contract tests together. Never infer that only the reported platform is affected. |
+
 ## 2026-10-22 Quarantined Electron binaries require a clean supported build
 
 | Change | Mistake/Context | Rule to repeat |

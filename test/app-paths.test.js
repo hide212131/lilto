@@ -85,10 +85,10 @@ test("resolvePackagedCodexBinary returns unpacked codex path for packaged apps",
     "codex-darwin-arm64",
     "vendor",
     "aarch64-apple-darwin",
-    "codex",
+    "bin",
     "codex"
   );
-  const rgDir = path.join(path.dirname(path.dirname(binary)), "path");
+  const rgDir = path.join(path.dirname(path.dirname(binary)), "codex-path");
   fs.mkdirSync(path.dirname(binary), { recursive: true });
   fs.writeFileSync(binary, "binary");
   fs.mkdirSync(rgDir, { recursive: true });
@@ -102,5 +102,29 @@ test("resolvePackagedCodexBinary returns unpacked codex path for packaged apps",
   assert.deepEqual(resolved, {
     command: binary,
     extraPath: rgDir
+  });
+});
+
+test("resolvePackagedCodexBinary returns the Windows vendor bin path", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lilto-app-paths-"));
+  const appRoot = path.join(tempRoot, "Lilt-o", "resources", "app.asar");
+  const unpackedRoot = appRoot.replace(/\.asar$/, ".asar.unpacked");
+  const vendorRoot = path.join(
+    unpackedRoot,
+    "node_modules",
+    "@openai",
+    "codex-win32-x64",
+    "vendor",
+    "x86_64-pc-windows-msvc"
+  );
+  const binary = path.join(vendorRoot, "bin", "codex.exe");
+  const codexPath = path.join(vendorRoot, "codex-path");
+  fs.mkdirSync(path.dirname(binary), { recursive: true });
+  fs.writeFileSync(binary, "binary");
+  fs.mkdirSync(codexPath, { recursive: true });
+
+  assert.deepEqual(resolvePackagedCodexBinary({ appRoot, platform: "win32", arch: "x64" }), {
+    command: binary,
+    extraPath: codexPath
   });
 });

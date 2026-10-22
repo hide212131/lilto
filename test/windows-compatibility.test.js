@@ -86,17 +86,37 @@ test("packaged macOS app では unpacked codex binary を直接使う", () => {
     arch: "arm64",
     baseDir,
     pathExists: (filePath) =>
-      filePath.replace(/\\/g, "/") === "/Applications/Lilt-o.app/Contents/Resources/app.asar.unpacked/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex/codex" ||
-      filePath.replace(/\\/g, "/") === "/Applications/Lilt-o.app/Contents/Resources/app.asar.unpacked/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/path"
+      filePath.replace(/\\/g, "/") === "/Applications/Lilt-o.app/Contents/Resources/app.asar.unpacked/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex" ||
+      filePath.replace(/\\/g, "/") === "/Applications/Lilt-o.app/Contents/Resources/app.asar.unpacked/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path"
   });
 
   assert.equal(
     invocation.command.replace(/\\/g, "/"),
-    "/Applications/Lilt-o.app/Contents/Resources/app.asar.unpacked/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex/codex"
+    "/Applications/Lilt-o.app/Contents/Resources/app.asar.unpacked/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex"
   );
   assert.deepEqual(invocation.args, ["app-server", "--listen", "stdio://"]);
   assert.equal(invocation.env?.CODEX_MANAGED_BY_NPM, "1");
-  assert.match((invocation.env?.PATH ?? "").replace(/\\/g, "/"), /aarch64-apple-darwin\/path/);
+  assert.match((invocation.env?.PATH ?? "").replace(/\\/g, "/"), /aarch64-apple-darwin\/codex-path/);
+  assert.equal(invocation.source, "local-bin");
+});
+
+test("packaged Windows app では unpacked codex binary を直接使う", () => {
+  const baseDir = "C:/Program Files/Lilt-o/resources/app.asar";
+  const invocation = resolveCliInvocation("codex", ["app-server", "--listen", "stdio://"], {
+    platform: "win32",
+    arch: "x64",
+    baseDir,
+    pathExists: (filePath) =>
+      filePath === "C:\\Program Files\\Lilt-o\\resources\\app.asar.unpacked\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe" ||
+      filePath === "C:\\Program Files\\Lilt-o\\resources\\app.asar.unpacked\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\codex-path"
+  });
+
+  assert.equal(
+    invocation.command,
+    "C:\\Program Files\\Lilt-o\\resources\\app.asar.unpacked\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe"
+  );
+  assert.deepEqual(invocation.args, ["app-server", "--listen", "stdio://"]);
+  assert.match(invocation.env?.PATH ?? "", /codex-path/);
   assert.equal(invocation.source, "local-bin");
 });
 

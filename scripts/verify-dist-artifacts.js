@@ -61,7 +61,7 @@ const codexTarget = process.platform === "darwin"
 const hasCodexBinary = codexTarget && artifactPaths.some((file) => {
   const normalized = file.replace(/\\/g, "/");
   return normalized.endsWith(
-    `/app.asar.unpacked/node_modules/@openai/${codexTarget.packageName}/vendor/${codexTarget.triple}/codex/${codexTarget.binaryName}`
+    `/app.asar.unpacked/node_modules/@openai/${codexTarget.packageName}/vendor/${codexTarget.triple}/bin/${codexTarget.binaryName}`
   );
 });
 
