@@ -25,6 +25,7 @@ export type WindowsSandboxSettings = {
 export type ChatSettings = {
   enterToSend: boolean;
   globalShortcut: string;
+  showToolExecutionDetails: boolean;
 };
 
 export type HeartbeatSettings = {
@@ -36,7 +37,8 @@ export type HeartbeatSettings = {
 
 export const DEFAULT_CHAT_SETTINGS: ChatSettings = {
   enterToSend: false,
-  globalShortcut: "CommandOrControl+L"
+  globalShortcut: "CommandOrControl+L",
+  showToolExecutionDetails: false
 };
 
 export const DEFAULT_HEARTBEAT_SETTINGS: HeartbeatSettings = {

@@ -141,12 +141,12 @@ function resolvePackagedCodexBinary(
   const unpackedRoot = baseDir.replace(/\.asar$/, ".asar.unpacked");
   const vendorRoot = pathModule.join(unpackedRoot, "node_modules", "@openai", packageDirName, "vendor", targetTriple);
   const binaryName = isWindowsPlatform(platform) ? "codex.exe" : "codex";
-  const command = pathModule.join(vendorRoot, "codex", binaryName);
+  const command = pathModule.join(vendorRoot, "bin", binaryName);
   if (!pathExists(command)) {
     return null;
   }
 
-  const pathDir = pathModule.join(vendorRoot, "path");
+  const pathDir = pathModule.join(vendorRoot, "codex-path");
   const pathSeparator = isWindowsPlatform(platform) ? ";" : ":";
   const extraPath = pathExists(pathDir) ? pathDir : "";
   const currentPath = process.env.PATH ?? "";

@@ -217,12 +217,12 @@ export function resolvePackagedCodexBinary(options: PackagedCodexOptions = {}): 
   const unpackedRoot = appRoot.replace(/\.asar$/, ".asar.unpacked");
   const vendorRoot = path.join(unpackedRoot, "node_modules", "@openai", packageDirName, "vendor", targetTriple);
   const binaryName = platform === "win32" ? "codex.exe" : "codex";
-  const command = path.join(vendorRoot, "codex", binaryName);
+  const command = path.join(vendorRoot, "bin", binaryName);
   if (!pathExists(command)) {
     return null;
   }
 
-  const extraPath = path.join(vendorRoot, "path");
+  const extraPath = path.join(vendorRoot, "codex-path");
   return {
     command,
     extraPath: pathExists(extraPath) ? extraPath : undefined

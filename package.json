@@ -1,6 +1,6 @@
 {
   "name": "lilt-o",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "author": "hide",
   "description": "Lilt-o desktop shell with Codex SDK bridge",
@@ -17,8 +17,8 @@
     "dist:win": "npm run build:native && npm run build && set CSC_IDENTITY_AUTO_DISCOVERY=false&& set CSC_LINK=&& set WIN_CSC_LINK=&& electron-builder --win nsis --publish never --config.win.signAndEditExecutable=false",
     "verify:dist": "node scripts/verify-dist-artifacts.js",
     "live-ui:manual": "node scripts/live-ui-manual-verification.js",
-    "test:unit": "npm run build:unit && node --test",
-    "test": "npm run build && node --test",
+    "test:unit": "npm run build:unit && node scripts/run-unit-tests.js",
+    "test": "npm run build && node scripts/run-unit-tests.js",
     "test:windows-sandbox-live": "npm run build && node --test scripts/windows-sandbox-live-test.js",
     "e2e:electron": "npm run build && node scripts/e2e-electron-agent-browser.js",
     "e2e:electron:skills-live": "npm run build && node scripts/e2e-electron-agent-skills-live.js"
@@ -29,7 +29,8 @@
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "asar": true,
     "asarUnpack": [
-      "dist/main/cron-mcp-server.js"
+      "dist/main/cron-mcp-server.js",
+      "node_modules/@openai/codex-*/vendor/**/*"
     ],
     "directories": {
       "output": "release",
@@ -90,11 +91,12 @@
     ]
   },
   "dependencies": {
+    "@openai/codex-sdk": "^0.163.0",
     "marked": "^17.0.4"
   },
   "devDependencies": {
     "@types/node": "^25.3.5",
-    "electron": "^31.7.7",
+    "electron": "^44.9.3",
     "electron-builder": "^26.8.1",
     "lit": "^3.3.2",
     "playwright-core": "^1.58.2",

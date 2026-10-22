@@ -2,6 +2,8 @@ name: Windows x64 Native Build
 
 on:
   push:
+    branches:
+      - "**"
   pull_request:
 
 jobs:
@@ -27,13 +29,16 @@ jobs:
           targets: x86_64-pc-windows-msvc
 
       - name: Install npm dependencies
-        run: npm ci
+        run: npm.cmd ci
+
+      - name: Download Electron runtime
+        run: npx.cmd install-electron --no
 
       - name: Build Windows installer with native helpers
-        run: npm run dist:win
+        run: npm.cmd run dist:win
 
       - name: Verify packaged Windows artifacts
-        run: npm run verify:dist
+        run: npm.cmd run verify:dist
 
       - name: Upload Windows release artifacts
         uses: actions/upload-artifact@v4

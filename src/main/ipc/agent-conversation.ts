@@ -89,7 +89,7 @@ export function registerAgentConversationIpcHandlers({
             errorMessage: `${result.error.code}: ${result.error.message}`
           });
         }
-        return result;
+        return { ...result, requestId };
       }
 
       if (!silent) {
@@ -110,6 +110,7 @@ export function registerAgentConversationIpcHandlers({
 
       return {
         ok: true,
+        requestId,
         request: { text: originalText },
         response: { text: result.text }
       };

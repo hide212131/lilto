@@ -1,5 +1,17 @@
 # Lessons
 
+## 2026-10-22 Verify published native package layout before packaging
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| Codex CLI 0.163.0 moved platform binaries from `vendor/<target>/codex/` to `vendor/<target>/bin/`, and its helper directory from `path/` to `codex-path/`. Packaged app resolution and artifact verification still expected the old layout, causing the Windows release check to fail and leaving the macOS release path broken too. | I trusted the previous package layout and treated one platform's CI failure as a Windows-only issue before inspecting the published package itself. | When a native dependency's packaged path fails, inspect the exact locked platform tarball for every release platform, then update all runtime resolvers, artifact checks, and path contract tests together. Never infer that only the reported platform is affected. |
+
+## 2026-10-22 Quarantined Electron binaries require a clean supported build
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| Electron の開発バイナリがマルウェア扱いで隔離され、ローカル実行確認ができなくなった。E44更新後のCIで `app.dock` の型変更、未宣言だった Codex SDK 依存、テスト前に未作成のネイティブ補助プログラムが見つかった。 | Electron 自体がマルウェアだと断定する材料はなく、隔離後に同じ実行ファイルを復元・再実行するのも適切ではない。Electron 44 は npm 導入時にバイナリを自動取得せず、API 型も変わっている。CIの古い `node_modules` や既存バイナリを使うと、ロックファイルと実際にリリースする環境の違いを見逃す。 | セキュリティソフトが実行ファイルを隔離したら、警告の製品名・検出名を記録し、隔離を回避しない。CIではロックファイルから依存を作り、実際に使うSDKを依存に宣言し、ネイティブ補助プログラムを作ってから型チェック・テスト・GUI検証する。Electron本体の取得と起動はクリーンなCIで行う。 |
+
 ## 2026-06-11 main bootstrap should return explicit dependencies
 
 | Change | Mistake/Context | Rule to repeat |
@@ -582,4 +594,12 @@
 | Moved the Agent Skills update check button next to the installed-skills refresh button, added startup update detection, and taught folder-sourced skills to detect version changes as well as `SKILL.md` mtime changes. | The original UI separated update checks into a described section, and local-folder updates could be missed when file mtime did not move but the skill version changed. | For Agent Skills update checks, keep manual recheck in the installed-skills toolbar, run a non-blocking check on settings startup, and compare local-source version before falling back to mtime. |
 | Moved Agent Skills update results above the installed-skills list after user correction. | Showing the result below a long skills table makes the feedback feel hidden even when the button itself is in the right toolbar. | Render update-check status and result rows immediately under the installed-skills toolbar, before the installed skills table. |
 | Stabilized Electron E2E around proxy-enabled sends after model-list requests temporarily changed proxy environment variables. | Concurrent UI requests that scoped `process.env` could erase proxy variables while the agent precheck was reading them, making a saved `useProxy=true` setting behave like direct network access. | When code scopes proxy environment variables, read proxy source values from a stable baseline plus current env fallback. GUI E2E should wait for persisted proxy settings before sending and then verify the proxy-required path both off and on. |
+
+## 2026-10-22 Electron E2E must not depend on microphone permissions
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| GUI E2E triggered the real macOS speech recognizer while checking a separate settings change, so CI remained in the transcribing state and timed out. | OS microphone and speech permissions are environmental inputs, not stable UI test fixtures. | In `LILTO_E2E_MOCK=1` mode, stub the transcription response so GUI regression checks do not launch native recognition or depend on machine permissions. |
+| CI's unit-test command auto-discovered `scripts/windows-sandbox-live-test.js`, which requires elevated Windows sandbox facilities absent from hosted runners. | Node 22's test runner treats a bare directory as a test file argument rather than discovering files within it, and default discovery includes matching files outside the unit-test directory. | Keep OS-dependent live smoke tests in dedicated scripts, and use a cross-platform runner that passes the unit-test files under `test/` explicitly to `node --test`. |
+| Electron UI E2E showed the final assistant response briefly, then late tool progress events replaced it with the pending placeholder and left the status at “sending”. | The `submitPrompt` invoke response and loop events sent over a separate IPC channel can reach the renderer in a different order; late command details still need to appear when enabled, while the final text, pending state, and loop status remain complete. | Return the request ID with the invoke result, retain completed request context, merge late tool details into the completed message, and set the loop state from the invoke result. Keep an E2E assertion for the stable final response and configurable command details. |
 

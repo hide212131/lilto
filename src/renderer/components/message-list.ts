@@ -10,6 +10,7 @@ const MASCOT_URL = "./mascot.png";
 @customElement("lilt-message-list")
 export class LiltMessageList extends LitElement {
   @property({ type: Array }) messages: Message[] = [];
+  @property({ type: Boolean }) showToolExecutionDetails = false;
   private static readonly THINKING_PREVIEW_LINES = 24;
   private static readonly TOOL_PREVIEW_LINES = 16;
   private _expandedThinkingById = new Set<string>();
@@ -549,8 +550,10 @@ export class LiltMessageList extends LitElement {
               ${tool.label ? html`<div class="tool-label">${tool.label}</div>` : ""}
               <div class="tool-block">
                 <div class="tool-header">Running command: ${tool.toolName}</div>
-                <pre class="tool-console ${isCompact ? "tool-console-compact" : ""}">${toolPreview}</pre>
-                ${hasToolRest
+                ${this.showToolExecutionDetails
+                  ? html`<pre class="tool-console ${isCompact ? "tool-console-compact" : ""}">${toolPreview}</pre>`
+                  : ""}
+                ${this.showToolExecutionDetails && hasToolRest
                   ? html`
                       <details class="tool-more">
                         <summary>残り ${toolLines.length - LiltMessageList.TOOL_PREVIEW_LINES} 行を表示</summary>

@@ -8,6 +8,8 @@ jobs:
   typecheck-and-unit:
     name: Typecheck and unit test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    env:
+      LILTO_NATIVE_BUILD_REQUIRED: "1"
     strategy:
       fail-fast: false
       matrix:
@@ -25,11 +27,93 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: Set up Rust toolchain (Windows)
+        uses: dtolnay/rust-toolchain@stable
+        if: runner.os == 'Windows'
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        if: runner.os != 'Windows'
+
+      - name: Install npm dependencies
+        run: npm.cmd ci
+        if: runner.os == 'Windows'
+
       - name: Install npm dependencies
         run: npm ci
+        if: runner.os != 'Windows'
+
+      - name: Download Electron runtime (Windows)
+        run: npx.cmd install-electron --no
+        if: runner.os == 'Windows'
+
+      - name: Download Electron runtime
+        run: npx install-electron --no
+        if: runner.os != 'Windows'
+
+      - name: Build native helpers (Windows)
+        run: npm.cmd run build:native
+        if: runner.os == 'Windows'
+
+      - name: Build native helpers
+        run: npm run build:native
+        if: runner.os != 'Windows'
+
+      - name: TypeScript noEmit check
+        run: npx.cmd tsc --noEmit -p tsconfig.json
+        if: runner.os == 'Windows'
 
       - name: TypeScript noEmit check
         run: npx tsc --noEmit -p tsconfig.json
+        if: runner.os != 'Windows'
+
+      - name: Renderer-free unit tests
+        run: npm.cmd run test:unit
+        if: runner.os == 'Windows'
 
       - name: Renderer-free unit tests
         run: npm run test:unit
+        if: runner.os != 'Windows'
+
+  electron-e2e:
+    name: Electron UI regression
+    runs-on: macos-latest
+    env:
+      LILTO_NATIVE_BUILD_REQUIRED: "1"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Download Electron runtime
+        run: npx install-electron --no
+
+      - name: Build native helpers
+        run: npm run build:native
+
+      - name: Run Electron UI regression
+        run: npm run e2e:electron
+
+      - name: Verify E2E screenshot
+        run: test -s test/artifacts/electron-e2e.png
+
+      - name: Upload E2E screenshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: electron-e2e-screenshot
+          path: test/artifacts/electron-e2e.png
+          if-no-files-found: error

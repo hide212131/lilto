@@ -2,7 +2,6 @@ const { spawn } = require("node:child_process");
 const net = require("node:net");
 const fs = require("node:fs");
 const path = require("node:path");
-const { createProxyFixture } = require("./e2e-proxy-fixture");
 const {
   collectMessages,
   connectToElectronApp,
@@ -109,6 +108,12 @@ async function clickNewSessionButton(page) {
 
 async function clickSettingsClose(page) {
   await resolveNamedLocator(page, "settingsClose").click();
+}
+
+async function openChatSettings(page) {
+  const modal = resolveNamedLocator(page, "app").locator("lilt-settings-modal");
+  await modal.locator(".settings-menu-item").nth(1).click();
+  return modal;
 }
 
 async function switchToCustomProvider(page) {
@@ -243,19 +248,6 @@ async function waitForCustomSaveStatus(page, expectedText, timeoutMs = 5000) {
   );
 }
 
-async function waitForProxySetting(page, expectedUseProxy, timeoutMs = 5000) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const useProxy = await page.evaluate(async () => {
-      const settings = await window.lilto.getProviderSettings();
-      return Boolean(settings.networkProxy?.useProxy);
-    });
-    if (useProxy === expectedUseProxy) return;
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  throw new Error(`Timed out waiting for useProxy=${expectedUseProxy}`);
-}
-
 async function waitForResponse(page, expectedText, timeoutMs = 15000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -263,8 +255,20 @@ async function waitForResponse(page, expectedText, timeoutMs = 15000) {
     if (messages.includes(expectedText)) return messages;
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
+  const appState = await page.evaluate(() => {
+    const app = document.querySelector("lilt-app");
+    return app
+      ? {
+          isSending: app.isSending,
+          loopState: app.loopState,
+          pendingAssistantMessageId: app._pendingAssistantMessageId,
+          currentSessionId: app._currentSessionId,
+          messages: app.messages.map(({ role, text, pending, progress }) => ({ role, text, pending, progress }))
+        }
+      : null;
+  });
   throw new Error(
-    `Timed out waiting for response. Expected: "${expectedText}". Messages: "${await getMessagesText(page)}"`
+    `Timed out waiting for response. Expected: "${expectedText}". Messages: "${await getMessagesText(page)}". App state: ${JSON.stringify(appState)}`
   );
 }
 
@@ -302,7 +306,6 @@ async function main() {
   }
 
   cdpPort = await getFreePort();
-  const proxyFixture = await createProxyFixture();
 
   const electronBin =
     process.platform === "win32"
@@ -314,11 +317,10 @@ async function main() {
     ...process.env,
     LILTO_E2E_MOCK: "1",
     LILTO_PROVIDER_SETTINGS_PATH: mockProviderSettingsPath,
-    LILTO_PROXY_TEST_URL: proxyFixture.targetUrl,
-    HTTP_PROXY: proxyFixture.proxyUrl,
-    http_proxy: proxyFixture.proxyUrl,
-    HTTPS_PROXY: proxyFixture.proxyUrl,
-    https_proxy: proxyFixture.proxyUrl,
+    HTTP_PROXY: "",
+    http_proxy: "",
+    HTTPS_PROXY: "",
+    https_proxy: "",
     NO_PROXY: "",
     no_proxy: ""
   };
@@ -347,6 +349,12 @@ async function main() {
     console.log("CDP endpoint ready");
 
     ({ browser, page } = await connectToElectronApp(cdpPort));
+    page.on("pageerror", (error) => console.error(`[renderer pageerror] ${error.stack ?? error.message}`));
+    page.on("console", (message) => {
+      if (message.type() === "error") {
+        console.error(`[renderer console.error] ${message.text()}`);
+      }
+    });
     await waitForAppReady(page);
 
     const title = await page.title();
@@ -373,6 +381,14 @@ async function main() {
     await page.screenshot({ path: ssSettings, fullPage: true });
     console.log(`✓ Settings screenshot: ${ssSettings}`);
 
+    const settingsModal = await openChatSettings(page);
+    const showToolDetails = settingsModal.locator("#show-tool-execution-details");
+    if (await showToolDetails.isChecked()) {
+      throw new Error("Tool execution details should be hidden by default");
+    }
+    await settingsModal.locator(".settings-menu-item").nth(0).click();
+    console.log("✓ Tool execution details are hidden by default in Chat settings");
+
     await switchToCustomProvider(page);
     await setSettingsInputValue(page, "custom-provider-name", "Proxy E2E Provider");
     await setSettingsInputValue(page, "custom-base-url", "http://127.0.0.1:11434/v1");
@@ -381,8 +397,7 @@ async function main() {
     await setSettingsCheckboxValue(page, "use-proxy", false);
     await clickSaveProviderSettingsButton(page);
     await waitForCustomSaveStatus(page, "設定を保存しました。");
-    await waitForProxySetting(page, false);
-    console.log("✓ Custom Provider saved with proxy usage disabled");
+    console.log("✓ Custom Provider saved for mocked chat");
 
     await clickSettingsClose(page);
     await waitForModalClose(page);
@@ -410,35 +425,48 @@ async function main() {
     await waitForDictationStatusClear(page);
     console.log("✓ Dictation button toggles active status only while pressed");
 
-    const firstMessage = "E2E proxy check without proxy";
-    console.log(`Sending without proxy: "${firstMessage}"...`);
-    await fillComposerText(page, firstMessage);
+    const visibilityMessage = "E2E tool visibility check";
+    console.log(`Sending mocked prompt: "${visibilityMessage}"...`);
+    await fillComposerText(page, visibilityMessage);
     await clickComposerSend(page);
-    await waitForResponse(page, "PROXY_CONNECTION_FAILED");
-    console.log("✓ Proxy missing failure detected");
+
+    const expectedFinal = `[E2E_MOCK_FINAL] 要求「${visibilityMessage}」を処理し、複数コマンドを実行して回答しました。`;
+    await waitForResponse(page, expectedFinal);
+    await page.waitForTimeout(500);
+    const finalMessageState = await page.evaluate((text) => {
+      const app = document.querySelector("lilt-app");
+      return app.messages
+        .filter((message) => message.role === "assistant")
+        .find((message) => message.text === text) ?? null;
+    }, expectedFinal);
+    if (finalMessageState?.pending !== false) {
+      throw new Error(`Late tool progress replaced the completed response: ${JSON.stringify(finalMessageState)}`);
+    }
+    console.log(`✓ Mock final response received: "${expectedFinal}"`);
+
+    const messageList = resolveNamedLocator(page, "app").locator("lilt-message-list");
+    const toolConsoles = messageList.locator(".tool-console");
+    if (await toolConsoles.count() !== 0) {
+      throw new Error("Tool command details should stay hidden while the Chat setting is off");
+    }
 
     await clickSettingsButton(page);
     await waitForModalOpen(page);
-    await switchToCustomProvider(page);
-    await setSettingsCheckboxValue(page, "use-proxy", true);
-    await clickSaveProviderSettingsButton(page);
-    await waitForCustomSaveStatus(page, "設定を保存しました。");
-    await waitForProxySetting(page, true);
+    const chatSettings = await openChatSettings(page);
+    await chatSettings.locator("#show-tool-execution-details").check();
+    await chatSettings.getByRole("button", { name: "Chat 設定を保存" }).click();
+    await chatSettings.getByText("Chat 設定を保存しました。", { exact: true }).waitFor({ state: "visible" });
+    await chatSettings.locator("#show-tool-execution-details").waitFor({ state: "attached" });
+    await chatSettings.locator("#show-tool-execution-details").evaluate((element) => {
+      if (!element.checked) throw new Error("Tool execution details setting was not retained after save");
+    });
+    await toolConsoles.first().waitFor({ state: "visible" });
+    if (!(await toolConsoles.allTextContents()).some((text) => text.includes("read_file"))) {
+      throw new Error("Enabling tool details should reveal the command passed to the tool");
+    }
     await clickSettingsClose(page);
     await waitForModalClose(page);
-    await waitForSendEnabled(page);
-    await clickNewSessionButton(page);
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    console.log("✓ Proxy usage enabled");
-
-    const secondMessage = "E2E proxy check with proxy";
-    console.log(`Sending with proxy: "${secondMessage}"...`);
-    await fillComposerText(page, secondMessage);
-    await clickComposerSend(page);
-
-    const expectedFinal = `[E2E_MOCK_FINAL] 要求「${secondMessage}」を処理し、複数コマンドを実行して回答しました。`;
-    await waitForResponse(page, expectedFinal);
-    console.log(`✓ Mock final response received: "${expectedFinal}"`);
+    console.log("✓ Chat setting reveals and persists tool command details");
 
     const schedulerMessage = "3分たちました。";
     const schedulerFollowUp = "alpha.co.jp を開きます";
@@ -482,7 +510,6 @@ async function main() {
       console.log("Electron logs:");
       console.log(electronLogs);
     }
-    await proxyFixture.close();
   }
 }
 
