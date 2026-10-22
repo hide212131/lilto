@@ -255,8 +255,20 @@ async function waitForResponse(page, expectedText, timeoutMs = 15000) {
     if (messages.includes(expectedText)) return messages;
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
+  const appState = await page.evaluate(() => {
+    const app = document.querySelector("lilt-app");
+    return app
+      ? {
+          isSending: app.isSending,
+          loopState: app.loopState,
+          pendingAssistantMessageId: app._pendingAssistantMessageId,
+          currentSessionId: app._currentSessionId,
+          messages: app.messages.map(({ role, text, pending, progress }) => ({ role, text, pending, progress }))
+        }
+      : null;
+  });
   throw new Error(
-    `Timed out waiting for response. Expected: "${expectedText}". Messages: "${await getMessagesText(page)}"`
+    `Timed out waiting for response. Expected: "${expectedText}". Messages: "${await getMessagesText(page)}". App state: ${JSON.stringify(appState)}`
   );
 }
 
@@ -337,6 +349,12 @@ async function main() {
     console.log("CDP endpoint ready");
 
     ({ browser, page } = await connectToElectronApp(cdpPort));
+    page.on("pageerror", (error) => console.error(`[renderer pageerror] ${error.stack ?? error.message}`));
+    page.on("console", (message) => {
+      if (message.type() === "error") {
+        console.error(`[renderer console.error] ${message.text()}`);
+      }
+    });
     await waitForAppReady(page);
 
     const title = await page.title();
