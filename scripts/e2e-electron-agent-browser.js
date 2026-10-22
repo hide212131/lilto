@@ -2,6 +2,8 @@ const { spawn } = require("node:child_process");
 const net = require("node:net");
 const fs = require("node:fs");
 const path = require("node:path");
+const os = require("node:os");
+const assert = require("node:assert/strict");
 const {
   collectMessages,
   connectToElectronApp,
@@ -77,6 +79,41 @@ async function getMessagesText(page) {
     .map((message) => message.trim())
     .filter(Boolean)
     .join("\n");
+}
+
+async function verifyConversationOrder(page) {
+  const rounds = await page.evaluate(async () => {
+    const app = document.querySelector("lilt-app");
+    const originalMessages = app.messages;
+    const createdAt = 1_792_600_000_000;
+    const messages = [
+      { id: "item-1", role: "user", text: "質問1", createdAt },
+      { id: "item-2", role: "assistant", text: "回答1", createdAt },
+      { id: "item-10", role: "user", text: "質問2", createdAt },
+      { id: "item-20", role: "assistant", text: "回答2", createdAt }
+    ];
+    const hydrated = { id: "order-regression", messages, createdAt, updatedAt: createdAt };
+    let local = { ...hydrated, messages: [messages[0], messages[2], messages[1], messages[3]] };
+    const observations = [];
+    try {
+      for (let round = 0; round < 3; round += 1) {
+        local = app._mergeHydratedSession(hydrated, local);
+        app.messages = local.messages;
+        await app.updateComplete;
+        const list = app.shadowRoot.querySelector("lilt-message-list");
+        await list.updateComplete;
+        observations.push(Array.from(list.shadowRoot.querySelectorAll(".msg"), (element) => element.textContent.trim()));
+      }
+      return observations;
+    } finally {
+      app.messages = originalMessages;
+      await app.updateComplete;
+    }
+  });
+  for (const messages of rounds) {
+    assert.deepEqual(messages, ["質問1", "回答1", "質問2", "回答2"]);
+  }
+  console.log("✓ Question/answer display order preserved across repeated history merges");
 }
 
 async function injectSchedulerNotification(page, messageText, followUpInstruction) {
@@ -326,7 +363,8 @@ async function main() {
   };
   delete electronEnv.ELECTRON_RUN_AS_NODE;
 
-  const electron = spawn(electronBin, [".", `--remote-debugging-port=${cdpPort}`], {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "lilto-electron-e2e-"));
+  const electron = spawn(electronBin, [".", `--remote-debugging-port=${cdpPort}`, `--user-data-dir=${userDataDir}`], {
     cwd: rootDir,
     shell: shouldUseShellForCommand(electronBin),
     env: electronEnv,
@@ -362,6 +400,7 @@ async function main() {
     console.log(`✓ Title: "${title}"`);
 
     console.log("✓ lilt-app rendered");
+    await verifyConversationOrder(page);
 
     const initialStatus = await waitForStatus(page, [
       "待機中",
@@ -506,6 +545,7 @@ async function main() {
       electron.once("exit", () => resolve());
       setTimeout(() => resolve(), 3000);
     });
+    fs.rmSync(userDataDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     if (electronLogs.trim()) {
       console.log("Electron logs:");
       console.log(electronLogs);

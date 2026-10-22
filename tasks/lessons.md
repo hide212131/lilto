@@ -1,5 +1,11 @@
 # Lessons
 
+## 2026-10-22 Preserve backend conversation order during hydration
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| 履歴再読込で質問・回答が入れ替わるため、保存済みの turn/item 順を維持する統合へ修正する。 | 個別時刻がないメッセージは会話作成時刻へフォールバックし、同時刻の ID 文字列ソートで `item-10` が `item-2` より前へ移動した。 | 会話の順序は backend の turn/item 配列を正とし、時刻や ID で再ソートしない。local-only 通知は既知メッセージを基準に挿入する。同時刻・桁数の異なる ID・再読込を振る舞いテストで検証する。 |
+
 ## 2026-10-22 Verify published native package layout before packaging
 
 | Change | Mistake/Context | Rule to repeat |
