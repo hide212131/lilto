@@ -2,6 +2,7 @@ const test = require("node:test");
 const { mock } = require("node:test");
 const assert = require("node:assert/strict");
 const http = require("node:http");
+const { createProxyFixture } = require("../scripts/e2e-proxy-fixture");
 
 const { AgentRuntime, createCodexThreadFromSdk, createCodexThreadFromAppServer } = require("../dist/main/agent-sdk.js");
 const { CodexAppServerClient } = require("../dist/main/codex-app-server-client.js");
@@ -620,6 +621,62 @@ test("proxy precheck 失敗は PROXY_CONNECTION_FAILED に正規化する", asyn
     delete process.env.LILTO_E2E_MOCK;
     delete process.env.LILTO_PROXY_TEST_URL;
     await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("proxy precheck は useProxy=true で設定済み HTTP proxy を通す", { concurrency: false }, async () => {
+  const fixture = await createProxyFixture();
+  const envKeys = [
+    "LILTO_E2E_MOCK",
+    "LILTO_PROXY_TEST_URL",
+    "HTTP_PROXY",
+    "http_proxy",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "NO_PROXY",
+    "no_proxy"
+  ];
+  const previousEnv = new Map(envKeys.map((key) => [key, process.env[key]]));
+  Object.assign(process.env, {
+    LILTO_E2E_MOCK: "1",
+    LILTO_PROXY_TEST_URL: fixture.targetUrl,
+    HTTP_PROXY: fixture.proxyUrl,
+    http_proxy: fixture.proxyUrl,
+    HTTPS_PROXY: fixture.proxyUrl,
+    https_proxy: fixture.proxyUrl,
+    NO_PROXY: ".lilto-e2e.invalid",
+    no_proxy: ".lilto-e2e.invalid"
+  });
+
+  try {
+    const runtime = new AgentRuntime({
+      authService: createAuthService("authenticated"),
+      createSession: async () => {
+        throw new Error("mocked proxy check should not create a session");
+      },
+      logger: { info() {}, error() {} }
+    });
+
+    const result = await runtime.submitPrompt(
+      "test",
+      createProviderSettings({
+        networkProxy: {
+          useProxy: true
+        }
+      })
+    );
+
+    assert.equal(result.ok, true);
+    assert.match(result.text, /^\[E2E_MOCK_FINAL\]/);
+  } finally {
+    for (const [key, value] of previousEnv.entries()) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+    await fixture.close();
   }
 });
 

@@ -2,7 +2,6 @@ const { spawn } = require("node:child_process");
 const net = require("node:net");
 const fs = require("node:fs");
 const path = require("node:path");
-const { createProxyFixture } = require("./e2e-proxy-fixture");
 const {
   collectMessages,
   connectToElectronApp,
@@ -249,19 +248,6 @@ async function waitForCustomSaveStatus(page, expectedText, timeoutMs = 5000) {
   );
 }
 
-async function waitForProxySetting(page, expectedUseProxy, timeoutMs = 5000) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const useProxy = await page.evaluate(async () => {
-      const settings = await window.lilto.getProviderSettings();
-      return Boolean(settings.networkProxy?.useProxy);
-    });
-    if (useProxy === expectedUseProxy) return;
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  throw new Error(`Timed out waiting for useProxy=${expectedUseProxy}`);
-}
-
 async function waitForResponse(page, expectedText, timeoutMs = 15000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -308,7 +294,6 @@ async function main() {
   }
 
   cdpPort = await getFreePort();
-  const proxyFixture = await createProxyFixture();
 
   const electronBin =
     process.platform === "win32"
@@ -320,11 +305,10 @@ async function main() {
     ...process.env,
     LILTO_E2E_MOCK: "1",
     LILTO_PROVIDER_SETTINGS_PATH: mockProviderSettingsPath,
-    LILTO_PROXY_TEST_URL: proxyFixture.targetUrl,
-    HTTP_PROXY: proxyFixture.proxyUrl,
-    http_proxy: proxyFixture.proxyUrl,
-    HTTPS_PROXY: proxyFixture.proxyUrl,
-    https_proxy: proxyFixture.proxyUrl,
+    HTTP_PROXY: "",
+    http_proxy: "",
+    HTTPS_PROXY: "",
+    https_proxy: "",
     NO_PROXY: "",
     no_proxy: ""
   };
@@ -395,8 +379,7 @@ async function main() {
     await setSettingsCheckboxValue(page, "use-proxy", false);
     await clickSaveProviderSettingsButton(page);
     await waitForCustomSaveStatus(page, "設定を保存しました。");
-    await waitForProxySetting(page, false);
-    console.log("✓ Custom Provider saved with proxy usage disabled");
+    console.log("✓ Custom Provider saved for mocked chat");
 
     await clickSettingsClose(page);
     await waitForModalClose(page);
@@ -424,33 +407,12 @@ async function main() {
     await waitForDictationStatusClear(page);
     console.log("✓ Dictation button toggles active status only while pressed");
 
-    const firstMessage = "E2E proxy check without proxy";
-    console.log(`Sending without proxy: "${firstMessage}"...`);
-    await fillComposerText(page, firstMessage);
-    await clickComposerSend(page);
-    await waitForResponse(page, "PROXY_CONNECTION_FAILED");
-    console.log("✓ Proxy missing failure detected");
-
-    await clickSettingsButton(page);
-    await waitForModalOpen(page);
-    await switchToCustomProvider(page);
-    await setSettingsCheckboxValue(page, "use-proxy", true);
-    await clickSaveProviderSettingsButton(page);
-    await waitForCustomSaveStatus(page, "設定を保存しました。");
-    await waitForProxySetting(page, true);
-    await clickSettingsClose(page);
-    await waitForModalClose(page);
-    await waitForSendEnabled(page);
-    await clickNewSessionButton(page);
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    console.log("✓ Proxy usage enabled");
-
-    const secondMessage = "E2E proxy check with proxy";
-    console.log(`Sending with proxy: "${secondMessage}"...`);
-    await fillComposerText(page, secondMessage);
+    const visibilityMessage = "E2E tool visibility check";
+    console.log(`Sending mocked prompt: "${visibilityMessage}"...`);
+    await fillComposerText(page, visibilityMessage);
     await clickComposerSend(page);
 
-    const expectedFinal = `[E2E_MOCK_FINAL] 要求「${secondMessage}」を処理し、複数コマンドを実行して回答しました。`;
+    const expectedFinal = `[E2E_MOCK_FINAL] 要求「${visibilityMessage}」を処理し、複数コマンドを実行して回答しました。`;
     await waitForResponse(page, expectedFinal);
     console.log(`✓ Mock final response received: "${expectedFinal}"`);
 
@@ -520,7 +482,6 @@ async function main() {
       console.log("Electron logs:");
       console.log(electronLogs);
     }
-    await proxyFixture.close();
   }
 }
 
