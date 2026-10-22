@@ -119,7 +119,7 @@ if (hasSingleInstanceLock) {
     if (process.platform === "darwin") {
       const dockIcon = resolveAppIcon(512);
       if (!dockIcon.isEmpty()) {
-        app.dock.setIcon(dockIcon);
+        app.dock?.setIcon(dockIcon);
       }
     }
 

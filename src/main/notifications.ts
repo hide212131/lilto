@@ -186,7 +186,7 @@ export class NotificationService {
 
     // macOS: Dock バッジ
     if (process.platform === "darwin") {
-      app.dock.setBadge(count > 0 ? String(count) : "");
+      app.dock?.setBadge(count > 0 ? String(count) : "");
     }
 
     // Windows: タスクバーオーバーレイ
