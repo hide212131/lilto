@@ -589,3 +589,9 @@
 | Moved Agent Skills update results above the installed-skills list after user correction. | Showing the result below a long skills table makes the feedback feel hidden even when the button itself is in the right toolbar. | Render update-check status and result rows immediately under the installed-skills toolbar, before the installed skills table. |
 | Stabilized Electron E2E around proxy-enabled sends after model-list requests temporarily changed proxy environment variables. | Concurrent UI requests that scoped `process.env` could erase proxy variables while the agent precheck was reading them, making a saved `useProxy=true` setting behave like direct network access. | When code scopes proxy environment variables, read proxy source values from a stable baseline plus current env fallback. GUI E2E should wait for persisted proxy settings before sending and then verify the proxy-required path both off and on. |
 
+## 2026-10-22 Electron E2E must not depend on microphone permissions
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| GUI E2E triggered the real macOS speech recognizer while checking a separate settings change, so CI remained in the transcribing state and timed out. | OS microphone and speech permissions are environmental inputs, not stable UI test fixtures. | In `LILTO_E2E_MOCK=1` mode, stub the transcription response so GUI regression checks do not launch native recognition or depend on machine permissions. |
+

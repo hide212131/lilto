@@ -138,6 +138,17 @@ export function registerSchedulerSystemIpcHandlers({
       };
     }
 
+    if (process.env.LILTO_E2E_MOCK === "1") {
+      return {
+        ok: false as const,
+        error: {
+          code: "NO_SPEECH",
+          message: "No speech detected",
+          retryable: false
+        }
+      };
+    }
+
     return await speechTranscriptionService.transcribeWav(audioData);
   });
 
