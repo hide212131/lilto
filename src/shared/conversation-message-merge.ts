@@ -19,12 +19,18 @@ export function mergeSessionMessages<T extends ConversationMessage>(hydratedMess
   for (const message of [...localMessages].reverse()) {
     let index = hydratedMessages.findIndex((hydrated) => hydrated.id === message.id);
     if (index === -1) {
-      index = hydratedMessages.findIndex((hydrated, candidateIndex) =>
-        !matchedIndexes.has(candidateIndex)
-        && hydrated.role === message.role
-        && hydrated.text === message.text
-        && Math.abs(hydrated.createdAt - message.createdAt) <= HYDRATION_MERGE_TIME_WINDOW_MS
-      );
+      // Match from the same end as the local walk, so repeated text anchors to
+      // the corresponding occurrence rather than moving intervening notices.
+      for (let candidateIndex = hydratedMessages.length - 1; candidateIndex >= 0; candidateIndex -= 1) {
+        const hydrated = hydratedMessages[candidateIndex];
+        if (!matchedIndexes.has(candidateIndex)
+          && hydrated.role === message.role
+          && hydrated.text === message.text
+          && Math.abs(hydrated.createdAt - message.createdAt) <= HYDRATION_MERGE_TIME_WINDOW_MS) {
+          index = candidateIndex;
+          break;
+        }
+      }
     }
     if (index !== -1) {
       matchedIndexes.add(index);

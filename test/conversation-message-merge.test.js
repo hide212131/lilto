@@ -50,7 +50,7 @@ test("同じIDなら時刻と本文が更新されても保存側を採用する
   assert.deepEqual(mergeSessionMessages(hydrated, local), hydrated);
 });
 
-test("同一文面の質問を繰り返しても保存済みメッセージを失わない", () => {
+test("同一文面の質問を繰り返しても通知位置と質問・回答順を保つ", () => {
   const hydrated = [
     message("item-1", "user", "もう一度"),
     message("item-2", "assistant", "はい"),
@@ -58,7 +58,11 @@ test("同一文面の質問を繰り返しても保存済みメッセージを�
     message("item-20", "assistant", "はい")
   ];
   const local = hydrated.map((entry, index) => ({ ...entry, id: `msg-${index}`, createdAt: timestamp + 500 }));
-  assert.deepEqual(mergeSessionMessages(hydrated, local), hydrated);
+  const notification = message("notice", "assistant", "通知", timestamp + 500);
+  local.splice(2, 0, notification);
+  assert.deepEqual(mergeSessionMessages(hydrated, local), [
+    ...hydrated.slice(0, 2), notification, ...hydrated.slice(2)
+  ]);
 });
 
 test("保存履歴が空でもlocal-onlyメッセージの順序を維持する", () => {

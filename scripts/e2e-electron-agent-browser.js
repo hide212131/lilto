@@ -2,6 +2,7 @@ const { spawn } = require("node:child_process");
 const net = require("node:net");
 const fs = require("node:fs");
 const path = require("node:path");
+const os = require("node:os");
 const assert = require("node:assert/strict");
 const {
   collectMessages,
@@ -362,7 +363,8 @@ async function main() {
   };
   delete electronEnv.ELECTRON_RUN_AS_NODE;
 
-  const electron = spawn(electronBin, [".", `--remote-debugging-port=${cdpPort}`], {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "lilto-electron-e2e-"));
+  const electron = spawn(electronBin, [".", `--remote-debugging-port=${cdpPort}`, `--user-data-dir=${userDataDir}`], {
     cwd: rootDir,
     shell: shouldUseShellForCommand(electronBin),
     env: electronEnv,
@@ -543,6 +545,7 @@ async function main() {
       electron.once("exit", () => resolve());
       setTimeout(() => resolve(), 3000);
     });
+    fs.rmSync(userDataDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     if (electronLogs.trim()) {
       console.log("Electron logs:");
       console.log(electronLogs);
