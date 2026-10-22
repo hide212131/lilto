@@ -750,7 +750,9 @@ export class LiltApp extends LitElement {
               progress: this._buildProgress(),
               toolCallIds: new Set(this._foregroundToolCallIds)
             }
-          : null
+          : null,
+        result.ok ? "completed" : "failed",
+        result.ok ? null : result.error?.message ?? null
       );
       if (result.ok) {
         this._updateSessionMessage(conversationId, pendingMessageId, {
@@ -790,7 +792,7 @@ export class LiltApp extends LitElement {
         }
       }
     } catch (err) {
-      this._markForegroundResponseReceived();
+      this._markForegroundResponseReceived(undefined, null, "failed", String(err));
       this._removeSessionMessage(conversationId, pendingMessageId);
       this._appendMessageToSession(conversationId, {
         id: this._nextMessageId(),
@@ -874,10 +876,21 @@ export class LiltApp extends LitElement {
 
   private _markForegroundResponseReceived(
     requestId?: string,
-    completedResponse: CompletedForegroundResponse | null = null
+    completedResponse: CompletedForegroundResponse | null = null,
+    status?: LoopState["status"],
+    lastError?: string | null
   ) {
     this._foregroundResponseReceived = true;
     const completedRequestId = requestId ?? this.loopState.requestId ?? this._activeRequestId;
+    if (status) {
+      this.loopState = {
+        ...this.loopState,
+        requestId: completedRequestId,
+        status,
+        activeTools: [],
+        lastError: lastError ?? null
+      };
+    }
     if (!completedRequestId) return;
 
     this._completedForegroundRequests.set(completedRequestId, completedResponse);
