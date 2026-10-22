@@ -47,7 +47,8 @@ export class LiltSettingsModal extends LitElement {
     },
     chatSettings: {
       enterToSend: false,
-      globalShortcut: ""
+      globalShortcut: "",
+      showToolExecutionDetails: false
     },
     heartbeatSettings: {
       enabled: false,
@@ -83,6 +84,7 @@ export class LiltSettingsModal extends LitElement {
   @state() private _enterToSend = false;
   @state() private _globalShortcut = "";
   @state() private _chatSaveStatus = "";
+  @state() private _showToolExecutionDetails = false;
   @state() private _heartbeatEnabled = false;
   @state() private _heartbeatFilePath = "";
   @state() private _heartbeatIntervalMinutes = 30;
@@ -164,6 +166,7 @@ export class LiltSettingsModal extends LitElement {
       this._windowsSandboxPrivateDesktop = this.providerSettings.windowsSandbox?.privateDesktop ?? true;
       this._enterToSend = cs?.enterToSend ?? false;
       this._globalShortcut = cs?.globalShortcut ?? "";
+      this._showToolExecutionDetails = cs?.showToolExecutionDetails ?? false;
       this._heartbeatEnabled = this.providerSettings.heartbeatSettings?.enabled ?? false;
       this._heartbeatFilePath = this.providerSettings.heartbeatSettings?.filePath ?? "";
       this._heartbeatIntervalMinutes = this.providerSettings.heartbeatSettings?.intervalMinutes ?? 30;
@@ -1727,6 +1730,17 @@ export class LiltSettingsModal extends LitElement {
             />
             Enter キーだけで送信する（Shift+Enter で改行）
           </label>
+          <label>
+            <input
+              id="show-tool-execution-details"
+              type="checkbox"
+              .checked=${this._showToolExecutionDetails}
+              @change=${(e: InputEvent) => {
+                this._showToolExecutionDetails = (e.target as HTMLInputElement).checked;
+              }}
+            />
+            途中経過にツールの実行内容（コマンド・引数）を表示する
+          </label>
           <p style="margin:0;font-size:13px;color:var(--muted,#6b7280);">
             OFF の場合は従来通り Cmd/Ctrl + Enter で送信します。
           </p>
@@ -1780,7 +1794,8 @@ export class LiltSettingsModal extends LitElement {
       ...this.providerSettings,
       chatSettings: {
         enterToSend: this._enterToSend,
-        globalShortcut: this._globalShortcut
+        globalShortcut: this._globalShortcut,
+        showToolExecutionDetails: this._showToolExecutionDetails
       }
     };
     const result = await window.lilto.saveProviderSettings(next);
@@ -2226,7 +2241,8 @@ export class LiltSettingsModal extends LitElement {
       ...this.providerSettings,
       chatSettings: {
         enterToSend: this._enterToSend,
-        globalShortcut: this._globalShortcut
+        globalShortcut: this._globalShortcut,
+        showToolExecutionDetails: this._showToolExecutionDetails
       }
     };
     const result = await window.lilto.saveProviderSettings(next);

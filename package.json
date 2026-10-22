@@ -1,6 +1,6 @@
 {
   "name": "lilt-o",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "author": "hide",
   "description": "Lilt-o desktop shell with Codex SDK bridge",
@@ -94,7 +94,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.3.5",
-    "electron": "^31.7.7",
+    "electron": "^44.9.3",
     "electron-builder": "^26.8.1",
     "lit": "^3.3.2",
     "playwright-core": "^1.58.2",

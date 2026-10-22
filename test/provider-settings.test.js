@@ -41,6 +41,11 @@ test("ProviderSettingsService は保存した設定を再読込できる", () =>
       filePath: "/tmp/HEARTBEAT.md",
       intervalMinutes: 45,
       showDesktopNotifications: false
+    },
+    chatSettings: {
+      enterToSend: true,
+      globalShortcut: "Control+L",
+      showToolExecutionDetails: true
     }
   });
 
@@ -65,6 +70,24 @@ test("ProviderSettingsService は保存した設定を再読込できる", () =>
   assert.equal(state.heartbeatSettings.filePath, "/tmp/HEARTBEAT.md");
   assert.equal(state.heartbeatSettings.intervalMinutes, 45);
   assert.equal(state.heartbeatSettings.showDesktopNotifications, false);
+  assert.equal(state.chatSettings.showToolExecutionDetails, true);
+});
+
+test("ProviderSettingsService は既存設定のツール詳細表示をデフォルト非表示にする", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "lilto-provider-legacy-"));
+  const storagePath = path.join(tempDir, "providers.json");
+  fs.writeFileSync(storagePath, JSON.stringify({
+    activeProvider: "oauth",
+    customProvider: { name: "", baseUrl: "", apiKey: "", modelId: "" },
+    chatSettings: { enterToSend: false, globalShortcut: "CommandOrControl+L" }
+  }));
+
+  const service = new ProviderSettingsService({
+    storagePath,
+    logger: { info() {}, error() {} }
+  });
+
+  assert.equal(service.getState().chatSettings.showToolExecutionDetails, false);
 });
 
 test("ProviderSettingsService は環境変数の保存先を優先する", () => {

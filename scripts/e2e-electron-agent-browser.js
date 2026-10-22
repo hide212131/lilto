@@ -111,6 +111,12 @@ async function clickSettingsClose(page) {
   await resolveNamedLocator(page, "settingsClose").click();
 }
 
+async function openChatSettings(page) {
+  const modal = resolveNamedLocator(page, "app").locator("lilt-settings-modal");
+  await modal.locator(".settings-menu-item").nth(1).click();
+  return modal;
+}
+
 async function switchToCustomProvider(page) {
   await resolveNamedLocator(page, "app")
     .locator("lilt-settings-modal")
@@ -373,6 +379,14 @@ async function main() {
     await page.screenshot({ path: ssSettings, fullPage: true });
     console.log(`✓ Settings screenshot: ${ssSettings}`);
 
+    const settingsModal = await openChatSettings(page);
+    const showToolDetails = settingsModal.locator("#show-tool-execution-details");
+    if (await showToolDetails.isChecked()) {
+      throw new Error("Tool execution details should be hidden by default");
+    }
+    await settingsModal.locator(".settings-menu-item").nth(0).click();
+    console.log("✓ Tool execution details are hidden by default in Chat settings");
+
     await switchToCustomProvider(page);
     await setSettingsInputValue(page, "custom-provider-name", "Proxy E2E Provider");
     await setSettingsInputValue(page, "custom-base-url", "http://127.0.0.1:11434/v1");
@@ -439,6 +453,30 @@ async function main() {
     const expectedFinal = `[E2E_MOCK_FINAL] 要求「${secondMessage}」を処理し、複数コマンドを実行して回答しました。`;
     await waitForResponse(page, expectedFinal);
     console.log(`✓ Mock final response received: "${expectedFinal}"`);
+
+    const messageList = resolveNamedLocator(page, "app").locator("lilt-message-list");
+    const toolConsoles = messageList.locator(".tool-console");
+    if (await toolConsoles.count() !== 0) {
+      throw new Error("Tool command details should stay hidden while the Chat setting is off");
+    }
+
+    await clickSettingsButton(page);
+    await waitForModalOpen(page);
+    const chatSettings = await openChatSettings(page);
+    await chatSettings.locator("#show-tool-execution-details").check();
+    await chatSettings.getByRole("button", { name: "Chat 設定を保存" }).click();
+    await chatSettings.getByText("Chat 設定を保存しました。", { exact: true }).waitFor({ state: "visible" });
+    await chatSettings.locator("#show-tool-execution-details").waitFor({ state: "attached" });
+    await chatSettings.locator("#show-tool-execution-details").evaluate((element) => {
+      if (!element.checked) throw new Error("Tool execution details setting was not retained after save");
+    });
+    await toolConsoles.first().waitFor({ state: "visible" });
+    if (!(await toolConsoles.allTextContents()).some((text) => text.includes("read_file"))) {
+      throw new Error("Enabling tool details should reveal the command passed to the tool");
+    }
+    await clickSettingsClose(page);
+    await waitForModalClose(page);
+    console.log("✓ Chat setting reveals and persists tool command details");
 
     const schedulerMessage = "3分たちました。";
     const schedulerFollowUp = "alpha.co.jp を開きます";

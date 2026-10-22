@@ -54,7 +54,8 @@ export class LiltApp extends LitElement {
     },
     chatSettings: {
       enterToSend: false,
-      globalShortcut: "CommandOrControl+L"
+      globalShortcut: "CommandOrControl+L",
+      showToolExecutionDetails: false
     },
     heartbeatSettings: {
       enabled: false,
@@ -562,6 +563,7 @@ export class LiltApp extends LitElement {
           <div class="stage">
             <lilt-message-list
               .messages=${this.messages}
+              .showToolExecutionDetails=${this.providerSettings.chatSettings?.showToolExecutionDetails ?? false}
               @retry-message=${this._onRetryMessage}
             ></lilt-message-list>
             <lilt-composer

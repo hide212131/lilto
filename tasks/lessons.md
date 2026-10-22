@@ -1,5 +1,11 @@
 # Lessons
 
+## 2026-10-22 Quarantined Electron binaries require a clean supported build
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| Electron の開発バイナリがマルウェア扱いで隔離され、ローカル実行確認ができなくなった。 | Electron 自体がマルウェアだと断定する材料はなく、隔離後に同じ実行ファイルを復元・再実行するのも適切ではない。利用中の Electron 31 はサポート対象外で、Electron 44 では npm の導入時ではなく明示的なバイナリ取得が必要。 | セキュリティソフトが実行ファイルを隔離したら、警告の製品名・検出名を記録し、隔離を回避しない。サポート中の公式バージョンへ更新し、明示的な取得と GUI 検証はクリーンな CI で行う。 |
+
 ## 2026-06-11 main bootstrap should return explicit dependencies
 
 | Change | Mistake/Context | Rule to repeat |

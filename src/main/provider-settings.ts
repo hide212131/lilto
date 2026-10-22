@@ -91,7 +91,11 @@ function normalizeChatSettings(value: unknown): ChatSettings {
   const record = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
   return {
     enterToSend: typeof record.enterToSend === "boolean" ? record.enterToSend : DEFAULT_CHAT_SETTINGS.enterToSend,
-    globalShortcut: typeof record.globalShortcut === "string" ? record.globalShortcut : defaultGlobalShortcut()
+    globalShortcut: typeof record.globalShortcut === "string" ? record.globalShortcut : defaultGlobalShortcut(),
+    showToolExecutionDetails:
+      typeof record.showToolExecutionDetails === "boolean"
+        ? record.showToolExecutionDetails
+        : DEFAULT_CHAT_SETTINGS.showToolExecutionDetails
   };
 }
 
@@ -225,6 +229,7 @@ function isValidSavePayload(payload: unknown): payload is {
     const chat = record.chatSettings as Record<string, unknown>;
     if (typeof chat.enterToSend !== "boolean") return false;
     if (chat.globalShortcut !== undefined && typeof chat.globalShortcut !== "string") return false;
+    if (chat.showToolExecutionDetails !== undefined && typeof chat.showToolExecutionDetails !== "boolean") return false;
   }
 
   if (record.heartbeatSettings !== undefined) {

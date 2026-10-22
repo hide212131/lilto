@@ -1,0 +1,136 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  macos-arm64:
+    name: Build and verify macOS (Apple silicon)
+    runs-on: macos-latest
+    env:
+      LILTO_NATIVE_BUILD_REQUIRED: "1"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Download Electron runtime
+        run: npx install-electron --no
+
+      - name: Run Electron UI regression
+        run: npm run e2e:electron
+
+      - name: Verify E2E screenshot
+        run: test -s test/artifacts/electron-e2e.png
+
+      - name: Build macOS installer
+        run: npm run dist:mac
+
+      - name: Verify packaged macOS installer
+        run: npm run verify:dist
+
+      - name: Upload macOS release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64-release
+          path: |
+            release/*.dmg
+            release/*.blockmap
+          if-no-files-found: error
+
+  windows-x64:
+    name: Build Windows (x64)
+    runs-on: windows-latest
+    env:
+      LILTO_NATIVE_BUILD_REQUIRED: "1"
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install npm dependencies
+        run: npm.cmd ci
+
+      - name: Download Electron runtime
+        run: npx.cmd install-electron --no
+
+      - name: Build Windows installer
+        run: npm.cmd run dist:win
+
+      - name: Verify packaged Windows installer
+        run: npm.cmd run verify:dist
+
+      - name: Upload Windows release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-release
+          path: |
+            release/*.exe
+            release/*.blockmap
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    runs-on: ubuntu-latest
+    needs:
+      - macos-arm64
+      - windows-x64
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Verify tag matches package version
+        run: node -e 'if (process.env.GITHUB_REF_NAME !== `v${require("./package.json").version}`) process.exit(1)'
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "*-release"
+          path: artifacts
+          merge-multiple: true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body: |
+            macOS and Windows installers are currently unsigned. macOS Gatekeeper or Windows SmartScreen may show a warning before launch.
+          files: artifacts/**
+          fail_on_unmatched_files: true
