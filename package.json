@@ -17,8 +17,8 @@
     "dist:win": "npm run build:native && npm run build && set CSC_IDENTITY_AUTO_DISCOVERY=false&& set CSC_LINK=&& set WIN_CSC_LINK=&& electron-builder --win nsis --publish never --config.win.signAndEditExecutable=false",
     "verify:dist": "node scripts/verify-dist-artifacts.js",
     "live-ui:manual": "node scripts/live-ui-manual-verification.js",
-    "test:unit": "npm run build:unit && node --test test",
-    "test": "npm run build && node --test test",
+    "test:unit": "npm run build:unit && node scripts/run-unit-tests.js",
+    "test": "npm run build && node scripts/run-unit-tests.js",
     "test:windows-sandbox-live": "npm run build && node --test scripts/windows-sandbox-live-test.js",
     "e2e:electron": "npm run build && node scripts/e2e-electron-agent-browser.js",
     "e2e:electron:skills-live": "npm run build && node scripts/e2e-electron-agent-skills-live.js"
