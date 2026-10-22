@@ -263,6 +263,9 @@ async function waitForResponse(page, expectedText, timeoutMs = 15000) {
           loopState: app.loopState,
           pendingAssistantMessageId: app._pendingAssistantMessageId,
           currentSessionId: app._currentSessionId,
+          submitWrapped: app.__e2eSubmitWrapped,
+          submitResult: app.__e2eSubmitResult ?? null,
+          messageUpdates: app.__e2eMessageUpdates ?? [],
           messages: app.messages.map(({ role, text, pending, progress }) => ({ role, text, pending, progress }))
         }
       : null;
@@ -424,6 +427,28 @@ async function main() {
     await releaseComposerDictation(page);
     await waitForDictationStatusClear(page);
     console.log("✓ Dictation button toggles active status only while pressed");
+
+    await page.evaluate(() => {
+      const app = document.querySelector("lilt-app");
+      app.__e2eMessageUpdates = [];
+      const originalUpdate = app._updateSessionMessage.bind(app);
+      app._updateSessionMessage = (sessionId, messageId, patch) => {
+        app.__e2eMessageUpdates.push({ sessionId, messageId, patch });
+        return originalUpdate(sessionId, messageId, patch);
+      };
+
+      try {
+        const originalSubmit = window.lilto.submitPrompt;
+        window.lilto.submitPrompt = async (...args) => {
+          const result = await originalSubmit(...args);
+          app.__e2eSubmitResult = result;
+          return result;
+        };
+        app.__e2eSubmitWrapped = true;
+      } catch {
+        app.__e2eSubmitWrapped = false;
+      }
+    });
 
     const visibilityMessage = "E2E tool visibility check";
     console.log(`Sending mocked prompt: "${visibilityMessage}"...`);
