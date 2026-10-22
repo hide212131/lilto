@@ -594,4 +594,5 @@
 | Change | Mistake/Context | Rule to repeat |
 |---|---|---|
 | GUI E2E triggered the real macOS speech recognizer while checking a separate settings change, so CI remained in the transcribing state and timed out. | OS microphone and speech permissions are environmental inputs, not stable UI test fixtures. | In `LILTO_E2E_MOCK=1` mode, stub the transcription response so GUI regression checks do not launch native recognition or depend on machine permissions. |
+| CI's unit-test command auto-discovered `scripts/windows-sandbox-live-test.js`, which requires elevated Windows sandbox facilities absent from hosted runners. | Node's default test discovery includes matching test files outside the `test/` unit-test directory, so a separate live smoke test unexpectedly failed the normal unit suite. | Scope `test:unit` to `node --test test`; invoke OS-dependent live smoke tests only through their dedicated scripts. |
 

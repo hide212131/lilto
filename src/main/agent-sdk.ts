@@ -91,6 +91,12 @@ async function runProxyPrecheckIfEnabled(settings: ProviderSettings): Promise<vo
     ? getProxyEnvironmentValues()
     : { httpProxy: "", httpsProxy: "", noProxy: "" };
   const proxyUrlText = resolveProxyForTarget(targetUrl, proxyEnv);
+  if (process.env.LILTO_E2E_MOCK === "1") {
+    const bypassed = shouldBypassProxyForHost(targetUrl.hostname, proxyEnv.noProxy);
+    console.log(
+      `[e2e] proxy precheck enabled=${settings.networkProxy.useProxy} configured=${Boolean(proxyEnv.httpProxy || proxyEnv.httpsProxy)} bypassed=${bypassed} route=${proxyUrlText ? "proxy" : "direct"}`
+    );
+  }
   await new Promise<void>((resolve, reject) => {
     const finishWithResponse = (statusCode: number | undefined, body: string) => {
       if (statusCode && statusCode >= 200 && statusCode < 300) {
