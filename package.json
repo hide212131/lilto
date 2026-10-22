@@ -29,7 +29,8 @@
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "asar": true,
     "asarUnpack": [
-      "dist/main/cron-mcp-server.js"
+      "dist/main/cron-mcp-server.js",
+      "node_modules/@openai/codex-*/vendor/**/*"
     ],
     "directories": {
       "output": "release",
@@ -90,6 +91,7 @@
     ]
   },
   "dependencies": {
+    "@openai/codex-sdk": "^0.163.0",
     "marked": "^17.0.4"
   },
   "devDependencies": {

@@ -8,6 +8,8 @@ jobs:
   typecheck-and-unit:
     name: Typecheck and unit test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    env:
+      LILTO_NATIVE_BUILD_REQUIRED: "1"
     strategy:
       fail-fast: false
       matrix:
@@ -25,6 +27,16 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: Set up Rust toolchain (Windows)
+        uses: dtolnay/rust-toolchain@stable
+        if: runner.os == 'Windows'
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        if: runner.os != 'Windows'
+
       - name: Install npm dependencies
         run: npm.cmd ci
         if: runner.os == 'Windows'
@@ -39,6 +51,14 @@ jobs:
 
       - name: Download Electron runtime
         run: npx install-electron --no
+        if: runner.os != 'Windows'
+
+      - name: Build native helpers (Windows)
+        run: npm.cmd run build:native
+        if: runner.os == 'Windows'
+
+      - name: Build native helpers
+        run: npm run build:native
         if: runner.os != 'Windows'
 
       - name: TypeScript noEmit check
@@ -60,6 +80,8 @@ jobs:
   electron-e2e:
     name: Electron UI regression
     runs-on: macos-latest
+    env:
+      LILTO_NATIVE_BUILD_REQUIRED: "1"
 
     steps:
       - name: Check out repository
@@ -71,11 +93,17 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Install npm dependencies
         run: npm ci
 
       - name: Download Electron runtime
         run: npx install-electron --no
+
+      - name: Build native helpers
+        run: npm run build:native
 
       - name: Run Electron UI regression
         run: npm run e2e:electron

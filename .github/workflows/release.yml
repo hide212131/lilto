@@ -34,6 +34,9 @@ jobs:
       - name: Download Electron runtime
         run: npx install-electron --no
 
+      - name: Build native helpers for UI regression
+        run: npm run build:native
+
       - name: Run Electron UI regression
         run: npm run e2e:electron
 
