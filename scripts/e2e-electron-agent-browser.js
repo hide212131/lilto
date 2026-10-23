@@ -116,6 +116,53 @@ async function verifyConversationOrder(page) {
   console.log("✓ Question/answer display order preserved across repeated history merges");
 }
 
+async function verifySidebarActivity(page) {
+  const app = resolveNamedLocator(page, "app");
+  const history = app.locator("lilt-chat-history");
+  const before = await page.evaluate(async () => {
+    const app = document.querySelector("lilt-app");
+    const saved = { sessions: app.sessions, sidebarOpen: app.sidebarOpen, activeSessionId: app.activeSessionId };
+    const now = Date.now();
+    app.sessions = app._sortSessions([
+      { id: "activity-old", title: "古い会話", createdAt: now - 2000, updatedAt: now - 1000, hasUnread: false,
+        messages: [{ id: "old-message", role: "assistant", text: "前の本文", createdAt: now - 1000 }] },
+      { id: "activity-new", title: "更新が新しい", createdAt: now - 2000, updatedAt: now, hasUnread: true,
+        messages: [{ id: "new-message", role: "assistant", text: "最新の本文 **強調**です。2行表示を確認するために十分長い文章を続けます。さらに追加して折り返しを確認します。", createdAt: now }] }
+    ]);
+    app.sidebarOpen = true;
+    await app.updateComplete;
+    return saved;
+  });
+  try {
+    await history.locator(".activity-toggle").click();
+    await history.getByRole("heading", { name: "アクティビティ" }).waitFor();
+    const titles = await history.locator(".activity-title").allTextContents();
+    assert.deepEqual(titles, ["更新が新しい", "古い会話"]);
+    const preview = history.locator(".activity-preview").first();
+    assert.match(await preview.textContent(), /最新の本文 強調です/);
+    const lineClamp = await preview.evaluate((element) => getComputedStyle(element).webkitLineClamp);
+    assert.equal(lineClamp, "2");
+    assert.equal(await history.locator(".unread-dot").count(), 1);
+    assert.equal(await preview.locator("img, script").count(), 0);
+    await history.locator(".activity-toggle").click();
+    await history.getByRole("heading", { name: "チャット" }).waitFor();
+    const preserved = await page.evaluate(() => {
+      const app = document.querySelector("lilt-app");
+      return { activeSessionId: app.activeSessionId, unread: app.sessions.find((s) => s.id === "activity-new").hasUnread };
+    });
+    assert.equal(preserved.activeSessionId, before.activeSessionId);
+    assert.equal(preserved.unread, true);
+    console.log("✓ Sidebar activity toggle, latest-first order, two-line preview, unread state, and safe text rendering");
+  } finally {
+    await page.evaluate(async (saved) => {
+      const app = document.querySelector("lilt-app");
+      app.sessions = saved.sessions;
+      app.sidebarOpen = saved.sidebarOpen;
+      await app.updateComplete;
+    }, before);
+  }
+}
+
 async function injectSchedulerNotification(page, messageText, followUpInstruction) {
   await page.evaluate(
     ({ message, followUp }) => {
@@ -401,6 +448,7 @@ async function main() {
 
     console.log("✓ lilt-app rendered");
     await verifyConversationOrder(page);
+    await verifySidebarActivity(page);
 
     const initialStatus = await waitForStatus(page, [
       "待機中",

@@ -1,14 +1,18 @@
 import { LitElement, html, css } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { Session } from "../types.js";
+import { extractActivityPreview, type ActivityPreview } from "../sidebar-activity.js";
 
 @customElement("lilt-chat-history")
 export class LiltChatHistory extends LitElement {
   @property({ type: Array }) sessions: Session[] = [];
   @property() activeSessionId: string | null = null;
+  @property({ type: Boolean }) activityMode = false;
+  @property({ attribute: false }) activityPreviews: Record<string, ActivityPreview> = {};
   @state() private _menuOpenId: string | null = null;
   @state() private _editingId: string | null = null;
   @state() private _editingTitle = "";
+  private _activityObserver: IntersectionObserver | null = null;
 
   private _onDocClick = () => {
     if (this._menuOpenId !== null) {
@@ -24,6 +28,25 @@ export class LiltChatHistory extends LitElement {
   disconnectedCallback() {
     super.disconnectedCallback();
     document.removeEventListener("click", this._onDocClick);
+    this._activityObserver?.disconnect();
+    this._activityObserver = null;
+  }
+
+  updated() {
+    this._activityObserver?.disconnect();
+    this._activityObserver = null;
+    if (!this.activityMode || !("IntersectionObserver" in window)) return;
+    this._activityObserver = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const id = (entry.target as HTMLElement).dataset.sessionId;
+        const session = this.sessions.find((item) => item.id === id);
+        if (session) this._requestPreview(session);
+      }
+    }, { root: this.renderRoot.querySelector(".list"), rootMargin: "80px" });
+    this.renderRoot.querySelectorAll<HTMLElement>(".activity-item[data-session-id]").forEach((item) => {
+      this._activityObserver?.observe(item);
+    });
   }
 
   static styles = css`
@@ -42,6 +65,18 @@ export class LiltChatHistory extends LitElement {
       overflow-y: auto;
       padding: 6px 8px 10px;
     }
+    .sidebar-header { display: flex; align-items: center; justify-content: space-between; min-height: 48px; padding: 0 12px 0 16px; border-bottom: 1px solid var(--line, #dddddf); }
+    .sidebar-heading { margin: 0; font-size: 14px; font-weight: 600; color: var(--text, #1f2328); }
+    .activity-toggle { width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: 8px; background: transparent; color: var(--muted, #6b7280); cursor: pointer; }
+    .activity-toggle:hover, .activity-toggle[aria-pressed="true"] { background: #f1f3f5; color: var(--text, #1f2328); }
+    .activity-toggle:focus-visible, .activity-item:focus-visible, .retry-preview:focus-visible { outline: 2px solid #2f6df6; outline-offset: 2px; }
+    .activity-item { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; margin: 2px 4px; border-radius: 8px; cursor: pointer; }
+    .activity-item:hover { background: #f5f5f5; }
+    .activity-topline { display: flex; align-items: center; gap: 8px; }
+    .activity-title { flex: 1; min-width: 0; font-size: 14px; font-weight: 550; color: var(--text, #1f2328); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .activity-date { flex-shrink: 0; font-size: 11px; color: var(--muted, #6b7280); }
+    .activity-preview { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; color: var(--muted, #6b7280); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+    .retry-preview { align-self: flex-start; padding: 2px 0; border: 0; background: transparent; color: #2f6df6; font: inherit; font-size: 12px; cursor: pointer; }
     .list::-webkit-scrollbar {
       width: 6px;
     }
@@ -185,13 +220,47 @@ export class LiltChatHistory extends LitElement {
 
   render() {
     return html`
+      <div class="sidebar-header">
+        <h2 class="sidebar-heading">${this.activityMode ? "アクティビティ" : "チャット"}</h2>
+        <button class="activity-toggle" type="button" aria-label="${this.activityMode ? "チャット一覧を表示" : "アクティビティを表示"}"
+          aria-pressed=${String(this.activityMode)} title="${this.activityMode ? "チャット一覧" : "アクティビティ"}"
+          @click=${() => this.dispatchEvent(new CustomEvent("toggle-activity", { bubbles: true, composed: true }))}>
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>
+        </button>
+      </div>
       <div class="list">
         ${this.sessions.length === 0
-          ? html`<div class="empty">まだ会話がありません</div>`
-          : this.sessions.map((s) => this._renderItem(s))
+          ? html`<div class="empty">${this.activityMode ? "まだアクティビティがありません" : "まだ会話がありません"}</div>`
+          : this.activityMode ? this.sessions.map((s) => this._renderActivityItem(s)) : this.sessions.map((s) => this._renderItem(s))
         }
       </div>
     `;
+  }
+
+  private _renderActivityItem(session: Session) {
+    const preview = this.activityPreviews[session.id];
+    const localText = extractActivityPreview(session.messages);
+    const matchingPreview = preview?.updatedAt === session.updatedAt ? preview : undefined;
+    const text = localText || matchingPreview?.text;
+    const date = new Date(session.updatedAt);
+    return html`
+      <div class="activity-item" data-session-id=${session.id}>
+        <div class="activity-main" role="button" tabindex="0" aria-label=${`${session.title}: ${text ?? ""}`}
+          @click=${() => this._selectSession(session)}
+          @keydown=${(event: KeyboardEvent) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); this._selectSession(session); } }}>
+        <div class="activity-topline"><span class="activity-title">${session.title}</span><time class="activity-date" title=${date.toLocaleString()}>${this._formatDate(date)}</time>
+          ${session.hasUnread && session.id !== this.activeSessionId ? html`<span class="unread-dot" aria-label="未読"></span>` : ""}</div>
+        <div class="activity-preview">${text || (matchingPreview?.status === "error" ? "内容を取得できませんでした" : matchingPreview?.status === "empty" ? "まだメッセージがありません" : "読み込み中…")}</div>
+        </div>
+        ${matchingPreview?.status === "error" ? html`<button class="retry-preview" @click=${(event: Event) => { event.stopPropagation(); this.dispatchEvent(new CustomEvent("activity-preview-retry", { detail: { session }, bubbles: true, composed: true })); }}>再試行</button>` : ""}
+      </div>
+    `;
+  }
+
+  private _requestPreview(session: Session) {
+    const localText = extractActivityPreview(session.messages);
+    if (localText || this.activityPreviews[session.id]?.updatedAt === session.updatedAt) return;
+    this.dispatchEvent(new CustomEvent("activity-preview-needed", { detail: { session }, bubbles: true, composed: true }));
   }
 
   private _renderItem(session: Session) {
