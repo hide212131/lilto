@@ -23,14 +23,21 @@ test("release verifier accepts complete Windows and macOS assets and rejects mis
     `  - url: ${installerName}`,
     `    sha512: ${crypto.createHash("sha512").update(installer).digest("base64")}`,
     `    size: ${installer.length}`,
-    `    blockMapSize: ${blockmap.length}`,
-    `    blockMapUrl: ${blockmapName}`
+    `    blockMapSize: ${blockmap.length}`
   ].join("\n"));
 
   const script = path.join(__dirname, "..", "scripts", "verify-release-artifacts.js");
   const valid = spawnSync(process.execPath, [script, directory], { encoding: "utf8" });
   assert.equal(valid.status, 0, valid.stderr);
 
+  const manifestPath = path.join(directory, "latest.yml");
+  const validManifest = fs.readFileSync(manifestPath, "utf8");
+  fs.writeFileSync(manifestPath, `${validManifest}\n    blockMapUrl: ../outside.blockmap`);
+  const invalidBlockmapPath = spawnSync(process.execPath, [script, directory], { encoding: "utf8" });
+  assert.notEqual(invalidBlockmapPath.status, 0);
+  assert.match(invalidBlockmapPath.stderr, /blockmap URL must resolve/);
+
+  fs.writeFileSync(manifestPath, validManifest);
   fs.appendFileSync(path.join(directory, installerName), "tampered");
   const invalid = spawnSync(process.execPath, [script, directory], { encoding: "utf8" });
   assert.notEqual(invalid.status, 0);
