@@ -1,5 +1,11 @@
 # Lessons
 
+## 2026-10-23 Keep internal prompt augmentation out of displayed history
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| Scheduler guidance was appended to a user's prompt before sending it to Codex, then App Server history exposed that internal English text as another user message after refresh. Timestamp-only deduplication also let old optimistic copies reappear and could discard local CLI progress attached to the completed answer. | Model-only instructions passed as appended user text become part of persisted conversation history. Reconciliation based on a small time window fails when persisted item timestamps differ from local creation time. | When augmenting prompts internally, strip only the exact app-added suffix when presenting backend history. Reconcile matching role/text across timestamps while keeping backend turn order, and carry local progress metadata onto the hydrated final response. |
+
 ## 2026-10-22 Preserve backend conversation order during hydration
 
 | Change | Mistake/Context | Rule to repeat |

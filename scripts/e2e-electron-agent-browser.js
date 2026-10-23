@@ -472,6 +472,20 @@ async function main() {
     const expectedFinal = `[E2E_MOCK_FINAL] 要求「${visibilityMessage}」を処理し、複数コマンドを実行して回答しました。`;
     await waitForResponse(page, expectedFinal);
     await page.waitForTimeout(500);
+    const visibleConversation = await page.evaluate(() => {
+      const app = document.querySelector("lilt-app");
+      return app.messages.map(({ role, text }) => ({ role, text }));
+    });
+    const userMessages = visibleConversation.filter((message) => message.role === "user");
+    if (userMessages.length !== 1 || userMessages[0].text !== visibilityMessage) {
+      throw new Error(`User prompt was duplicated or changed after completion: ${JSON.stringify(visibleConversation)}`);
+    }
+    const finalAnswers = visibleConversation.filter((message) => message.role === "assistant" && message.text === expectedFinal);
+    if (finalAnswers.length !== 1) {
+      throw new Error(`Expected one final answer after progress messages: ${JSON.stringify(visibleConversation)}`);
+    }
+    console.log("✓ Final response keeps the original prompt once and after progress in turn order");
+
     const finalMessageState = await page.evaluate((text) => {
       const app = document.querySelector("lilt-app");
       return app.messages
@@ -485,8 +499,25 @@ async function main() {
 
     const messageList = resolveNamedLocator(page, "app").locator("lilt-message-list");
     const toolConsoles = messageList.locator(".tool-console");
-    if (await toolConsoles.count() !== 0) {
-      throw new Error("Tool command details should stay hidden while the Chat setting is off");
+    const hiddenToolDetails = [];
+    for (let index = 0; index < await toolConsoles.count(); index += 1) {
+      if (await toolConsoles.nth(index).isVisible()) hiddenToolDetails.push(index);
+    }
+    if (hiddenToolDetails.length > 0) {
+      throw new Error("Tool command details should stay collapsed while the Chat setting is off");
+    }
+    const toolDisclosure = messageList.locator(".tool-disclosure").first();
+    if ((await toolDisclosure.locator("summary").getAttribute("aria-label")) !== "コマンド詳細を表示") {
+      throw new Error("Collapsed tool details should have a small accessible disclosure icon");
+    }
+    await toolDisclosure.locator("summary").click();
+    await toolDisclosure.locator(".tool-console").waitFor({ state: "visible" });
+    if (!(await toolDisclosure.locator(".tool-console").textContent()).includes("read_file")) {
+      throw new Error("Clicking the tool icon should reveal command details");
+    }
+    await toolDisclosure.locator("summary").click();
+    if (await toolDisclosure.locator(".tool-console").isVisible()) {
+      throw new Error("Clicking the tool icon again should collapse command details");
     }
 
     await clickSettingsButton(page);
