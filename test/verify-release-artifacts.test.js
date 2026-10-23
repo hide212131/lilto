@@ -22,8 +22,7 @@ test("release verifier accepts complete Windows and macOS assets and rejects mis
     "files:",
     `  - url: ${installerName}`,
     `    sha512: ${crypto.createHash("sha512").update(installer).digest("base64")}`,
-    `    size: ${installer.length}`,
-    `    blockMapSize: ${blockmap.length}`
+    `    size: ${installer.length}`
   ].join("\n"));
 
   const script = path.join(__dirname, "..", "scripts", "verify-release-artifacts.js");
