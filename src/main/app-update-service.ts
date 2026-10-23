@@ -50,7 +50,7 @@ export class AppUpdateService {
     this.updater.on("update-downloaded", (info) => this.setState({ status: "downloaded", targetVersion: info.version, progress: 100 }));
     this.updater.on("error", (error) => {
       this.logger.error("app_update_failed", { message: error.message });
-      this.setState({ status: "error", message: "更新を完了できませんでした。ネットワークを確認して再試行してください。" });
+      this.setError("更新を完了できませんでした。ネットワークを確認して再試行してください。");
     });
   }
 
@@ -59,7 +59,7 @@ export class AppUpdateService {
   }
 
   check(source: "startup" | "manual"): Promise<void> {
-    if (this.snapshot.status === "unsupported" || this.snapshot.status === "downloading" || this.snapshot.status === "downloaded") {
+    if (["unsupported", "downloading", "downloaded", "preparing-install", "installing"].includes(this.snapshot.status)) {
       return Promise.resolve();
     }
     if (this.checkPromise) {
@@ -75,7 +75,7 @@ export class AppUpdateService {
       })
       .catch((error: unknown) => {
         this.logger.error("app_update_check_failed", { message: error instanceof Error ? error.message : String(error) });
-        this.setState({ status: "error", source, message: "更新を確認できませんでした。ネットワークを確認して再試行してください。" });
+        this.setError("更新を確認できませんでした。ネットワークを確認して再試行してください。", source);
       })
       .finally(() => { if (this.checkPromise === operation) this.checkPromise = null; });
     this.checkPromise = operation;
@@ -90,7 +90,7 @@ export class AppUpdateService {
       .then(() => undefined)
       .catch((error: unknown) => {
         this.logger.error("app_update_download_failed", { message: error instanceof Error ? error.message : String(error) });
-        this.setState({ status: "error", message: "更新をダウンロードできませんでした。再試行してください。" });
+        this.setError("更新をダウンロードできませんでした。再試行してください。");
         throw error;
       })
       .finally(() => { if (this.downloadPromise === operation) this.downloadPromise = null; });
@@ -124,5 +124,10 @@ export class AppUpdateService {
   private setState(update: Partial<AppUpdateSnapshot>): void {
     this.snapshot = { ...this.snapshot, ...update, revision: ++this.revision };
     this.publish(this.getSnapshot());
+  }
+
+  private setError(message: string, source = this.snapshot.source): void {
+    if (this.snapshot.status === "error") return;
+    this.setState({ status: "error", message, source });
   }
 }

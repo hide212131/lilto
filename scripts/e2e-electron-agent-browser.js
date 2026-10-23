@@ -618,6 +618,14 @@ async function main() {
     await updateDialog.waitFor({ state: "visible" });
     await updateDialog.getByText("Lilt-o 0.1.5 を利用できます。", { exact: true }).waitFor();
     await updateDialog.getByRole("button", { name: "更新をダウンロード" }).waitFor();
+    const focusedUpdateControl = await page.evaluate(() => document.querySelector("lilt-app").shadowRoot.activeElement?.textContent?.trim());
+    if (focusedUpdateControl !== "更新をダウンロード") throw new Error("Update dialog should focus its primary action");
+    await page.keyboard.press("Escape");
+    await updateDialog.waitFor({ state: "hidden" });
+    const restoredFocus = await page.evaluate(() => document.querySelector("lilt-app").shadowRoot.activeElement?.localName);
+    if (restoredFocus !== "lilt-composer") throw new Error("Closing update dialog should restore composer focus");
+    await page.evaluate(() => { document.querySelector("lilt-app").updateDialogOpen = true; });
+    await updateDialog.waitFor({ state: "visible" });
     await page.evaluate(() => {
       const app = document.querySelector("lilt-app");
       app.updateState = { status: "downloaded", currentVersion: "0.1.4", targetVersion: "0.1.5", revision: 101 };

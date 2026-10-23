@@ -71,23 +71,23 @@ export class SchedulerService implements SchedulerClient {
     child.stdin.end();
     try {
       await new Promise<void>((resolve, reject) => {
-      if (child.exitCode !== null || child.signalCode !== null) {
-        resolve();
-        return;
-      }
-      const forceTimer = setTimeout(() => {
-        child.removeListener("exit", onExit);
-        reject(new Error("scheduler process did not stop after termination request"));
-      }, timeoutMs + 2000);
-      const onExit = () => {
-        clearTimeout(gracefulTimer);
-        clearTimeout(forceTimer);
-        resolve();
-      };
-      const gracefulTimer = setTimeout(() => {
-        child.kill();
-      }, timeoutMs);
-      child.once("exit", onExit);
+        if (child.exitCode !== null || child.signalCode !== null) {
+          resolve();
+          return;
+        }
+        const forceTimer = setTimeout(() => {
+          child.removeListener("exit", onExit);
+          reject(new Error("scheduler process did not stop after termination request"));
+        }, timeoutMs + 2000);
+        const onExit = () => {
+          clearTimeout(gracefulTimer);
+          clearTimeout(forceTimer);
+          resolve();
+        };
+        const gracefulTimer = setTimeout(() => {
+          child.kill();
+        }, timeoutMs);
+        child.once("exit", onExit);
       });
     } catch (error) {
       this.stopping = false;

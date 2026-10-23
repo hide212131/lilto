@@ -34,11 +34,11 @@ builder の `win.publish` に GitHub provider、owner=hide212131、repo=lilto、
 
 ## サービスと状態の契約
 
-`src/main/app-update-service.ts` を新設。updater adapter と runtime lifecycle を注入し、Main が状態の正本を持つ。状態は unsupported / idle / checking / available / downloading / downloaded / preparing-install / installing / error。snapshot は currentVersion、targetVersion?、progress?、errorCode?、revision。manifest URL、ローカル exe パス、生のエラー、任意コマンドを renderer に渡さない。
+`src/main/app-update-service.ts` を新設。updater adapter と runtime lifecycle を注入し、Main が状態の正本を持つ。状態は unsupported / idle / checking / available / downloading / downloaded / preparing-install / installing / error。snapshot は currentVersion、targetVersion?、progress?、固定文言のmessage?、source?、revision。manifest URL、ローカル exe パス、生のエラー、任意コマンドを renderer に渡さない。
 
-check(source: startup|manual)、download()、install()、getSnapshot() を公開。check は single-flight で手動呼出しを既存要求へ合流し、結果を手動要求として表示する。downloading/downloaded 中は既存状態を表示し新規チェックしない。download/install の連打は同じ処理に合流し、誤った状態からは明示的エラーを返す。updater の error イベントと Promise rejection を両方捕捉し、1操作につき失敗通知は一度。revision と操作世代で古い結果を破棄。check は30秒、download は120秒無進捗で失敗へ移し、取得は CancellationToken で停止する。タイムアウト済みチェックが残る場合は完了まで新規要求を重ねず、遅延イベントを捨てる。
+check(source: startup|manual)、download()、install()、getSnapshot() を公開。check は single-flight で手動呼出しを既存要求へ合流し、結果を手動要求として表示する。downloading/downloaded/preparing-install/installing 中は既存状態を表示し、新規チェックを始めない。download/install の連打を防ぎ、誤った状態からの操作は拒否する。updater の error イベントと Promise rejection を捕捉し、同じ失敗文言を重複表示しない。snapshot revision で受信順を判定する。通信ごとの時間制限は electron-updater の HTTP 実装に任せ、独自 timeout は設けない。
 
-preload は `getAppUpdateState` / `checkAppUpdate` / `downloadAppUpdate` / `installAppUpdate` / `onAppUpdateState` の固定 API と unsubscribe を提供。Main は既存 renderer の送信元検証規約を適用し引数を検証する。renderer ready 時に購読して snapshot を取得し、revision で順序を整える。startup 通知も snapshot の source/promptPending で復元し取りこぼさない。メニュー操作は IPC を迂回して同サービスを呼ぶ。
+preload は `getAppUpdateState` / `checkAppUpdate` / `downloadAppUpdate` / `installAppUpdate` / `onAppUpdateState` の固定 API と unsubscribe を提供する。renderer ready 時に購読して snapshot を取得し、revision で順序を整える。起動時通知は snapshot の source で復元し取りこぼさない。メニュー操作は IPC を迂回して同サービスを呼ぶ。
 
 `src/shared/app-update.ts` に契約、renderer に更新ダイアログを新設。キーボード、Escape、フォーカス復帰、進捗読み上げを提供する。release notes の HTML は描画しない。既存 IPC 分割方針に従い専用 registrar を置き、巨大ファイルへ処理を追加しない。
 

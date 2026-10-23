@@ -261,12 +261,23 @@ export class LiltApp extends LitElement {
     this._unsubscribeOpenConversationListener?.();
     this._unsubscribeAppUpdateListener?.();
     this._unsubscribeAppUpdateOpenListener?.();
-    this._unsubscribeOpenConversationListener?.();
     this._unsubscribeAuthListener = null;
     this._unsubscribeLoopListener = null;
     this._unsubscribeSchedulerListener = null;
     this._unsubscribeFocusListener = null;
     this._unsubscribeOpenConversationListener = null;
+    this._unsubscribeAppUpdateListener = null;
+    this._unsubscribeAppUpdateOpenListener = null;
+  }
+
+  protected updated(changedProperties: Map<PropertyKey, unknown>) {
+    super.updated(changedProperties);
+    const previousUpdateState = changedProperties.get("updateState") as AppUpdateSnapshot | undefined;
+    const stateChanged = changedProperties.has("updateState") && previousUpdateState?.status !== this.updateState?.status;
+    if (changedProperties.has("updateDialogOpen") || stateChanged) {
+      if (this.updateDialogOpen) this.renderRoot.querySelector<HTMLButtonElement>(".update-dialog button")?.focus();
+      else this._composer?.focusInput();
+    }
   }
 
   private _resetForegroundRequestState() {
@@ -618,7 +629,7 @@ export class LiltApp extends LitElement {
     else if (status === "installing") message = "アプリを終了してインストールを開始しています…";
     else if (status === "error") message = state.message ?? "更新を完了できませんでした。";
     return html`<div class="update-backdrop">
-      <section class="update-dialog" role="dialog" aria-modal="true" aria-labelledby="update-title">
+      <section class="update-dialog" role="dialog" aria-modal="true" aria-labelledby="update-title" @keydown=${this._onUpdateDialogKeydown}>
         <h2 id="update-title">Lilt-o の更新</h2>
         <p aria-live="polite">${message}</p>
         ${status === "downloading" ? html`<progress max="100" value=${state.progress ?? 0}></progress>` : ""}
@@ -641,6 +652,26 @@ export class LiltApp extends LitElement {
       await window.lilto.installAppUpdate();
     } catch {
       this.updateDialogOpen = true;
+    }
+  }
+
+  private _onUpdateDialogKeydown(event: KeyboardEvent) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      if (this.updateState?.status !== "installing") this.updateDialogOpen = false;
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const dialog = event.currentTarget as HTMLElement;
+    const controls = [...dialog.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
+    if (controls.length === 0) return;
+    const active = this.renderRoot.activeElement;
+    if (event.shiftKey && (active === controls[0] || active === dialog)) {
+      event.preventDefault();
+      controls[controls.length - 1].focus();
+    } else if (!event.shiftKey && active === controls[controls.length - 1]) {
+      event.preventDefault();
+      controls[0].focus();
     }
   }
 
