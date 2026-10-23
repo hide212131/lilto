@@ -116,6 +116,55 @@ async function verifyConversationOrder(page) {
   console.log("✓ Question/answer display order preserved across repeated history merges");
 }
 
+async function verifySidebarActivity(page) {
+  const history = page.locator("#activity-contract-fixture");
+  const before = await page.evaluate(async () => {
+    const root = document.querySelector("lilt-app");
+    const fixture = document.createElement("lilt-chat-history");
+    fixture.id = "activity-contract-fixture";
+    document.body.append(fixture);
+    const now = Date.now();
+    fixture.sessions = [
+      { id: "activity-new", title: "更新が新しい", createdAt: now - 2000, updatedAt: now, hasUnread: true,
+        messages: [{ id: "new-message", role: "assistant", text: "最新の本文 **強調**です。2行表示を確認するために十分長い文章を続けます。さらに追加して折り返しを確認します。", createdAt: now }] },
+      { id: "activity-old", title: "古い会話", createdAt: now - 2000, updatedAt: now - 1000, hasUnread: false,
+        messages: [{ id: "old-message", role: "assistant", text: "前の本文", createdAt: now - 1000 }] }
+    ];
+    fixture.activityPreviews = {};
+    fixture.addEventListener("toggle-activity", (event) => {
+      event.stopImmediatePropagation();
+      fixture.activityMode = !fixture.activityMode;
+    });
+    await fixture.updateComplete;
+    return { activeSessionId: root.activeSessionId };
+  });
+  try {
+    await history.locator(".activity-toggle").click();
+    await history.getByRole("heading", { name: "アクティビティ" }).waitFor();
+    await history.locator(".activity-item").first().waitFor();
+    const titles = await history.locator(".activity-title").allTextContents();
+    assert.deepEqual(titles, ["更新が新しい", "古い会話"]);
+    const preview = history.locator(".activity-preview").first();
+    assert.match(await preview.textContent(), /最新の本文 強調です/);
+    const lineClamp = await preview.evaluate((element) => getComputedStyle(element).webkitLineClamp);
+    assert.equal(lineClamp, "2");
+    assert.equal(await history.locator(".unread-dot").count(), 1);
+    assert.equal(await preview.locator("img, script").count(), 0);
+    await history.locator(".activity-toggle").click();
+    await history.getByRole("heading", { name: "チャット" }).waitFor();
+    const preserved = await page.evaluate(() => {
+      const root = document.querySelector("lilt-app");
+      const history = document.querySelector("#activity-contract-fixture");
+      return { activeSessionId: root.activeSessionId, unread: history.sessions.find((s) => s.id === "activity-new").hasUnread };
+    });
+    assert.equal(preserved.activeSessionId, before.activeSessionId);
+    assert.equal(preserved.unread, true);
+    console.log("✓ Sidebar activity toggle, latest-first order, two-line preview, unread state, and safe text rendering");
+  } finally {
+    await page.evaluate(() => document.querySelector("#activity-contract-fixture")?.remove());
+  }
+}
+
 async function injectSchedulerNotification(page, messageText, followUpInstruction) {
   await page.evaluate(
     ({ message, followUp }) => {
@@ -410,6 +459,7 @@ async function main() {
       "プロバイダー設定が必要"
     ]);
     console.log(`✓ Initial status: "${initialStatus}"`);
+    await verifySidebarActivity(page);
 
     console.log("Opening settings modal...");
     await clickSettingsButton(page);
@@ -558,6 +608,40 @@ async function main() {
     if (countAfterReset !== 0) throw new Error(`Expected cleared messages after new session, got: ${countAfterReset}`);
     if (await isNewSessionDisabled(page)) throw new Error("New session button should be enabled after sending");
     console.log("✓ New session reset cleared conversation");
+
+    await page.evaluate(() => {
+      const app = document.querySelector("lilt-app");
+      app.updateState = { status: "available", currentVersion: "0.1.4", targetVersion: "0.1.5", source: "startup", revision: 100 };
+      app.updateDialogOpen = true;
+    });
+    const updateDialog = page.locator(".update-dialog");
+    await updateDialog.waitFor({ state: "visible" });
+    await updateDialog.getByText("Lilt-o 0.1.5 を利用できます。", { exact: true }).waitFor();
+    await updateDialog.getByRole("button", { name: "更新をダウンロード" }).waitFor();
+    const focusedUpdateControl = await page.evaluate(() => document.querySelector("lilt-app").shadowRoot.activeElement?.textContent?.trim());
+    if (focusedUpdateControl !== "更新をダウンロード") throw new Error("Update dialog should focus its primary action");
+    await page.keyboard.press("Escape");
+    await updateDialog.waitFor({ state: "hidden" });
+    const restoredFocus = await page.evaluate(() => document.querySelector("lilt-app").shadowRoot.activeElement?.localName);
+    if (restoredFocus !== "lilt-composer") throw new Error("Closing update dialog should restore composer focus");
+    await page.evaluate(() => { document.querySelector("lilt-app").updateDialogOpen = true; });
+    await updateDialog.waitFor({ state: "visible" });
+    await page.evaluate(() => {
+      const app = document.querySelector("lilt-app");
+      app.updateState = { status: "downloaded", currentVersion: "0.1.4", targetVersion: "0.1.5", revision: 101 };
+    });
+    const draftInput = page.locator("lilt-composer").locator("textarea");
+    await draftInput.fill("更新前に失わない入力内容");
+    page.once("dialog", (dialog) => void dialog.dismiss());
+    await updateDialog.getByRole("button", { name: "再起動してインストール" }).click();
+    await updateDialog.waitFor({ state: "visible" });
+    if (await draftInput.inputValue() !== "更新前に失わない入力内容") {
+      throw new Error("Update confirmation should preserve the unsent draft when cancelled");
+    }
+    await draftInput.fill("");
+    await updateDialog.getByRole("button", { name: "後で" }).click();
+    await updateDialog.waitFor({ state: "hidden" });
+    console.log("✓ Update notice renders and cancelled restart preserves the unsent draft");
 
     await page.screenshot({ path: screenshotPath, fullPage: true });
     console.log(`✓ Final screenshot: ${screenshotPath}`);

@@ -15,6 +15,10 @@ export class LiltComposer extends LitElement {
   @state() private _recordingLevel = 0;
 
   @query("textarea") private _textarea!: HTMLTextAreaElement;
+
+  getDraftText(): string {
+    return this._textarea?.value ?? "";
+  }
   @query(".btn-dictation") private _dictationButton!: HTMLButtonElement;
 
   private _isComposing = false;

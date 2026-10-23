@@ -15,6 +15,7 @@ import {
   shouldRunConditionalSchedulerFollowUp
 } from "../shared/scheduler-follow-up.js";
 import type { SchedulerNotificationEvent } from "../shared/scheduler.js";
+import type { AppUpdateSnapshot } from "../shared/app-update.js";
 import "./components/top-bar.js";
 import "./components/message-list.js";
 import "./components/composer.js";
@@ -24,6 +25,7 @@ import type { LiltComposer } from "./components/composer.js";
 import type { AgentLoopEvent, LoopState } from "../shared/agent-loop.js";
 import { createInitialLoopState, reduceLoopState } from "../shared/agent-loop.js";
 import { mergeSessionMessages } from "../shared/conversation-message-merge.js";
+import { ActivityPreviewLoader, type ActivityPreview } from "./sidebar-activity.js";
 
 const SIDEBAR_WIDTH_STORAGE_KEY = "lilto-sidebar-width";
 const DEFAULT_SIDEBAR_WIDTH = 272;
@@ -74,11 +76,15 @@ export class LiltApp extends LitElement {
   @property({ type: Array }) messages: Message[] = [];
   @property({ type: Boolean }) isSending = false;
   @property({ type: Boolean }) settingsOpen = false;
+  @property({ type: Boolean }) updateDialogOpen = false;
+  @property({ type: Object }) updateState: AppUpdateSnapshot | null = null;
   @property({ type: Object }) loopState: LoopState = createInitialLoopState();
   @property({ type: Boolean }) sidebarOpen = false;
   @property({ type: Number }) sidebarWidth = DEFAULT_SIDEBAR_WIDTH;
   @property({ type: Array }) sessions: Session[] = [];
   @property() activeSessionId: string | null = null;
+  @property({ type: Boolean }) sidebarActivityMode = false;
+  @property({ attribute: false }) activityPreviews: Record<string, ActivityPreview> = {};
 
   @query(".body") private _body!: HTMLDivElement;
   @query("lilt-composer") private _composer!: LiltComposer;
@@ -88,6 +94,8 @@ export class LiltApp extends LitElement {
   private _unsubscribeSchedulerListener: (() => void) | null = null;
   private _unsubscribeFocusListener: (() => void) | null = null;
   private _unsubscribeOpenConversationListener: (() => void) | null = null;
+  private _unsubscribeAppUpdateListener: (() => void) | null = null;
+  private _unsubscribeAppUpdateOpenListener: (() => void) | null = null;
   private _pendingAssistantMessageId: string | null = null;
   private _pendingConversationId: string | null = null;
   private _activeRequestId: string | null = null;
@@ -101,6 +109,7 @@ export class LiltApp extends LitElement {
   private _pendingLabel = "";
   private _currentSessionId: string | null = null;
   private _seenSchedulerNotifications = new Map<string, number>();
+  private _activityPreviewLoader: ActivityPreviewLoader | null = null;
   private _isResizingSidebar = false;
   private _onSidebarResize = (event: PointerEvent) => {
     if (!this._isResizingSidebar) return;
@@ -126,6 +135,13 @@ export class LiltApp extends LitElement {
   }
 
   static styles = css`
+    .update-backdrop { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 24px; background: rgb(0 0 0 / 42%); }
+    .update-dialog { width: min(420px, 100%); padding: 24px; border: 1px solid var(--border-color, #d8d8d8); border-radius: 14px; background: var(--surface-color, #fff); color: var(--text-color, #222); box-shadow: 0 16px 48px rgb(0 0 0 / 20%); }
+    .update-dialog h2 { margin: 0 0 12px; font-size: 18px; }
+    .update-dialog p { line-height: 1.5; }
+    .update-dialog progress { width: 100%; }
+    .update-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+    .update-actions button { min-height: 36px; padding: 0 12px; }
     :host {
       display: flex;
       flex-direction: column;
@@ -198,6 +214,17 @@ export class LiltApp extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this._activityPreviewLoader = new ActivityPreviewLoader(
+      (id) => window.lilto.readConversation(id),
+      (id, preview) => {
+        const session = this.sessions.find((entry) => entry.id === id);
+        if (preview && (!session || session.updatedAt !== preview.updatedAt)) return;
+        const next = { ...this.activityPreviews };
+        if (preview) next[id] = preview;
+        else delete next[id];
+        this.activityPreviews = next;
+      }
+    );
     void this._loadSessions();
     this._loadSidebarWidth();
     void this._hydrate();
@@ -219,6 +246,9 @@ export class LiltApp extends LitElement {
     this._unsubscribeOpenConversationListener = window.lilto.onOpenConversation((conversationId) => {
       void this._openConversation(conversationId);
     });
+    this._unsubscribeAppUpdateListener = window.lilto.onAppUpdateState((state) => this._onAppUpdateState(state));
+    this._unsubscribeAppUpdateOpenListener = window.lilto.onAppUpdateOpen(() => { this.updateDialogOpen = true; });
+    void window.lilto.getAppUpdateState().then((state) => this._onAppUpdateState(state));
   }
 
   disconnectedCallback() {
@@ -229,11 +259,25 @@ export class LiltApp extends LitElement {
     this._unsubscribeSchedulerListener?.();
     this._unsubscribeFocusListener?.();
     this._unsubscribeOpenConversationListener?.();
+    this._unsubscribeAppUpdateListener?.();
+    this._unsubscribeAppUpdateOpenListener?.();
     this._unsubscribeAuthListener = null;
     this._unsubscribeLoopListener = null;
     this._unsubscribeSchedulerListener = null;
     this._unsubscribeFocusListener = null;
     this._unsubscribeOpenConversationListener = null;
+    this._unsubscribeAppUpdateListener = null;
+    this._unsubscribeAppUpdateOpenListener = null;
+  }
+
+  protected updated(changedProperties: Map<PropertyKey, unknown>) {
+    super.updated(changedProperties);
+    const previousUpdateState = changedProperties.get("updateState") as AppUpdateSnapshot | undefined;
+    const stateChanged = changedProperties.has("updateState") && previousUpdateState?.status !== this.updateState?.status;
+    if (changedProperties.has("updateDialogOpen") || stateChanged) {
+      if (this.updateDialogOpen) this.renderRoot.querySelector<HTMLButtonElement>(".update-dialog button")?.focus();
+      else this._composer?.focusInput();
+    }
   }
 
   private _resetForegroundRequestState() {
@@ -331,6 +375,7 @@ export class LiltApp extends LitElement {
         return session;
       }
       updatedSession = mutate(session);
+      if (updatedSession.updatedAt !== session.updatedAt) this._activityPreviewLoader?.invalidate(sessionId);
       return updatedSession;
     });
     if (!updatedSession) {
@@ -389,9 +434,9 @@ export class LiltApp extends LitElement {
     const existingSession = this.sessions.find((session) => session.id === this._currentSessionId) ?? null;
     const title = existingSession?.title ?? "会話";
 
-    this.sessions = this.sessions.map((session) =>
-      session.id === this._currentSessionId
-        ? {
+    this.sessions = this.sessions.map((session) => {
+      if (session.id !== this._currentSessionId) return session;
+      const updatedSession = {
             ...session,
             title,
             messages: [...this.messages],
@@ -400,9 +445,10 @@ export class LiltApp extends LitElement {
                 ? session.updatedAt
                 : Date.now(),
             hasUnread: false
-          }
-        : session
-    );
+          };
+      if (updatedSession.updatedAt !== session.updatedAt) this._activityPreviewLoader?.invalidate(session.id);
+      return updatedSession;
+    });
     this._saveSessions();
   }
 
@@ -514,6 +560,11 @@ export class LiltApp extends LitElement {
           style=${this.sidebarOpen ? `width: ${this.sidebarWidth}px; min-width: ${this.sidebarWidth}px;` : ""}
           .sessions=${this.sessions}
           .activeSessionId=${this.activeSessionId}
+          .activityMode=${this.sidebarActivityMode}
+          .activityPreviews=${this.activityPreviews}
+          @toggle-activity=${() => { this.sidebarActivityMode = !this.sidebarActivityMode; }}
+          @activity-preview-needed=${(event: CustomEvent<{ session: Session }>) => this._activityPreviewLoader?.request(event.detail.session)}
+          @activity-preview-retry=${(event: CustomEvent<{ session: Session }>) => this._activityPreviewLoader?.request(event.detail.session, true)}
           @select-session=${this._onSelectSession}
           @rename-session=${this._onRenameSession}
           @delete-session=${this._onDeleteSession}
@@ -554,7 +605,74 @@ export class LiltApp extends LitElement {
         @provider-settings-changed=${this._onProviderSettingsChanged}
         @auth-state-updated=${this._onAuthStateUpdated}
       ></lilt-settings-modal>
+      ${this.updateDialogOpen ? this._renderAppUpdateDialog() : ""}
     `;
+  }
+
+  private _onAppUpdateState(state: AppUpdateSnapshot) {
+    if (this.updateState && state.revision < this.updateState.revision) return;
+    this.updateState = state;
+    if (state.status === "available" && state.source === "startup") this.updateDialogOpen = true;
+  }
+
+  private _renderAppUpdateDialog() {
+    const state = this.updateState;
+    const status = state?.status;
+    const busy = status === "checking" || status === "downloading" || status === "preparing-install" || status === "installing";
+    let message = "更新を確認しています…";
+    if (status === "unsupported") message = "自動更新はWindowsのインストール版で利用できます。";
+    else if (status === "idle") message = `最新バージョンです（${state.currentVersion}）。`;
+    else if (status === "available") message = `Lilt-o ${state.targetVersion} を利用できます。`;
+    else if (status === "downloading") message = `更新をダウンロードしています（${Math.floor(state.progress ?? 0)}%）。`;
+    else if (status === "downloaded") message = `Lilt-o ${state.targetVersion} の準備ができました。再起動してインストールします。`;
+    else if (status === "preparing-install") message = "実行中の処理を確認しています…";
+    else if (status === "installing") message = "アプリを終了してインストールを開始しています…";
+    else if (status === "error") message = state.message ?? "更新を完了できませんでした。";
+    return html`<div class="update-backdrop">
+      <section class="update-dialog" role="dialog" aria-modal="true" aria-labelledby="update-title" @keydown=${this._onUpdateDialogKeydown}>
+        <h2 id="update-title">Lilt-o の更新</h2>
+        <p aria-live="polite">${message}</p>
+        ${status === "downloading" ? html`<progress max="100" value=${state.progress ?? 0}></progress>` : ""}
+        <div class="update-actions">
+          ${status === "available" ? html`<button @click=${() => void window.lilto.downloadAppUpdate().catch(() => undefined)}>更新をダウンロード</button>` : ""}
+          ${status === "downloaded" ? html`<button ?disabled=${this.isSending} @click=${() => void this._installAppUpdate()}>再起動してインストール</button>` : ""}
+          ${status === "error" ? html`<button @click=${() => void window.lilto.checkAppUpdate()}>再試行</button>` : ""}
+          ${status === "idle" || status === "unsupported" ? html`<button @click=${() => void window.lilto.checkAppUpdate()}>更新を確認</button>` : ""}
+          <button ?disabled=${status === "installing"} @click=${() => { this.updateDialogOpen = false; }}>${status === "downloaded" || status === "preparing-install" ? "後で" : "閉じる"}</button>
+        </div>
+        ${this.isSending ? html`<p>処理が完了してからインストールしてください。</p>` : ""}
+      </section>
+    </div>`;
+  }
+
+  private async _installAppUpdate() {
+    if (this.isSending) return;
+    if (this._composer?.getDraftText().trim() && !window.confirm("入力中の内容は再起動で失われます。インストールを続けますか？")) return;
+    try {
+      await window.lilto.installAppUpdate();
+    } catch {
+      this.updateDialogOpen = true;
+    }
+  }
+
+  private _onUpdateDialogKeydown(event: KeyboardEvent) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      if (this.updateState?.status !== "installing") this.updateDialogOpen = false;
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const dialog = event.currentTarget as HTMLElement;
+    const controls = [...dialog.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
+    if (controls.length === 0) return;
+    const active = this.renderRoot.activeElement;
+    if (event.shiftKey && (active === controls[0] || active === dialog)) {
+      event.preventDefault();
+      controls[controls.length - 1].focus();
+    } else if (!event.shiftKey && active === controls[controls.length - 1]) {
+      event.preventDefault();
+      controls[0].focus();
+    }
   }
 
   private _onToggleSidebar() {
@@ -626,6 +744,7 @@ export class LiltApp extends LitElement {
 
   private _onDeleteSession(e: CustomEvent<{ sessionId: string }>) {
     const { sessionId } = e.detail;
+    this._activityPreviewLoader?.invalidate(sessionId);
     void window.lilto.archiveConversation(sessionId).then((result) => {
       if (!result.ok) {
         return;

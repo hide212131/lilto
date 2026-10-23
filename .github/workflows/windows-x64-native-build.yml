@@ -47,4 +47,6 @@ jobs:
           path: |
             release/*.exe
             release/*.blockmap
+            release/latest.yml
+            release/win-unpacked/resources/app-update.yml
           if-no-files-found: error

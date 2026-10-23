@@ -1,0 +1,38 @@
+const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { spawnSync } = require("node:child_process");
+const test = require("node:test");
+
+test("release verifier accepts complete Windows and macOS assets and rejects mismatch", (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "lilto-release-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const installerName = "Lilt-o-0.1.5-win-x64.exe";
+  const blockmapName = `${installerName}.blockmap`;
+  const installer = Buffer.from("windows installer fixture");
+  const blockmap = Buffer.from("blockmap fixture");
+  fs.writeFileSync(path.join(directory, installerName), installer);
+  fs.writeFileSync(path.join(directory, blockmapName), blockmap);
+  fs.writeFileSync(path.join(directory, "Lilt-o-0.1.5-mac-arm64.dmg"), "mac installer");
+  fs.writeFileSync(path.join(directory, "Lilt-o-0.1.5-mac-arm64.dmg.blockmap"), "mac blockmap");
+  fs.writeFileSync(path.join(directory, "latest.yml"), [
+    "version: 0.1.5",
+    "files:",
+    `  - url: ${installerName}`,
+    `    sha512: ${crypto.createHash("sha512").update(installer).digest("base64")}`,
+    `    size: ${installer.length}`,
+    `    blockMapSize: ${blockmap.length}`,
+    `    blockMapUrl: ${blockmapName}`
+  ].join("\n"));
+
+  const script = path.join(__dirname, "..", "scripts", "verify-release-artifacts.js");
+  const valid = spawnSync(process.execPath, [script, directory], { encoding: "utf8" });
+  assert.equal(valid.status, 0, valid.stderr);
+
+  fs.appendFileSync(path.join(directory, installerName), "tampered");
+  const invalid = spawnSync(process.execPath, [script, directory], { encoding: "utf8" });
+  assert.notEqual(invalid.status, 0);
+  assert.match(invalid.stderr, /size does not match/);
+});

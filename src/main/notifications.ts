@@ -1,4 +1,4 @@
-import { app, BrowserWindow, nativeImage, Notification, Tray } from "electron";
+import { app, BrowserWindow, Menu, nativeImage, Notification, Tray } from "electron";
 import { deflateSync } from "node:zlib";
 import { createCountBadgeBitmap } from "./badge-bitmap";
 import { resolveTrayIcon } from "./icon-assets";
@@ -109,7 +109,7 @@ export class NotificationService {
    * システムトレイにアイコンを設定する。
    * クリックでウインドウを表示/非表示する。
    */
-  setupTray(getWindow: () => BrowserWindow | null): void {
+  setupTray(getWindow: () => BrowserWindow | null, onCheckForUpdates?: () => void): void {
     const trayIconSize = process.platform === "darwin" ? 22 : 16;
     const normalFromAsset = resolveTrayIcon(trayIconSize);
 
@@ -134,6 +134,14 @@ export class NotificationService {
         win.focus();
       }
     });
+
+    if (onCheckForUpdates) {
+      this._tray.setContextMenu(Menu.buildFromTemplate([
+        { label: "更新を確認…", click: onCheckForUpdates },
+        { type: "separator" },
+        { role: "quit", label: "終了" }
+      ]));
+    }
   }
 
   /**

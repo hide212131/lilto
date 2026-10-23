@@ -34,6 +34,11 @@ export class SpeechTranscriptionService {
     stderr: string;
     exitPromise: Promise<{ stdout: string; stderr: string; exitCode: number | null }>;
   } | null = null;
+  private activeTranscriptions = 0;
+
+  get isBusy(): boolean {
+    return this.activeTranscriptions > 0 || this.liveSession !== null;
+  }
 
   constructor(options: SpeechTranscriptionServiceOptions = {}) {
     this.platform = options.platform ?? process.platform;
@@ -42,6 +47,15 @@ export class SpeechTranscriptionService {
   }
 
   async transcribeWav(audioData: Uint8Array): Promise<AudioTranscriptionResult> {
+    this.activeTranscriptions++;
+    try {
+      return await this.transcribeWavInternal(audioData);
+    } finally {
+      this.activeTranscriptions--;
+    }
+  }
+
+  private async transcribeWavInternal(audioData: Uint8Array): Promise<AudioTranscriptionResult> {
     if (audioData.byteLength === 0) {
       return {
         ok: false,
