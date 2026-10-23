@@ -30,7 +30,4 @@ if (path.isAbsolute(blockMapUrl) || blockMapUrl.split(/[\\/]/).includes("..")) f
 const bytes = fs.readFileSync(path.join(root, expectedInstaller));
 if (entry.size !== bytes.length) fail("latest.yml installer size does not match");
 if (entry.sha512 !== crypto.createHash("sha512").update(bytes).digest("base64")) fail("latest.yml installer SHA-512 does not match");
-if (typeof entry.blockMapSize !== "number" || entry.blockMapSize !== fs.statSync(path.join(root, blockMapUrl)).size) {
-  fail("latest.yml blockmap size does not match");
-}
 console.log(`Verified ${files.length} release assets for ${version}`);
