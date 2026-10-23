@@ -15,6 +15,7 @@ import {
   shouldRunConditionalSchedulerFollowUp
 } from "../shared/scheduler-follow-up.js";
 import type { SchedulerNotificationEvent } from "../shared/scheduler.js";
+import type { AppUpdateSnapshot } from "../shared/app-update.js";
 import "./components/top-bar.js";
 import "./components/message-list.js";
 import "./components/composer.js";
@@ -75,6 +76,8 @@ export class LiltApp extends LitElement {
   @property({ type: Array }) messages: Message[] = [];
   @property({ type: Boolean }) isSending = false;
   @property({ type: Boolean }) settingsOpen = false;
+  @property({ type: Boolean }) updateDialogOpen = false;
+  @property({ type: Object }) updateState: AppUpdateSnapshot | null = null;
   @property({ type: Object }) loopState: LoopState = createInitialLoopState();
   @property({ type: Boolean }) sidebarOpen = false;
   @property({ type: Number }) sidebarWidth = DEFAULT_SIDEBAR_WIDTH;
@@ -91,6 +94,8 @@ export class LiltApp extends LitElement {
   private _unsubscribeSchedulerListener: (() => void) | null = null;
   private _unsubscribeFocusListener: (() => void) | null = null;
   private _unsubscribeOpenConversationListener: (() => void) | null = null;
+  private _unsubscribeAppUpdateListener: (() => void) | null = null;
+  private _unsubscribeAppUpdateOpenListener: (() => void) | null = null;
   private _pendingAssistantMessageId: string | null = null;
   private _pendingConversationId: string | null = null;
   private _activeRequestId: string | null = null;
@@ -130,6 +135,13 @@ export class LiltApp extends LitElement {
   }
 
   static styles = css`
+    .update-backdrop { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 24px; background: rgb(0 0 0 / 42%); }
+    .update-dialog { width: min(420px, 100%); padding: 24px; border: 1px solid var(--border-color, #d8d8d8); border-radius: 14px; background: var(--surface-color, #fff); color: var(--text-color, #222); box-shadow: 0 16px 48px rgb(0 0 0 / 20%); }
+    .update-dialog h2 { margin: 0 0 12px; font-size: 18px; }
+    .update-dialog p { line-height: 1.5; }
+    .update-dialog progress { width: 100%; }
+    .update-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+    .update-actions button { min-height: 36px; padding: 0 12px; }
     :host {
       display: flex;
       flex-direction: column;
@@ -234,6 +246,9 @@ export class LiltApp extends LitElement {
     this._unsubscribeOpenConversationListener = window.lilto.onOpenConversation((conversationId) => {
       void this._openConversation(conversationId);
     });
+    this._unsubscribeAppUpdateListener = window.lilto.onAppUpdateState((state) => this._onAppUpdateState(state));
+    this._unsubscribeAppUpdateOpenListener = window.lilto.onAppUpdateOpen(() => { this.updateDialogOpen = true; });
+    void window.lilto.getAppUpdateState().then((state) => this._onAppUpdateState(state));
   }
 
   disconnectedCallback() {
@@ -243,6 +258,9 @@ export class LiltApp extends LitElement {
     this._unsubscribeLoopListener?.();
     this._unsubscribeSchedulerListener?.();
     this._unsubscribeFocusListener?.();
+    this._unsubscribeOpenConversationListener?.();
+    this._unsubscribeAppUpdateListener?.();
+    this._unsubscribeAppUpdateOpenListener?.();
     this._unsubscribeOpenConversationListener?.();
     this._unsubscribeAuthListener = null;
     this._unsubscribeLoopListener = null;
@@ -576,7 +594,54 @@ export class LiltApp extends LitElement {
         @provider-settings-changed=${this._onProviderSettingsChanged}
         @auth-state-updated=${this._onAuthStateUpdated}
       ></lilt-settings-modal>
+      ${this.updateDialogOpen ? this._renderAppUpdateDialog() : ""}
     `;
+  }
+
+  private _onAppUpdateState(state: AppUpdateSnapshot) {
+    if (this.updateState && state.revision < this.updateState.revision) return;
+    this.updateState = state;
+    if (state.status === "available" && state.source === "startup") this.updateDialogOpen = true;
+  }
+
+  private _renderAppUpdateDialog() {
+    const state = this.updateState;
+    const status = state?.status;
+    const busy = status === "checking" || status === "downloading" || status === "preparing-install" || status === "installing";
+    let message = "更新を確認しています…";
+    if (status === "unsupported") message = "自動更新はWindowsのインストール版で利用できます。";
+    else if (status === "idle") message = `最新バージョンです（${state.currentVersion}）。`;
+    else if (status === "available") message = `Lilt-o ${state.targetVersion} を利用できます。`;
+    else if (status === "downloading") message = `更新をダウンロードしています（${Math.floor(state.progress ?? 0)}%）。`;
+    else if (status === "downloaded") message = `Lilt-o ${state.targetVersion} の準備ができました。再起動してインストールします。`;
+    else if (status === "preparing-install") message = "実行中の処理を確認しています…";
+    else if (status === "installing") message = "アプリを終了してインストールを開始しています…";
+    else if (status === "error") message = state.message ?? "更新を完了できませんでした。";
+    return html`<div class="update-backdrop">
+      <section class="update-dialog" role="dialog" aria-modal="true" aria-labelledby="update-title">
+        <h2 id="update-title">Lilt-o の更新</h2>
+        <p aria-live="polite">${message}</p>
+        ${status === "downloading" ? html`<progress max="100" value=${state.progress ?? 0}></progress>` : ""}
+        <div class="update-actions">
+          ${status === "available" ? html`<button @click=${() => void window.lilto.downloadAppUpdate().catch(() => undefined)}>更新をダウンロード</button>` : ""}
+          ${status === "downloaded" ? html`<button ?disabled=${this.isSending} @click=${() => void this._installAppUpdate()}>再起動してインストール</button>` : ""}
+          ${status === "error" ? html`<button @click=${() => void window.lilto.checkAppUpdate()}>再試行</button>` : ""}
+          ${status === "idle" || status === "unsupported" ? html`<button @click=${() => void window.lilto.checkAppUpdate()}>更新を確認</button>` : ""}
+          <button ?disabled=${status === "installing"} @click=${() => { this.updateDialogOpen = false; }}>${status === "downloaded" || status === "preparing-install" ? "後で" : "閉じる"}</button>
+        </div>
+        ${this.isSending ? html`<p>処理が完了してからインストールしてください。</p>` : ""}
+      </section>
+    </div>`;
+  }
+
+  private async _installAppUpdate() {
+    if (this.isSending) return;
+    if (this._composer?.getDraftText().trim() && !window.confirm("入力中の内容は再起動で失われます。インストールを続けますか？")) return;
+    try {
+      await window.lilto.installAppUpdate();
+    } catch {
+      this.updateDialogOpen = true;
+    }
   }
 
   private _onToggleSidebar() {

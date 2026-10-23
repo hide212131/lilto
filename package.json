@@ -1,6 +1,6 @@
 {
   "name": "lilt-o",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": true,
   "author": "hide",
   "description": "Lilt-o desktop shell with Codex SDK bridge",
@@ -16,6 +16,7 @@
     "dist:mac": "npm run build:native && npm run build && electron-builder --mac dmg --publish never",
     "dist:win": "npm run build:native && npm run build && set CSC_IDENTITY_AUTO_DISCOVERY=false&& set CSC_LINK=&& set WIN_CSC_LINK=&& electron-builder --win nsis --publish never --config.win.signAndEditExecutable=false",
     "verify:dist": "node scripts/verify-dist-artifacts.js",
+    "verify:release": "node scripts/verify-release-artifacts.js",
     "live-ui:manual": "node scripts/live-ui-manual-verification.js",
     "test:unit": "npm run build:unit && node scripts/run-unit-tests.js",
     "test": "npm run build && node scripts/run-unit-tests.js",
@@ -48,6 +49,12 @@
     },
     "win": {
       "icon": "build/icon.ico",
+      "publish": {
+        "provider": "github",
+        "owner": "hide212131",
+        "repo": "lilto",
+        "releaseType": "release"
+      },
       "target": [
         {
           "target": "nsis",
@@ -59,6 +66,7 @@
     },
     "nsis": {
       "oneClick": false,
+      "runAfterFinish": true,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
       "installerIcon": "build/icon.ico",
@@ -92,12 +100,14 @@
   },
   "dependencies": {
     "@openai/codex-sdk": "^0.163.0",
+    "electron-updater": "6.8.11",
     "marked": "^17.0.4"
   },
   "devDependencies": {
     "@types/node": "^25.3.5",
     "electron": "^44.9.3",
     "electron-builder": "^26.8.1",
+    "js-yaml": "4.3.2",
     "lit": "^3.3.2",
     "playwright-core": "^1.58.2",
     "typescript": "^5.7.3",

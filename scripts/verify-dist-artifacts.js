@@ -1,5 +1,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
+const yaml = require("js-yaml");
 
 const rootDir = path.resolve(__dirname, "..");
 const releaseDir = path.join(rootDir, "release");
@@ -74,6 +76,29 @@ if (process.platform === "darwin") {
 
 if (process.platform === "win32") {
   assert(hasWindowsInstaller, "Windows installer (.exe) was not generated");
+  const expectedInstallerName = `Lilt-o-${require("../package.json").version}-win-x64.exe`;
+  const installerPath = files.find((file) => path.basename(file) === expectedInstallerName);
+  const latestPath = files.find((file) => path.basename(file) === "latest.yml");
+  const appUpdatePath = files.find((file) => /resources[\\/]app-update\.yml$/i.test(file));
+  assert(installerPath, `Windows installer was not found: ${expectedInstallerName}`);
+  assert(latestPath, "Windows update manifest (latest.yml) was not generated");
+  assert(appUpdatePath, "Packaged resources/app-update.yml was not generated");
+
+  const latest = yaml.load(fs.readFileSync(latestPath, "utf8"));
+  const appUpdate = yaml.load(fs.readFileSync(appUpdatePath, "utf8"));
+  assert(latest && latest.version === require("../package.json").version, "latest.yml version does not match package.json");
+  assert(appUpdate?.provider === "github" && appUpdate.owner === "hide212131" && appUpdate.repo === "lilto", "Packaged update provider is incorrect");
+  const entry = Array.isArray(latest.files) ? latest.files[0] : latest;
+  const installerName = entry?.url || entry?.path;
+  assert(typeof installerName === "string" && !path.isAbsolute(installerName) && !installerName.split(/[\\/]/).includes(".."), "latest.yml installer path is invalid");
+  const manifestInstallerPath = path.join(path.dirname(latestPath), installerName);
+  assert(fs.existsSync(manifestInstallerPath), `latest.yml installer does not exist: ${installerName}`);
+  const installerBytes = fs.readFileSync(manifestInstallerPath);
+  assert(entry.size === installerBytes.length, "latest.yml installer size does not match");
+  const sha512 = crypto.createHash("sha512").update(installerBytes).digest("base64");
+  assert(entry.sha512 === sha512, "latest.yml installer SHA-512 does not match");
+  const blockMapName = entry.blockMapUrl || `${installerName}.blockmap`;
+  assert(fs.existsSync(path.join(path.dirname(latestPath), blockMapName)), `Windows blockmap was not generated: ${blockMapName}`);
   assert(hasSchedulerHelper, "scheduler helper was not bundled into the Windows app");
   assert(hasSpeechHelper, "speech helper was not bundled into the Windows app");
   assert(hasCodexBinary, "Codex CLI binary was not unpacked into the Windows app");

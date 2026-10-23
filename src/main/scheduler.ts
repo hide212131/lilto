@@ -55,6 +55,57 @@ export class SchedulerService implements SchedulerClient {
     }
   >();
   private startError: Error | null = null;
+  private stopping = false;
+  private acceptingCommands = true;
+
+  get isBusy(): boolean {
+    return this.pending.size > 0;
+  }
+
+  async stop(timeoutMs = 5000): Promise<void> {
+    const child = this.process;
+    if (!child) return;
+    this.stopping = true;
+    this.acceptingCommands = false;
+    this.startError = null;
+    child.stdin.end();
+    try {
+      await new Promise<void>((resolve, reject) => {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        resolve();
+        return;
+      }
+      const forceTimer = setTimeout(() => {
+        child.removeListener("exit", onExit);
+        reject(new Error("scheduler process did not stop after termination request"));
+      }, timeoutMs + 2000);
+      const onExit = () => {
+        clearTimeout(gracefulTimer);
+        clearTimeout(forceTimer);
+        resolve();
+      };
+      const gracefulTimer = setTimeout(() => {
+        child.kill();
+      }, timeoutMs);
+      child.once("exit", onExit);
+      });
+    } catch (error) {
+      this.stopping = false;
+      this.acceptingCommands = true;
+      throw error;
+    }
+    this.process = null;
+    this.readyPromise = null;
+    this.startError = null;
+    this.stopping = false;
+  }
+
+  async resume(): Promise<void> {
+    this.acceptingCommands = true;
+    this.stopping = false;
+    this.startError = null;
+    await this.start();
+  }
 
   constructor({
     logger,
@@ -71,6 +122,7 @@ export class SchedulerService implements SchedulerClient {
   }
 
   async start(): Promise<void> {
+    if (!this.acceptingCommands) throw new SchedulerUnavailableError("scheduler is stopping for application update");
     if (this.startError) {
       throw this.startError;
     }
@@ -113,9 +165,9 @@ export class SchedulerService implements SchedulerClient {
 
     this.process.on("exit", (code, signal) => {
       const error = new SchedulerUnavailableError(`scheduler exited (code=${code ?? "null"}, signal=${signal ?? "null"})`);
-      this.logger.error("scheduler_exit", { code, signal });
+      if (!this.stopping) this.logger.error("scheduler_exit", { code, signal });
       this.process = null;
-      this.startError = error;
+      this.startError = this.stopping ? null : error;
       this.readyReject?.(error);
       this.readyReject = null;
       this.readyResolve = null;
@@ -202,6 +254,7 @@ export class SchedulerService implements SchedulerClient {
   }
 
   private async sendCommand<T>(payload: Record<string, unknown>): Promise<T> {
+    if (!this.acceptingCommands) throw new SchedulerUnavailableError("scheduler is stopping for application update");
     await this.start();
     if (!this.process) {
       throw this.startError ?? new SchedulerUnavailableError("scheduler process is not available");

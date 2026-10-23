@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, Menu } from "electron";
 
 import { readConfig } from "./config";
 import { registerAppShortcut, unregisterAppShortcut } from "./global-shortcut";
@@ -14,6 +14,9 @@ import { createCliCompatibilityMap } from "./command-compat";
 import { configureAppUserDataPath, resolvePreloadPath, resolveRendererIndexPath } from "./app-paths";
 import { resolveAppIcon, resolveWindowIcon } from "./icon-assets";
 import type { SchedulerNotificationEvent } from "../shared/scheduler";
+import { APP_UPDATE_OPEN_CHANNEL, APP_UPDATE_STATE_CHANNEL } from "../shared/app-update";
+import { AppUpdateService } from "./app-update-service";
+import { registerAppUpdateIpcHandlers } from "./ipc/app-update";
 
 const config = readConfig();
 configureAppUserDataPath(app);
@@ -28,6 +31,7 @@ let mainWindow: BrowserWindow | null = null;
 let isQuitting = false;
 let schedulerBridge: SchedulerBridgeServer | null = null;
 let heartbeatAssistant: HeartbeatAssistantService | null = null;
+let appUpdateService: AppUpdateService | null = null;
 
 const notificationService = new NotificationService();
 
@@ -68,6 +72,10 @@ function createWindow(): void {
   });
 
   void mainWindow.loadFile(resolveRendererIndexPath({ appRoot }));
+
+  mainWindow.webContents.on("did-finish-load", () => {
+    if (process.platform === "win32" && app.isPackaged) void appUpdateService?.check("startup");
+  });
 
   mainWindow.on("close", (event) => {
     if (isQuitting) return;
@@ -141,6 +149,28 @@ if (hasSingleInstanceLock) {
     providerSettingsService = runtime.providerSettingsService;
     schedulerBridge = runtime.schedulerBridge;
     heartbeatAssistant = runtime.heartbeatAssistant;
+    appUpdateService = new AppUpdateService({
+      logger: createLogger("app-update"),
+      currentVersion: app.getVersion(),
+      supported: process.platform === "win32" && app.isPackaged,
+      prepareForUpdate: async () => {
+        if (runtime.agentRuntime.isBusy || runtime.scheduler.isBusy || runtime.speechTranscriptionService.isBusy) return false;
+        await runtime.scheduler.stop();
+        isQuitting = true;
+        return true;
+      },
+      resumeAfterFailedPreparation: async () => {
+        isQuitting = false;
+        await runtime.scheduler.resume().catch((error: unknown) => {
+          logger.error("scheduler_restart_after_update_failure", {
+            message: error instanceof Error ? error.message : String(error)
+          });
+        });
+      },
+      publish: (state) => {
+        for (const window of BrowserWindow.getAllWindows()) window.webContents.send(APP_UPDATE_STATE_CHANNEL, state);
+      }
+    });
     const initializedProviderSettingsService = runtime.providerSettingsService;
 
     registerAgentIpcHandlers({
@@ -165,7 +195,22 @@ if (hasSingleInstanceLock) {
       }
     });
     createWindow();
-    notificationService.setupTray(() => mainWindow);
+    const openUpdate = () => {
+      showAndFocusMainWindow();
+      for (const window of BrowserWindow.getAllWindows()) window.webContents.send(APP_UPDATE_OPEN_CHANNEL);
+      void appUpdateService?.check("manual");
+    };
+    notificationService.setupTray(() => mainWindow, openUpdate);
+    if (process.platform === "win32") {
+      Menu.setApplicationMenu(Menu.buildFromTemplate([
+        { label: "ファイル", submenu: [{ role: "quit", label: "終了" }] },
+        { role: "editMenu" },
+        { label: "表示", submenu: [{ role: "reload", label: "再読み込み" }, { role: "toggleDevTools", label: "開発者ツール" }] },
+        { label: "ヘルプ", submenu: [{ label: "更新を確認…", click: openUpdate }] }
+      ]));
+    }
+
+    registerAppUpdateIpcHandlers(appUpdateService);
 
     app.on("activate", () => {
       if (!mainWindow) {

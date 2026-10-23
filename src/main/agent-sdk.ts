@@ -573,6 +573,10 @@ export class AgentRuntime {
   private readonly conversationThreads = new Map<string, string>();
   private currentAbortController: AbortController | null = null;
 
+  get isBusy(): boolean {
+    return this.currentAbortController !== null;
+  }
+
   constructor({
     createSession = createCodexThreadFromAppServer,
     authService,

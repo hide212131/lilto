@@ -3,9 +3,12 @@ import type { AgentLoopEvent } from "./shared/agent-loop";
 import type { AudioTranscriptionResult } from "./shared/audio-transcription";
 import type { HeartbeatAssistantStatus } from "./shared/heartbeat-assistant";
 import type { SchedulerNotificationEvent, SchedulerScheduleSummary } from "./shared/scheduler";
+import type { AppUpdateSnapshot } from "./shared/app-update";
 
 const AGENT_LOOP_EVENT_CHANNEL = "agent:loopEvent";
 const SCHEDULER_NOTIFICATION_CHANNEL = "scheduler:notification";
+const APP_UPDATE_STATE_CHANNEL = "app-update:state";
+const APP_UPDATE_OPEN_CHANNEL = "app-update:open";
 
 contextBridge.exposeInMainWorld("lilto", {
   submitPrompt: async (
@@ -70,6 +73,20 @@ contextBridge.exposeInMainWorld("lilto", {
   finishNativeDictation: async (): Promise<AudioTranscriptionResult> => ipcRenderer.invoke("audio:finishNativeDictation"),
   cancelNativeDictation: async () => ipcRenderer.invoke("audio:cancelNativeDictation"),
   getPlatform: () => process.platform,
+  getAppUpdateState: (): Promise<AppUpdateSnapshot> => ipcRenderer.invoke("app-update:get-state"),
+  checkAppUpdate: (): Promise<void> => ipcRenderer.invoke("app-update:check"),
+  downloadAppUpdate: (): Promise<void> => ipcRenderer.invoke("app-update:download"),
+  installAppUpdate: (): Promise<void> => ipcRenderer.invoke("app-update:install"),
+  onAppUpdateState: (listener: (state: AppUpdateSnapshot) => void) => {
+    const wrapped = (_event: unknown, state: AppUpdateSnapshot) => listener(state);
+    ipcRenderer.on(APP_UPDATE_STATE_CHANNEL, wrapped);
+    return () => ipcRenderer.removeListener(APP_UPDATE_STATE_CHANNEL, wrapped);
+  },
+  onAppUpdateOpen: (listener: () => void) => {
+    const wrapped = () => listener();
+    ipcRenderer.on(APP_UPDATE_OPEN_CHANNEL, wrapped);
+    return () => ipcRenderer.removeListener(APP_UPDATE_OPEN_CHANNEL, wrapped);
+  },
   onAgentLoopEvent: (listener: (event: AgentLoopEvent) => void) => {
     const wrapped = (_event: unknown, event: AgentLoopEvent) => listener(event);
     ipcRenderer.on(AGENT_LOOP_EVENT_CHANNEL, wrapped);

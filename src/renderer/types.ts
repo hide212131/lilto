@@ -3,6 +3,7 @@ import type { AudioTranscriptionResult } from "../shared/audio-transcription.js"
 import type { HeartbeatAssistantStatus } from "../shared/heartbeat-assistant.js";
 import type { ActiveProvider, OAuthProviderId, ProviderSettings } from "../shared/provider-settings.js";
 import type { SchedulerNotificationEvent, SchedulerScheduleSummary } from "../shared/scheduler.js";
+import type { AppUpdateSnapshot } from "../shared/app-update.js";
 
 export type SkillSource = "bundled" | "user";
 
@@ -265,6 +266,12 @@ declare global {
       finishNativeDictation: () => Promise<AudioTranscriptionResult>;
       cancelNativeDictation: () => Promise<{ ok: true }>;
       getPlatform: () => string;
+      getAppUpdateState: () => Promise<AppUpdateSnapshot>;
+      checkAppUpdate: () => Promise<void>;
+      downloadAppUpdate: () => Promise<void>;
+      installAppUpdate: () => Promise<void>;
+      onAppUpdateState: (listener: (state: AppUpdateSnapshot) => void) => () => void;
+      onAppUpdateOpen: (listener: () => void) => () => void;
       onAgentLoopEvent: (listener: (event: AgentLoopEvent) => void) => () => void;
       onSchedulerNotification: (listener: (event: SchedulerNotificationEvent) => void) => () => void;
       onAuthStateChanged: (listener: (state: AuthState) => void) => () => void;

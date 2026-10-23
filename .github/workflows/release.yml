@@ -99,6 +99,7 @@ jobs:
           path: |
             release/*.exe
             release/*.blockmap
+            release/latest.yml
           if-no-files-found: error
 
   publish:
@@ -129,11 +130,20 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      - name: Verify complete release artifacts
+        run: npm run verify:release -- artifacts
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
+          draft: true
           generate_release_notes: true
           body: |
             macOS and Windows installers are currently unsigned. macOS Gatekeeper or Windows SmartScreen may show a warning before launch.
           files: artifacts/**
           fail_on_unmatched_files: true
+
+      - name: Publish verified draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false

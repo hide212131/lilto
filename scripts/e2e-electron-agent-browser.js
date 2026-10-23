@@ -609,6 +609,32 @@ async function main() {
     if (await isNewSessionDisabled(page)) throw new Error("New session button should be enabled after sending");
     console.log("✓ New session reset cleared conversation");
 
+    await page.evaluate(() => {
+      const app = document.querySelector("lilt-app");
+      app.updateState = { status: "available", currentVersion: "0.1.4", targetVersion: "0.1.5", source: "startup", revision: 100 };
+      app.updateDialogOpen = true;
+    });
+    const updateDialog = page.locator(".update-dialog");
+    await updateDialog.waitFor({ state: "visible" });
+    await updateDialog.getByText("Lilt-o 0.1.5 を利用できます。", { exact: true }).waitFor();
+    await updateDialog.getByRole("button", { name: "更新をダウンロード" }).waitFor();
+    await page.evaluate(() => {
+      const app = document.querySelector("lilt-app");
+      app.updateState = { status: "downloaded", currentVersion: "0.1.4", targetVersion: "0.1.5", revision: 101 };
+    });
+    const draftInput = page.locator("lilt-composer").locator("textarea");
+    await draftInput.fill("更新前に失わない入力内容");
+    page.once("dialog", (dialog) => void dialog.dismiss());
+    await updateDialog.getByRole("button", { name: "再起動してインストール" }).click();
+    await updateDialog.waitFor({ state: "visible" });
+    if (await draftInput.inputValue() !== "更新前に失わない入力内容") {
+      throw new Error("Update confirmation should preserve the unsent draft when cancelled");
+    }
+    await draftInput.fill("");
+    await updateDialog.getByRole("button", { name: "後で" }).click();
+    await updateDialog.waitFor({ state: "hidden" });
+    console.log("✓ Update notice renders and cancelled restart preserves the unsent draft");
+
     await page.screenshot({ path: screenshotPath, fullPage: true });
     console.log(`✓ Final screenshot: ${screenshotPath}`);
 
