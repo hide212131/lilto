@@ -24,6 +24,7 @@ import type { LiltComposer } from "./components/composer.js";
 import type { AgentLoopEvent, LoopState } from "../shared/agent-loop.js";
 import { createInitialLoopState, reduceLoopState } from "../shared/agent-loop.js";
 import { mergeSessionMessages } from "../shared/conversation-message-merge.js";
+import { ActivityPreviewLoader, type ActivityPreview } from "./sidebar-activity.js";
 
 const SIDEBAR_WIDTH_STORAGE_KEY = "lilto-sidebar-width";
 const DEFAULT_SIDEBAR_WIDTH = 272;
@@ -79,6 +80,8 @@ export class LiltApp extends LitElement {
   @property({ type: Number }) sidebarWidth = DEFAULT_SIDEBAR_WIDTH;
   @property({ type: Array }) sessions: Session[] = [];
   @property() activeSessionId: string | null = null;
+  @property({ type: Boolean }) sidebarActivityMode = false;
+  @property({ attribute: false }) activityPreviews: Record<string, ActivityPreview> = {};
 
   @query(".body") private _body!: HTMLDivElement;
   @query("lilt-composer") private _composer!: LiltComposer;
@@ -101,6 +104,7 @@ export class LiltApp extends LitElement {
   private _pendingLabel = "";
   private _currentSessionId: string | null = null;
   private _seenSchedulerNotifications = new Map<string, number>();
+  private _activityPreviewLoader: ActivityPreviewLoader | null = null;
   private _isResizingSidebar = false;
   private _onSidebarResize = (event: PointerEvent) => {
     if (!this._isResizingSidebar) return;
@@ -198,6 +202,17 @@ export class LiltApp extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this._activityPreviewLoader = new ActivityPreviewLoader(
+      (id) => window.lilto.readConversation(id),
+      (id, preview) => {
+        const session = this.sessions.find((entry) => entry.id === id);
+        if (preview && (!session || session.updatedAt !== preview.updatedAt)) return;
+        const next = { ...this.activityPreviews };
+        if (preview) next[id] = preview;
+        else delete next[id];
+        this.activityPreviews = next;
+      }
+    );
     void this._loadSessions();
     this._loadSidebarWidth();
     void this._hydrate();
@@ -331,6 +346,7 @@ export class LiltApp extends LitElement {
         return session;
       }
       updatedSession = mutate(session);
+      if (updatedSession.updatedAt !== session.updatedAt) this._activityPreviewLoader?.invalidate(sessionId);
       return updatedSession;
     });
     if (!updatedSession) {
@@ -389,9 +405,9 @@ export class LiltApp extends LitElement {
     const existingSession = this.sessions.find((session) => session.id === this._currentSessionId) ?? null;
     const title = existingSession?.title ?? "会話";
 
-    this.sessions = this.sessions.map((session) =>
-      session.id === this._currentSessionId
-        ? {
+    this.sessions = this.sessions.map((session) => {
+      if (session.id !== this._currentSessionId) return session;
+      const updatedSession = {
             ...session,
             title,
             messages: [...this.messages],
@@ -400,9 +416,10 @@ export class LiltApp extends LitElement {
                 ? session.updatedAt
                 : Date.now(),
             hasUnread: false
-          }
-        : session
-    );
+          };
+      if (updatedSession.updatedAt !== session.updatedAt) this._activityPreviewLoader?.invalidate(session.id);
+      return updatedSession;
+    });
     this._saveSessions();
   }
 
@@ -514,6 +531,11 @@ export class LiltApp extends LitElement {
           style=${this.sidebarOpen ? `width: ${this.sidebarWidth}px; min-width: ${this.sidebarWidth}px;` : ""}
           .sessions=${this.sessions}
           .activeSessionId=${this.activeSessionId}
+          .activityMode=${this.sidebarActivityMode}
+          .activityPreviews=${this.activityPreviews}
+          @toggle-activity=${() => { this.sidebarActivityMode = !this.sidebarActivityMode; }}
+          @activity-preview-needed=${(event: CustomEvent<{ session: Session }>) => this._activityPreviewLoader?.request(event.detail.session)}
+          @activity-preview-retry=${(event: CustomEvent<{ session: Session }>) => this._activityPreviewLoader?.request(event.detail.session, true)}
           @select-session=${this._onSelectSession}
           @rename-session=${this._onRenameSession}
           @delete-session=${this._onDeleteSession}
@@ -626,6 +648,7 @@ export class LiltApp extends LitElement {
 
   private _onDeleteSession(e: CustomEvent<{ sessionId: string }>) {
     const { sessionId } = e.detail;
+    this._activityPreviewLoader?.invalidate(sessionId);
     void window.lilto.archiveConversation(sessionId).then((result) => {
       if (!result.ok) {
         return;
