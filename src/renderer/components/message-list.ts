@@ -244,6 +244,36 @@ export class LiltMessageList extends LitElement {
       overflow: hidden;
       background: #ffffff;
     }
+    .tool-disclosure {
+      align-self: flex-start;
+      margin-top: -4px;
+    }
+    .tool-disclosure > summary {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      height: 20px;
+      border-radius: 5px;
+      color: #9ca3af;
+      cursor: pointer;
+      list-style: none;
+      opacity: 0.65;
+      transition: background 0.12s, color 0.12s, opacity 0.12s;
+    }
+    .tool-disclosure > summary::-webkit-details-marker {
+      display: none;
+    }
+    .tool-disclosure > summary:hover,
+    .tool-disclosure[open] > summary {
+      background: #f3f4f6;
+      color: #6b7280;
+      opacity: 1;
+    }
+    .tool-disclosure > summary svg {
+      width: 13px;
+      height: 13px;
+    }
     .tool-header {
       font-size: 12px;
       color: #374151;
@@ -548,20 +578,21 @@ export class LiltMessageList extends LitElement {
 
             return html`
               ${tool.label ? html`<div class="tool-label">${tool.label}</div>` : ""}
-              <div class="tool-block">
-                <div class="tool-header">Running command: ${tool.toolName}</div>
-                ${this.showToolExecutionDetails
-                  ? html`<pre class="tool-console ${isCompact ? "tool-console-compact" : ""}">${toolPreview}</pre>`
-                  : ""}
-                ${this.showToolExecutionDetails && hasToolRest
-                  ? html`
-                      <details class="tool-more">
-                        <summary>残り ${toolLines.length - LiltMessageList.TOOL_PREVIEW_LINES} 行を表示</summary>
-                        <pre class="tool-console ${toolRest.includes("\n") ? "" : "tool-console-compact"}">${toolRest}</pre>
-                      </details>
-                    `
-                  : ""}
-              </div>
+              <details class="tool-disclosure" .open=${this.showToolExecutionDetails}>
+                <summary title="コマンド詳細を表示" aria-label="コマンド詳細を表示">${this._terminalIcon()}</summary>
+                <div class="tool-block">
+                  <div class="tool-header">Running command: ${tool.toolName}</div>
+                  <pre class="tool-console ${isCompact ? "tool-console-compact" : ""}">${toolPreview}</pre>
+                  ${hasToolRest
+                    ? html`
+                        <details class="tool-more">
+                          <summary>残り ${toolLines.length - LiltMessageList.TOOL_PREVIEW_LINES} 行を表示</summary>
+                          <pre class="tool-console ${toolRest.includes("\n") ? "" : "tool-console-compact"}">${toolRest}</pre>
+                        </details>
+                      `
+                    : ""}
+                </div>
+              </details>
             `;
           }
         )}
@@ -576,6 +607,13 @@ export class LiltMessageList extends LitElement {
     return html`<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
       <rect x="5" y="5" width="8" height="9" rx="1.5"/>
       <path d="M3 11V3.5A1.5 1.5 0 0 1 4.5 2H11"/>
+    </svg>`;
+  }
+
+  private _terminalIcon() {
+    return html`<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="2" y="2.5" width="12" height="11" rx="2"/>
+      <path d="m4.5 6 2 1.7-2 1.7M8.5 9.4h3"/>
     </svg>`;
   }
 

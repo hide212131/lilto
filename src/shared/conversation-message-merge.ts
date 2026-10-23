@@ -3,12 +3,13 @@ type ConversationMessage = {
   role: string;
   text: string;
   createdAt: number;
+  progress?: unknown;
+  requestId?: string;
 };
-
-const HYDRATION_MERGE_TIME_WINDOW_MS = 5000;
 
 export function mergeSessionMessages<T extends ConversationMessage>(hydratedMessages: T[], localMessages: T[]): T[] {
   const matchedIndexes = new Set<number>();
+  const hydratedOverrides = new Map<number, T>();
   const localSignatures = new Set<string>();
   const insertions = new Map<number, T[]>();
   let nextIndex = hydratedMessages.length;
@@ -25,8 +26,7 @@ export function mergeSessionMessages<T extends ConversationMessage>(hydratedMess
         const hydrated = hydratedMessages[candidateIndex];
         if (!matchedIndexes.has(candidateIndex)
           && hydrated.role === message.role
-          && hydrated.text === message.text
-          && Math.abs(hydrated.createdAt - message.createdAt) <= HYDRATION_MERGE_TIME_WINDOW_MS) {
+          && hydrated.text === message.text) {
           index = candidateIndex;
           break;
         }
@@ -34,6 +34,14 @@ export function mergeSessionMessages<T extends ConversationMessage>(hydratedMess
     }
     if (index !== -1) {
       matchedIndexes.add(index);
+      if (message.progress) {
+        const hydrated = hydratedOverrides.get(index) ?? hydratedMessages[index];
+        hydratedOverrides.set(index, {
+          ...hydrated,
+          progress: message.progress,
+          requestId: message.requestId ?? hydrated.requestId
+        });
+      }
       // Even an already misordered local cache must not reorder backend history.
       nextIndex = Math.min(nextIndex, index);
       continue;
@@ -52,7 +60,7 @@ export function mergeSessionMessages<T extends ConversationMessage>(hydratedMess
   for (let index = 0; index <= hydratedMessages.length; index += 1) {
     merged.push(...(insertions.get(index) ?? []).reverse());
     if (index < hydratedMessages.length) {
-      merged.push(hydratedMessages[index]);
+      merged.push(hydratedOverrides.get(index) ?? hydratedMessages[index]);
     }
   }
   return merged;

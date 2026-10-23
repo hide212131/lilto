@@ -76,6 +76,13 @@ export function augmentPromptForScheduler(text: string): string {
   return `${text}\n\n${SCHEDULER_PROMPT_GUIDANCE}`;
 }
 
+export function stripSchedulerPromptGuidance(text: string): string {
+  const appendedGuidance = `\n\n${SCHEDULER_PROMPT_GUIDANCE}`;
+  return text.endsWith(appendedGuidance)
+    ? text.slice(0, -appendedGuidance.length)
+    : text;
+}
+
 export function buildSessionThreadOptions(settings: ProviderSettings, platform: NodeJS.Platform): SessionThreadOptions {
   if (platform === "win32" && settings.windowsSandbox.mode !== "off") {
     return {

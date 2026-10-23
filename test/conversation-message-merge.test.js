@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { mergeSessionMessages } = require("../dist/shared/conversation-message-merge.js");
 const { ConversationHistoryService } = require("../dist/main/conversation-history.js");
+const { augmentPromptForScheduler } = require("../dist/main/agent-sdk-config.js");
 
 const timestamp = 1_792_600_000_000;
 const message = (id, role, text, createdAt = timestamp) => ({ id, role, text, createdAt });
@@ -50,6 +51,26 @@ test("同じIDなら時刻と本文が更新されても保存側を採用する
   assert.deepEqual(mergeSessionMessages(hydrated, local), hydrated);
 });
 
+test("時刻が離れた同一発言を重複させず、完了回答のCLI進捗を保持する", () => {
+  const hydrated = [
+    message("item-user", "user", "5分後に教えて", timestamp - 60_000),
+    message("item-assistant", "assistant", "設定しました", timestamp - 59_000)
+  ];
+  const progress = { statusLines: [], tools: [{ toolName: "shell", detail: "cron set_timer" }] };
+  const local = [
+    message("msg-user", "user", "5分後に教えて", timestamp),
+    { ...message("msg-assistant", "assistant", "設定しました", timestamp + 1_000), progress, requestId: "request-1" }
+  ];
+
+  const merged = mergeSessionMessages(hydrated, local);
+  assert.deepEqual(merged.map(({ role, text }) => ({ role, text })), [
+    { role: "user", text: "5分後に教えて" },
+    { role: "assistant", text: "設定しました" }
+  ]);
+  assert.deepEqual(merged[1].progress, progress);
+  assert.equal(merged[1].requestId, "request-1");
+});
+
 test("同一文面の質問を繰り返しても通知位置と質問・回答順を保つ", () => {
   const hydrated = [
     message("item-1", "user", "もう一度"),
@@ -96,4 +117,31 @@ test("個別時刻のないApp Server履歴を読み直しても質問・回答�
     local = mergeSessionMessages(record.messages, local);
     assert.deepEqual(local.map(({ text }) => text), ["質問1", "回答1", "質問2", "回答2"]);
   }
+});
+
+test("履歴では内部用scheduler英文をユーザー発言から取り除く", async () => {
+  const originalPrompt = "5分後に教えて";
+  const augmentedPrompt = augmentPromptForScheduler(originalPrompt);
+  assert.notEqual(augmentedPrompt, originalPrompt);
+
+  const service = new ConversationHistoryService({ workspaceDir: process.cwd() });
+  service.createClient = async () => ({
+    request: async () => ({
+      thread: {
+        id: "thread-scheduler-prompt",
+        createdAt: timestamp / 1000,
+        turns: [{ id: "turn-1", items: [{
+          id: "item-user",
+          type: "userMessage",
+          content: [{ text: augmentedPrompt }]
+        }] }]
+      }
+    }),
+    close: () => {}
+  });
+
+  const record = await service.readConversation("thread-scheduler-prompt");
+  assert.deepEqual(record.messages.map(({ role, text }) => ({ role, text })), [
+    { role: "user", text: originalPrompt }
+  ]);
 });

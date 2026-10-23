@@ -1,5 +1,6 @@
 import path from "node:path";
 
+import { stripSchedulerPromptGuidance } from "./agent-sdk-config";
 import { CodexAppServerClient } from "./codex-app-server-client";
 import { resolveCodexProcessEnvironment, WINDOWS_POWERSHELL_PATHS } from "./codex-environment";
 import { resolvePackagedCodexBinary } from "./app-paths";
@@ -101,7 +102,7 @@ function parseMessagesFromTurns(turns: unknown, fallbackTimestamp: number): Conv
       const createdAt = resolveRecordTimestamp(record, turnTimestamp);
       switch (record.type) {
         case "userMessage": {
-          const text = extractUserMessageText(record);
+          const text = stripSchedulerPromptGuidance(extractUserMessageText(record));
           if (text) {
             messages.push({ id, createdAt, role: "user", text });
           }
