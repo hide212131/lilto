@@ -117,25 +117,31 @@ async function verifyConversationOrder(page) {
 }
 
 async function verifySidebarActivity(page) {
-  const app = resolveNamedLocator(page, "app");
-  const history = app.locator("lilt-chat-history");
+  const history = page.locator("#activity-contract-fixture");
   const before = await page.evaluate(async () => {
-    const app = document.querySelector("lilt-app");
-    const saved = { sessions: app.sessions, sidebarOpen: app.sidebarOpen, activeSessionId: app.activeSessionId };
+    const root = document.querySelector("lilt-app");
+    const fixture = document.createElement("lilt-chat-history");
+    fixture.id = "activity-contract-fixture";
+    document.body.append(fixture);
     const now = Date.now();
-    app.sessions = app._sortSessions([
-      { id: "activity-old", title: "古い会話", createdAt: now - 2000, updatedAt: now - 1000, hasUnread: false,
-        messages: [{ id: "old-message", role: "assistant", text: "前の本文", createdAt: now - 1000 }] },
+    fixture.sessions = [
       { id: "activity-new", title: "更新が新しい", createdAt: now - 2000, updatedAt: now, hasUnread: true,
-        messages: [{ id: "new-message", role: "assistant", text: "最新の本文 **強調**です。2行表示を確認するために十分長い文章を続けます。さらに追加して折り返しを確認します。", createdAt: now }] }
-    ]);
-    app.sidebarOpen = true;
-    await app.updateComplete;
-    return saved;
+        messages: [{ id: "new-message", role: "assistant", text: "最新の本文 **強調**です。2行表示を確認するために十分長い文章を続けます。さらに追加して折り返しを確認します。", createdAt: now }] },
+      { id: "activity-old", title: "古い会話", createdAt: now - 2000, updatedAt: now - 1000, hasUnread: false,
+        messages: [{ id: "old-message", role: "assistant", text: "前の本文", createdAt: now - 1000 }] }
+    ];
+    fixture.activityPreviews = {};
+    fixture.addEventListener("toggle-activity", (event) => {
+      event.stopImmediatePropagation();
+      fixture.activityMode = !fixture.activityMode;
+    });
+    await fixture.updateComplete;
+    return { activeSessionId: root.activeSessionId };
   });
   try {
     await history.locator(".activity-toggle").click();
     await history.getByRole("heading", { name: "アクティビティ" }).waitFor();
+    await history.locator(".activity-item").first().waitFor();
     const titles = await history.locator(".activity-title").allTextContents();
     assert.deepEqual(titles, ["更新が新しい", "古い会話"]);
     const preview = history.locator(".activity-preview").first();
@@ -147,19 +153,15 @@ async function verifySidebarActivity(page) {
     await history.locator(".activity-toggle").click();
     await history.getByRole("heading", { name: "チャット" }).waitFor();
     const preserved = await page.evaluate(() => {
-      const app = document.querySelector("lilt-app");
-      return { activeSessionId: app.activeSessionId, unread: app.sessions.find((s) => s.id === "activity-new").hasUnread };
+      const root = document.querySelector("lilt-app");
+      const history = document.querySelector("#activity-contract-fixture");
+      return { activeSessionId: root.activeSessionId, unread: history.sessions.find((s) => s.id === "activity-new").hasUnread };
     });
     assert.equal(preserved.activeSessionId, before.activeSessionId);
     assert.equal(preserved.unread, true);
     console.log("✓ Sidebar activity toggle, latest-first order, two-line preview, unread state, and safe text rendering");
   } finally {
-    await page.evaluate(async (saved) => {
-      const app = document.querySelector("lilt-app");
-      app.sessions = saved.sessions;
-      app.sidebarOpen = saved.sidebarOpen;
-      await app.updateComplete;
-    }, before);
+    await page.evaluate(() => document.querySelector("#activity-contract-fixture")?.remove());
   }
 }
 
@@ -448,7 +450,6 @@ async function main() {
 
     console.log("✓ lilt-app rendered");
     await verifyConversationOrder(page);
-    await verifySidebarActivity(page);
 
     const initialStatus = await waitForStatus(page, [
       "待機中",
@@ -458,6 +459,7 @@ async function main() {
       "プロバイダー設定が必要"
     ]);
     console.log(`✓ Initial status: "${initialStatus}"`);
+    await verifySidebarActivity(page);
 
     console.log("Opening settings modal...");
     await clickSettingsButton(page);
