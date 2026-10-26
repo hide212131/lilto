@@ -6,6 +6,7 @@ const os = require("node:os");
 const assert = require("node:assert/strict");
 const { verifyLinkNavigation } = require("./verify-link-navigation");
 const { verifyComposerDrafts } = require("./verify-composer-drafts");
+const { verifyToolGroups } = require("./verify-tool-groups");
 const {
   collectMessages,
   connectToElectronApp,
@@ -453,6 +454,7 @@ async function main() {
     console.log("✓ lilt-app rendered");
     ({ browser, page } = await verifyLinkNavigation(browser, page, cdpPort));
     await verifyConversationOrder(page);
+    await verifyToolGroups(page);
 
     const initialStatus = await waitForStatus(page, [
       "待機中",
@@ -564,12 +566,12 @@ async function main() {
       throw new Error("Collapsed tool details should have a small accessible disclosure icon");
     }
     await toolDisclosure.locator("summary").click();
-    await toolDisclosure.locator(".tool-console").waitFor({ state: "visible" });
-    if (!(await toolDisclosure.locator(".tool-console").textContent()).includes("read_file")) {
+    await toolDisclosure.locator(".tool-console").first().waitFor({ state: "visible" });
+    if (!(await toolDisclosure.locator(".tool-console").allTextContents()).some((text) => text.includes("read_file"))) {
       throw new Error("Clicking the tool icon should reveal command details");
     }
     await toolDisclosure.locator("summary").click();
-    if (await toolDisclosure.locator(".tool-console").isVisible()) {
+    if (await toolDisclosure.locator(".tool-console:visible").count() > 0) {
       throw new Error("Clicking the tool icon again should collapse command details");
     }
 

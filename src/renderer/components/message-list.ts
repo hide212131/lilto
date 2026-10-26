@@ -2,7 +2,7 @@ import { LitElement, html, css } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { marked } from "marked";
-import type { Message } from "../types.js";
+import type { AssistantToolProgress, Message } from "../types.js";
 import { formatMessageTimestamp } from "../../shared/format-message-timestamp.js";
 
 const MASCOT_URL = "./mascot.png";
@@ -246,19 +246,17 @@ export class LiltMessageList extends LitElement {
     }
     .tool-disclosure {
       align-self: flex-start;
-      margin-top: -4px;
+      min-width: 0;
+      max-width: 100%;
     }
     .tool-disclosure > summary {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      width: 20px;
-      height: 20px;
+      display: block;
+      width: fit-content;
+      min-height: 20px;
       border-radius: 5px;
       color: #9ca3af;
       cursor: pointer;
       list-style: none;
-      opacity: 0.65;
       transition: background 0.12s, color 0.12s, opacity 0.12s;
     }
     .tool-disclosure > summary::-webkit-details-marker {
@@ -273,6 +271,14 @@ export class LiltMessageList extends LitElement {
     .tool-disclosure > summary svg {
       width: 13px;
       height: 13px;
+      padding: 3px;
+      vertical-align: middle;
+    }
+    .tool-details {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 4px;
     }
     .tool-header {
       font-size: 12px;
@@ -533,6 +539,15 @@ export class LiltMessageList extends LitElement {
       Boolean(message.pending && progress.pendingLabel);
 
     const stateKey = this._stateKeyForMessage(message);
+    // A commentary starts a group; subsequent commands share its disclosure
+    // until the agent supplies the next commentary.
+    const toolGroups: { label?: string; tools: AssistantToolProgress[] }[] = [];
+    for (const tool of progress.tools) {
+      if (tool.label?.trim() || toolGroups.length === 0) {
+        toolGroups.push({ label: tool.label, tools: [] });
+      }
+      toolGroups[toolGroups.length - 1].tools.push(tool);
+    }
 
     return html`
       ${hasVisibleProgress ? html`<div class="assistant-progress">
@@ -567,35 +582,39 @@ export class LiltMessageList extends LitElement {
             `
           : ""}
 
-        ${progress.tools.map(
-          (tool) => {
-            const commandText = tool.detail ? `> ${tool.detail}` : "(詳細なし)";
-            const toolLines = commandText.split("\n");
-            const toolPreview = toolLines.slice(0, LiltMessageList.TOOL_PREVIEW_LINES).join("\n");
-            const toolRest = toolLines.slice(LiltMessageList.TOOL_PREVIEW_LINES).join("\n");
-            const hasToolRest = toolLines.length > LiltMessageList.TOOL_PREVIEW_LINES;
-            const isCompact = toolLines.length <= 1;
+        ${toolGroups.map((group) => html`
+          <details class="tool-disclosure" .open=${this.showToolExecutionDetails}>
+            <summary title="コマンド詳細を表示" aria-label="コマンド詳細を表示">
+              ${group.label ? html`<span class="tool-label">${group.label}</span>` : ""}
+              ${this._terminalIcon()}
+            </summary>
+            <div class="tool-details">
+              ${group.tools.map((tool) => {
+                const commandText = tool.detail ? `> ${tool.detail}` : "(詳細なし)";
+                const toolLines = commandText.split("\n");
+                const toolPreview = toolLines.slice(0, LiltMessageList.TOOL_PREVIEW_LINES).join("\n");
+                const toolRest = toolLines.slice(LiltMessageList.TOOL_PREVIEW_LINES).join("\n");
+                const hasToolRest = toolLines.length > LiltMessageList.TOOL_PREVIEW_LINES;
+                const isCompact = toolLines.length <= 1;
 
-            return html`
-              ${tool.label ? html`<div class="tool-label">${tool.label}</div>` : ""}
-              <details class="tool-disclosure" .open=${this.showToolExecutionDetails}>
-                <summary title="コマンド詳細を表示" aria-label="コマンド詳細を表示">${this._terminalIcon()}</summary>
-                <div class="tool-block">
-                  <div class="tool-header">Running command: ${tool.toolName}</div>
-                  <pre class="tool-console ${isCompact ? "tool-console-compact" : ""}">${toolPreview}</pre>
-                  ${hasToolRest
-                    ? html`
-                        <details class="tool-more">
-                          <summary>残り ${toolLines.length - LiltMessageList.TOOL_PREVIEW_LINES} 行を表示</summary>
-                          <pre class="tool-console ${toolRest.includes("\n") ? "" : "tool-console-compact"}">${toolRest}</pre>
-                        </details>
-                      `
-                    : ""}
-                </div>
-              </details>
-            `;
-          }
-        )}
+                return html`
+                    <div class="tool-block">
+                      <div class="tool-header">Running command: ${tool.toolName}</div>
+                      <pre class="tool-console ${isCompact ? "tool-console-compact" : ""}">${toolPreview}</pre>
+                      ${hasToolRest
+                        ? html`
+                            <details class="tool-more">
+                              <summary>残り ${toolLines.length - LiltMessageList.TOOL_PREVIEW_LINES} 行を表示</summary>
+                              <pre class="tool-console ${toolRest.includes("\n") ? "" : "tool-console-compact"}">${toolRest}</pre>
+                            </details>
+                          `
+                        : ""}
+                    </div>
+                `;
+              })}
+            </div>
+          </details>
+        `)}
 
         ${message.pending && progress.pendingLabel ? html`<div class="tool-label">${progress.pendingLabel}</div>` : ""}
       </div>` : ""}
