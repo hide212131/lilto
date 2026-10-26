@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
 const assert = require("node:assert/strict");
+const { verifyLinkNavigation } = require("./verify-link-navigation");
 const {
   collectMessages,
   connectToElectronApp,
@@ -449,6 +450,7 @@ async function main() {
     console.log(`✓ Title: "${title}"`);
 
     console.log("✓ lilt-app rendered");
+    ({ browser, page } = await verifyLinkNavigation(browser, page, cdpPort));
     await verifyConversationOrder(page);
 
     const initialStatus = await waitForStatus(page, [
