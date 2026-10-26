@@ -9,6 +9,7 @@ const ipcContractContent = fs.readFileSync("src/main/ipc-contract.ts", "utf8");
 
 const EXPECTED_HANDLE_CHANNELS = [
   "agent:submitPrompt",
+  "agent:steerPrompt",
   "agent:abort",
   "conversations:list",
   "conversations:read",
@@ -51,11 +52,11 @@ function extractMatches(content, pattern) {
   return [...content.matchAll(pattern)].map((match) => match[1]).sort();
 }
 
-test("main ipc と preload invoke は同じ 37 チャネルを公開する", () => {
+test("main ipc と preload invoke は同じ 38 チャネルを公開する", () => {
   const mainChannels = extractMatches(ipcContent, /ipcMain\.handle\("([^"]+)"/g);
   const preloadChannels = [...new Set(extractMatches(preloadContent, /ipcRenderer\.invoke\("([^"]+)"/g))].sort();
 
-  assert.equal(mainChannels.length, 37);
+  assert.equal(mainChannels.length, 38);
   assert.deepEqual(mainChannels, EXPECTED_HANDLE_CHANNELS);
   assert.deepEqual(preloadChannels, EXPECTED_HANDLE_CHANNELS);
 });

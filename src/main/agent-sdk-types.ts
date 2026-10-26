@@ -23,6 +23,7 @@ export type RuntimeModel = {
 
 export type Thread = {
   id: string | null;
+  steer?(input: string): Promise<void>;
   runStreamed(input: string, options?: { signal?: AbortSignal }): Promise<{ events: AsyncGenerator<ThreadEvent> }>;
 };
 

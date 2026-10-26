@@ -40,6 +40,17 @@ export function registerAgentConversationIpcHandlers({
 }): void {
   const logger = createLogger("ipc");
 
+  ipcMain.handle("agent:steerPrompt", async (_event, payload: unknown) => {
+    const validation = validatePrompt(payload);
+    if (!validation.ok) return { ok: false, error: validation };
+    const { text, conversationId } = payload as { text: string; conversationId?: string };
+    if (!conversationId) {
+      return { ok: false, error: { code: "INVALID_REQUEST", message: "conversationId は必須です" } };
+    }
+    const normalized = await normalizePromptPluginMentions(text, pluginService);
+    return agentRuntime.steerPrompt(normalized, conversationId);
+  });
+
   ipcMain.handle("agent:submitPrompt", async (_event, payload: unknown) => {
     const validation = validatePrompt(payload);
     if (!validation.ok) {

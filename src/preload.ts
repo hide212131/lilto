@@ -25,6 +25,8 @@ contextBridge.exposeInMainWorld("lilto", {
       freshContext: options?.freshContext === true
     }),
   abortPrompt: async () => ipcRenderer.invoke("agent:abort"),
+  steerPrompt: async (text: string, conversationId: string) =>
+    ipcRenderer.invoke("agent:steerPrompt", { text, conversationId }),
   listConversations: async () => ipcRenderer.invoke("conversations:list"),
   readConversation: async (conversationId: string) => ipcRenderer.invoke("conversations:read", { conversationId }),
   createConversation: async (title?: string) => ipcRenderer.invoke("conversations:create", { title }),

@@ -1,5 +1,11 @@
 # Lessons
 
+## 2026-10-26 Keep same-turn steering separate from parallel conversations
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| 同じ会話への追加指示を実装し、別会話の並行実行は別作業にすることを確認。 | 実行中に送信できるという説明だけでは、別会話の送信制限もなくなるように読める。 | 追加指示は同じ conversation/turn に限定すると明示し、別会話への誤送信を拒否する。別会話の並行実行と中断対象の管理は、別途依頼されるまで実装範囲に含めない。 |
+
 ## 2026-10-26 Persist composer drafts by conversation
 
 | Change | Mistake/Context | Rule to repeat |

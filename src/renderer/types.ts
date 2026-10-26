@@ -162,6 +162,10 @@ declare global {
         | { ok: false; requestId?: string; error?: { code?: string; message?: string; retryable?: boolean } }
       >;
       abortPrompt: () => Promise<{ ok: boolean }>;
+      steerPrompt: (text: string, conversationId: string) => Promise<
+        | { ok: true }
+        | { ok: false; error: { code: string; message: string } }
+      >;
       listConversations: () => Promise<
         | { ok: true; conversations: Session[] }
         | { ok: false; error: { code: string; message: string } }

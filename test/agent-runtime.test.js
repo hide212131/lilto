@@ -885,3 +885,111 @@ test("item.completed の error item は失敗として返す", async () => {
   assert.equal(result.error.code, "AGENT_EXECUTION_FAILED");
   assert.match(result.error.message, /scheduler bridge unavailable/);
 });
+
+test("追加指示は準備中の同じ会話を待ち、実行や終了イベントを増やさない", async () => {
+  let ready;
+  const preparation = new Promise((resolve) => { ready = resolve; });
+  let finish;
+  const completion = new Promise((resolve) => { finish = resolve; });
+  const inputs = [];
+  const events = [];
+  let starts = 0;
+  const runtime = new AgentRuntime({
+    authService: createAuthService(),
+    createSession: async () => {
+      await preparation;
+      return {
+        id: "backend-a",
+        async steer(input) { inputs.push(input); },
+        async runStreamed() {
+          starts++;
+          return { events: (async function* () {
+            await completion;
+            yield { type: "item.completed", item: { id: "answer", type: "agent_message", text: inputs.join(" / ") } };
+          })() };
+        }
+      };
+    }
+  });
+  const response = runtime.submitPrompt("first", createProviderSettings(), {
+    requestId: "request-a", conversationId: "conversation-a", onLoopEvent: (event) => events.push(event)
+  });
+  const first = runtime.steerPrompt("focus on tests", "conversation-a");
+  assert.equal((await runtime.steerPrompt("wrong", "conversation-b")).error.code, "NO_ACTIVE_TURN");
+  ready();
+  assert.equal((await first).ok, true);
+  assert.equal((await runtime.steerPrompt("answer briefly", "conversation-a")).ok, true);
+  assert.equal(starts, 1);
+  assert.deepEqual(inputs, ["focus on tests", "answer briefly"]);
+  assert.equal(events.filter((event) => event.type === "run_end").length, 0);
+  finish();
+  assert.equal((await response).text, "focus on tests / answer briefly");
+  assert.equal((await runtime.steerPrompt("too late", "conversation-a")).error.code, "NO_ACTIVE_TURN");
+});
+
+test("準備に失敗した場合は待機中の追加指示も失敗で解決する", async () => {
+  let fail;
+  const preparation = new Promise((_resolve, reject) => { fail = reject; });
+  const runtime = new AgentRuntime({ authService: createAuthService(), createSession: async () => preparation });
+  const response = runtime.submitPrompt("first", createProviderSettings(), { requestId: "req", conversationId: "a" });
+  const steer = runtime.steerPrompt("second", "a");
+  fail(new Error("startup failed"));
+  assert.equal((await response).ok, false);
+  assert.equal((await steer).error.code, "NO_ACTIVE_TURN");
+});
+
+test("App Server の追加指示は expectedTurnId と同じ接続を使い、終了後は拒否する", async () => {
+  const requests = [];
+  const mocks = [
+    mock.method(CodexAppServerClient.prototype, "start", async () => {}),
+    mock.method(CodexAppServerClient.prototype, "request", async (method, params) => {
+      requests.push({ method, params });
+      if (method === "thread/start") return { thread: { id: "thread-steer" } };
+      if (method === "turn/start") return { turn: { id: "turn-steer" } };
+      if (method === "turn/steer" && params.input[0].text === "reject") throw new Error("turn no longer active");
+      return { turnId: "turn-steer" };
+    }),
+    mock.method(CodexAppServerClient.prototype, "nextNotification", async () => ({
+      method: "turn/completed", params: { turn: { status: "completed" } }
+    })),
+    mock.method(CodexAppServerClient.prototype, "close", () => {})
+  ];
+  try {
+    const thread = await createCodexThreadFromAppServer({ apiKey: null, cwd: process.cwd() });
+    await assert.rejects(thread.steer("early"), /実行中のターン/);
+    const run = await thread.runStreamed("first");
+    await thread.steer("change direction");
+    assert.deepEqual(requests.find((request) => request.method === "turn/steer"), {
+      method: "turn/steer", params: {
+        threadId: "thread-steer", expectedTurnId: "turn-steer",
+        input: [{ type: "text", text: "change direction" }]
+      }
+    });
+    await assert.rejects(thread.steer("reject"), /no longer active/);
+    for await (const _event of run.events) {}
+    await assert.rejects(thread.steer("late"), /実行中のターン/);
+    assert.equal(requests.filter((request) => request.method === "turn/start").length, 1);
+  } finally {
+    for (const entry of mocks) entry.mock.restore();
+  }
+});
+
+test("起動準備中の中断は追加指示の待機も解消し、新しいターンを起動しない", async () => {
+  let ready;
+  const preparation = new Promise((resolve) => { ready = resolve; });
+  let starts = 0;
+  const runtime = new AgentRuntime({
+    authService: createAuthService(),
+    createSession: async () => {
+      await preparation;
+      return { id: "backend", async runStreamed() { starts++; return { events: (async function* () {})() }; } };
+    }
+  });
+  const response = runtime.submitPrompt("first", createProviderSettings(), { requestId: "req", conversationId: "a" });
+  const steer = runtime.steerPrompt("second", "a");
+  runtime.abort();
+  assert.equal((await steer).error.code, "NO_ACTIVE_TURN");
+  ready();
+  assert.equal((await response).error.code, "ABORTED");
+  assert.equal(starts, 0);
+});
