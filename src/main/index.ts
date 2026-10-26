@@ -17,6 +17,7 @@ import type { SchedulerNotificationEvent } from "../shared/scheduler";
 import { APP_UPDATE_OPEN_CHANNEL, APP_UPDATE_STATE_CHANNEL } from "../shared/app-update";
 import { AppUpdateService } from "./app-update-service";
 import { registerAppUpdateIpcHandlers } from "./ipc/app-update";
+import { installLinkNavigation } from "./link-navigation";
 
 const config = readConfig();
 configureAppUserDataPath(app);
@@ -71,6 +72,7 @@ function createWindow(): void {
     title: config.appName
   });
 
+  installLinkNavigation(mainWindow);
   void mainWindow.loadFile(resolveRendererIndexPath({ appRoot }));
 
   mainWindow.webContents.on("did-finish-load", () => {

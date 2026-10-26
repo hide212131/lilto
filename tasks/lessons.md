@@ -1,5 +1,11 @@
 # Lessons
 
+## 2026-10-26 Keep a return path for unhandled link navigation
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| URL クリックでアプリ画面が置き換わると戻る手段がなかったため、リンク表示に戻るボタンを追加。 | Markdown 個別のクリック捕捉だけでは他のリンクや新規ウィンドウ指定を網羅できない。 | Main のナビゲーション境界でも捕捉し、会話を保持した独立した WebContents にリンク先を表示する。戻る・チャット復帰・下書き保持・読み込み失敗からの復帰を実画面と最終 E2E で確認する。 |
+
 ## 2026-10-23 Keep internal prompt augmentation out of displayed history
 
 | Change | Mistake/Context | Rule to repeat |
