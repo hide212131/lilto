@@ -5,6 +5,7 @@ const path = require("node:path");
 const os = require("node:os");
 const assert = require("node:assert/strict");
 const { verifyLinkNavigation } = require("./verify-link-navigation");
+const { verifyComposerDrafts } = require("./verify-composer-drafts");
 const {
   collectMessages,
   connectToElectronApp,
@@ -610,6 +611,7 @@ async function main() {
     if (countAfterReset !== 0) throw new Error(`Expected cleared messages after new session, got: ${countAfterReset}`);
     if (await isNewSessionDisabled(page)) throw new Error("New session button should be enabled after sending");
     console.log("✓ New session reset cleared conversation");
+    await verifyComposerDrafts(page);
 
     await page.evaluate(() => {
       const app = document.querySelector("lilt-app");
@@ -634,16 +636,15 @@ async function main() {
     });
     const draftInput = page.locator("lilt-composer").locator("textarea");
     await draftInput.fill("更新前に失わない入力内容");
-    page.once("dialog", (dialog) => void dialog.dismiss());
     await updateDialog.getByRole("button", { name: "再起動してインストール" }).click();
     await updateDialog.waitFor({ state: "visible" });
     if (await draftInput.inputValue() !== "更新前に失わない入力内容") {
-      throw new Error("Update confirmation should preserve the unsent draft when cancelled");
+      throw new Error("Update install should preserve the saved unsent draft");
     }
     await draftInput.fill("");
     await updateDialog.getByRole("button", { name: "後で" }).click();
     await updateDialog.waitFor({ state: "hidden" });
-    console.log("✓ Update notice renders and cancelled restart preserves the unsent draft");
+    console.log("✓ Update notice renders and install attempt preserves the saved unsent draft");
 
     await page.screenshot({ path: screenshotPath, fullPage: true });
     console.log(`✓ Final screenshot: ${screenshotPath}`);

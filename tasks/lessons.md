@@ -1,5 +1,12 @@
 # Lessons
 
+## 2026-10-26 Persist composer drafts by conversation
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| 入力途中のメッセージを再起動後もセッションごとに保持する。 | textarea の値だけでは終了時に消え、同じ入力欄の再利用で会話間の下書きが混ざる。 | 入力イベント・音声入力・履歴呼び出し・送信失敗からの復元をすべて即時保存する。会話 ID ごとに保存し、新規会話用の下書きも分離する。切替・送信・削除・プロセス再起動を検証し、再起動で失われるという古い表示も更新する。 |
+
+
 ## 2026-10-26 Keep a return path for unhandled link navigation
 
 | Change | Mistake/Context | Rule to repeat |
