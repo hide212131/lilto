@@ -2,6 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const yaml = require("js-yaml");
+const { verifyWindowsIcon } = require("./verify-windows-icon");
 
 const rootDir = path.resolve(__dirname, "..");
 const releaseDir = path.join(rootDir, "release");
@@ -76,6 +77,9 @@ if (process.platform === "darwin") {
 
 if (process.platform === "win32") {
   assert(hasWindowsInstaller, "Windows installer (.exe) was not generated");
+  const appExecutablePath = path.join(releaseDir, "win-unpacked", "Lilt-o.exe");
+  assert(fs.existsSync(appExecutablePath), "Packaged Windows application executable was not generated");
+  verifyWindowsIcon(appExecutablePath, path.join(rootDir, "build", "icon.ico"));
   const expectedInstallerName = `Lilt-o-${require("../package.json").version}-win-x64.exe`;
   const installerPath = files.find((file) => path.basename(file) === expectedInstallerName);
   const latestPath = files.find((file) => path.basename(file) === "latest.yml");

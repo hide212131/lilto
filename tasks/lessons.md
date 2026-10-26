@@ -621,3 +621,8 @@
 | CI's unit-test command auto-discovered `scripts/windows-sandbox-live-test.js`, which requires elevated Windows sandbox facilities absent from hosted runners. | Node 22's test runner treats a bare directory as a test file argument rather than discovering files within it, and default discovery includes matching files outside the unit-test directory. | Keep OS-dependent live smoke tests in dedicated scripts, and use a cross-platform runner that passes the unit-test files under `test/` explicitly to `node --test`. |
 | Electron UI E2E showed the final assistant response briefly, then late tool progress events replaced it with the pending placeholder and left the status at “sending”. | The `submitPrompt` invoke response and loop events sent over a separate IPC channel can reach the renderer in a different order; late command details still need to appear when enabled, while the final text, pending state, and loop status remain complete. | Return the request ID with the invoke result, retain completed request context, merge late tool details into the completed message, and set the loop state from the invoke result. Keep an E2E assertion for the stable final response and configurable command details. |
 
+## 2026-10-26 Windows release executable icon
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| Windows リリース版のタスクバーが Electron アイコンになる設定を修正。 | 未署名配布のために `signAndEditExecutable=false` を渡し、署名と一緒に EXE のアイコン・メタデータ編集も停止していた。インストーラーや BrowserWindow のアイコン設定だけでは検出できなかった。 | 署名の無効化には証明書探索・資格情報の設定を使い、EXE のリソース編集を止めない。Windows 配布検証ではインストーラーの存在だけでなく、`win-unpacked/Lilt-o.exe` 内の全サイズのアイコンを生成元 ICO と照合する。 |
