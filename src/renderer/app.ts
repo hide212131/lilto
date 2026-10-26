@@ -225,7 +225,11 @@ export class LiltApp extends LitElement {
         this.activityPreviews = next;
       }
     );
-    void this._loadSessions();
+    void this._loadSessions().then(async () => {
+      await this.updateComplete;
+      const sessionId = localStorage.getItem("lilto.composer-active-session.v1");
+      if (!this._currentSessionId && sessionId) await this._openConversation(sessionId);
+    });
     this._loadSidebarWidth();
     void this._hydrate();
     this._unsubscribeAuthListener = window.lilto.onAuthStateChanged((state) => {
@@ -466,8 +470,7 @@ export class LiltApp extends LitElement {
     const session = this._normalizeSession(result.conversation);
     session.messages = [...this.messages];
     this.sessions = this._sortSessions([session, ...this.sessions.filter((entry) => entry.id !== session.id)]);
-    this._currentSessionId = session.id;
-    this.activeSessionId = session.id;
+    this._activateSession(session.id, true);
     return session.id;
   }
 
@@ -647,7 +650,6 @@ export class LiltApp extends LitElement {
 
   private async _installAppUpdate() {
     if (this.isSending) return;
-    if (this._composer?.getDraftText().trim() && !window.confirm("入力中の内容は再起動で失われます。インストールを続けますか？")) return;
     try {
       await window.lilto.installAppUpdate();
     } catch {
@@ -723,8 +725,7 @@ export class LiltApp extends LitElement {
     ]);
 
     this.messages = [...hydratedSession.messages];
-    this._currentSessionId = nextSession.id;
-    this.activeSessionId = nextSession.id;
+    this._activateSession(nextSession.id);
     this.loopState = createInitialLoopState();
     this._resetForegroundRequestState();
   }
@@ -749,13 +750,14 @@ export class LiltApp extends LitElement {
       if (!result.ok) {
         return;
       }
+      localStorage.removeItem(`lilto.composer-draft.v1:${sessionId}`);
       this.sessions = this.sessions.filter((s) => s.id !== sessionId);
       this._saveSessions();
       if (sessionId === this._currentSessionId) {
         this.messages = [];
         this.loopState = createInitialLoopState();
-        this._currentSessionId = null;
-        this.activeSessionId = null;
+        this._activateSession(null);
+        localStorage.removeItem(`lilto.composer-draft.v1:${sessionId}`);
       }
     });
   }
@@ -770,14 +772,21 @@ export class LiltApp extends LitElement {
     this._syncSendability();
   }
 
+  private _activateSession(sessionId: string | null, migrate = false) {
+    this._composer.switchDraft(sessionId, migrate);
+    this._currentSessionId = sessionId;
+    this.activeSessionId = sessionId;
+    if (sessionId) localStorage.setItem("lilto.composer-active-session.v1", sessionId);
+    else localStorage.removeItem("lilto.composer-active-session.v1");
+  }
+
   private _onStartNewSession() {
     if (this.isSending) return;
     this._saveCurrentSession();
     this.messages = [];
     this.loopState = createInitialLoopState();
     this._resetForegroundRequestState();
-    this._currentSessionId = null;
-    this.activeSessionId = null;
+    this._activateSession(null);
   }
 
   private _onAbortRequest() {
@@ -900,6 +909,7 @@ export class LiltApp extends LitElement {
     const title = text.slice(0, 40) + (text.length > 40 ? "…" : "");
     const conversationId = await this._ensureConversation(title);
     if (!conversationId) {
+      this._composer.restoreDraft(text);
       return;
     }
     this._saveCurrentSession();

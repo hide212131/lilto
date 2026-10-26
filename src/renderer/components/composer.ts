@@ -16,8 +16,48 @@ export class LiltComposer extends LitElement {
 
   @query("textarea") private _textarea!: HTMLTextAreaElement;
 
+  private _draftSessionId: string | null = null;
+
+  private _draftKey(sessionId = this._draftSessionId): string {
+    return `lilto.composer-draft.v1:${sessionId ?? "new"}`;
+  }
+
+  private _saveDraft() {
+    try {
+      const text = this.getDraftText();
+      if (text) localStorage.setItem(this._draftKey(), text);
+      else localStorage.removeItem(this._draftKey());
+    } catch (error) {
+      console.error("下書きを保存できませんでした", error);
+    }
+  }
+
+  switchDraft(sessionId: string | null, migrate = false) {
+    if (sessionId === this._draftSessionId) return;
+    const text = this.getDraftText();
+    this._saveDraft();
+    if (migrate) localStorage.removeItem(this._draftKey());
+    this._draftSessionId = sessionId;
+    if (!migrate) this._lastSentText = "";
+    this._isComposing = false;
+    void this._cancelRecording();
+    this._textarea.value = migrate ? text : (localStorage.getItem(this._draftKey()) ?? "");
+    this._saveDraft();
+  }
+
+  protected firstUpdated() {
+    this._textarea.value = localStorage.getItem(this._draftKey()) ?? "";
+  }
+
   getDraftText(): string {
     return this._textarea?.value ?? "";
+  }
+
+  restoreDraft(text: string) {
+    const draft = this.getDraftText();
+    this._textarea.value = draft ? `${text}\n${draft}` : text;
+    this._saveDraft();
+    this.focusInput();
   }
   @query(".btn-dictation") private _dictationButton!: HTMLButtonElement;
 
@@ -170,6 +210,7 @@ export class LiltComposer extends LitElement {
           <textarea
             placeholder="Type a message..."
             .disabled=${this.disabled && !this.isSending}
+            @input=${this._saveDraft}
             @compositionstart=${this._onCompositionStart}
             @compositionend=${this._onCompositionEnd}
             @keydown=${this._onKeyDown}
@@ -255,6 +296,7 @@ export class LiltComposer extends LitElement {
   private _onCompositionEnd() {
     this._isComposing = false;
     this._compositionEndAt = Date.now();
+    this._saveDraft();
   }
 
   private _onKeyDown(e: KeyboardEvent) {
@@ -263,6 +305,7 @@ export class LiltComposer extends LitElement {
       if (textarea && textarea.value === "" && this._lastSentText) {
         e.preventDefault();
         textarea.value = this._lastSentText;
+        this._saveDraft();
         textarea.selectionStart = textarea.selectionEnd = textarea.value.length;
         return;
       }
@@ -295,12 +338,13 @@ export class LiltComposer extends LitElement {
     const text = this._textarea.value.trim();
     if (!text) return;
     this._lastSentText = text;
+    this._textarea.value = "";
+    this._saveDraft();
     this.dispatchEvent(new CustomEvent("send-message", {
       detail: { text },
       bubbles: true,
       composed: true
     }));
-    this._textarea.value = "";
   }
 
   private _onWindowBlur = () => {
@@ -481,6 +525,7 @@ export class LiltComposer extends LitElement {
     const current = this._textarea.value.trimEnd();
     this._textarea.value = current ? `${current} ${nextText}` : nextText;
     this._textarea.selectionStart = this._textarea.selectionEnd = this._textarea.value.length;
+    this._saveDraft();
     this.focusInput();
   }
 }

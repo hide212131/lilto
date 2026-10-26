@@ -68,7 +68,7 @@ test("lilt-app が通知クリックで対象セッションを開く", () => {
   assert.match(content, /private async _openConversation\(conversationId: string\)/);
   assert.match(content, /entry\.backendSessionId === conversationId/);
   assert.match(content, /const nextSession = this\._markSessionRead\(targetSessionId\)/);
-  assert.match(content, /this\._currentSessionId = nextSession\.id/);
+  assert.match(content, /this\._activateSession\(nextSession\.id\)/);
 });
 
 test("lilt-app が App Server 会話一覧を正規化して updatedAt 降順で保持する", () => {
