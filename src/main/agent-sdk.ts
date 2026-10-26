@@ -365,8 +365,13 @@ export async function createCodexThreadFromAppServer(options: {
     additionalDirectories: options.additionalDirectories
   });
 
+  let steerActiveTurn: ((input: string) => Promise<void>) | null = null;
   return {
     id: options.threadId ?? null,
+    async steer(input: string) {
+      if (!steerActiveTurn) throw new Error("追加指示を受け付ける実行中のターンがありません。再送信してください。");
+      await steerActiveTurn(input);
+    },
     async runStreamed(input: string, runOptions?: { signal?: AbortSignal }) {
       const client = new CodexAppServerClient({
         codexHomeDir: options.codexHomeDir ?? path.join(options.homeDir ?? process.env.HOME ?? process.cwd(), ".codex"),
@@ -447,6 +452,17 @@ export async function createCodexThreadFromAppServer(options: {
         ...(mergeCodexConfig(mcpConfig, options.config) ? { config: mergeCodexConfig(mcpConfig, options.config) } : {})
       });
       activeTurnId = typeof turnResult?.turn?.id === "string" ? turnResult.turn.id : null;
+      const steer = async (text: string) => {
+        if (closed || runOptions?.signal?.aborted || !activeTurnId) {
+          throw new Error("ターンが終了したため追加指示を送信できません。再送信してください。");
+        }
+        await client.request("turn/steer", {
+          threadId: activeThreadId,
+          expectedTurnId: activeTurnId,
+          input: [{ type: "text", text }]
+        });
+      };
+      steerActiveTurn = steer;
 
       const events = (async function* (): AsyncGenerator<ThreadEvent> {
         try {
@@ -465,6 +481,7 @@ export async function createCodexThreadFromAppServer(options: {
             }
 
             if (notification.method === "turn/completed") {
+              if (steerActiveTurn === steer) steerActiveTurn = null;
               const turn = params.turn && typeof params.turn === "object" ? params.turn as Record<string, unknown> : {};
               const status = typeof turn.status === "string" ? turn.status : "failed";
               if (status === "completed") {
@@ -529,6 +546,7 @@ export async function createCodexThreadFromAppServer(options: {
             }
           }
         } finally {
+          if (steerActiveTurn === steer) steerActiveTurn = null;
           if (runOptions?.signal) {
             runOptions.signal.removeEventListener("abort", abortHandler);
           }
@@ -572,6 +590,28 @@ export class AgentRuntime {
   private readonly sessionCache = new Map<string, CodexSession>();
   private readonly conversationThreads = new Map<string, string>();
   private currentAbortController: AbortController | null = null;
+  private readonly activeConversationRuns = new Map<string, {
+    ready: Promise<Thread | null>;
+    resolve: (thread: Thread | null) => void;
+    signal: AbortSignal;
+  }>();
+
+  async steerPrompt(text: string, conversationId: string): Promise<AgentResult> {
+    const run = this.activeConversationRuns.get(conversationId);
+    if (!run) {
+      return { ok: false, error: { code: "NO_ACTIVE_TURN", message: "実行が終了したか、追加指示を受け付けられません。再送信してください。", details: null, retryable: true } };
+    }
+    try {
+      const thread = await run.ready;
+      if (!thread?.steer || run.signal.aborted || this.activeConversationRuns.get(conversationId) !== run) {
+        return { ok: false, error: { code: "NO_ACTIVE_TURN", message: "追加指示を送信できませんでした。再送信してください。", details: null, retryable: true } };
+      }
+      await thread.steer(text);
+      return { ok: true, text: "" };
+    } catch (error) {
+      return { ok: false, error: { code: "STEER_FAILED", message: error instanceof Error ? error.message : String(error), details: null, retryable: true } };
+    }
+  }
 
   get isBusy(): boolean {
     return this.currentAbortController !== null;
@@ -730,11 +770,20 @@ export class AgentRuntime {
     const restoreProxyEnv = withScopedProxyEnvironment(providerSettings);
     const abortController = new AbortController();
     this.currentAbortController = abortController;
+    let resolveReady!: (thread: Thread | null) => void;
+    const ready = new Promise<Thread | null>((resolve) => { resolveReady = resolve; });
+    const activeRun = { ready, resolve: resolveReady, signal: abortController.signal };
+    const cancelReady = () => activeRun.resolve(null);
+    abortController.signal.addEventListener("abort", cancelReady, { once: true });
+    if (hooks?.conversationId && hooks.mode !== "heartbeat" && !hooks.freshContext) {
+      this.activeConversationRuns.set(hooks.conversationId, activeRun);
+    }
     try {
       const session = await this.ensureSession({
         ...options,
         threadOptions: buildSessionThreadOptions(providerSettings, this.platform)
       });
+      if (abortController.signal.aborted) throw new Error("中断しました");
       if (session.thread.id && hooks?.onLoopEvent) {
         hooks.onLoopEvent({
           type: "session_bound",
@@ -746,6 +795,7 @@ export class AgentRuntime {
 
       const prompt = hooks?.mode === "heartbeat" ? text : augmentPromptForScheduler(text);
       const streamed = await session.thread.runStreamed(prompt, { signal: abortController.signal });
+      activeRun.resolve(session.thread);
       const state = {
         requestId: hooks?.requestId ?? "request",
         conversationId: hooks?.conversationId,
@@ -779,6 +829,11 @@ export class AgentRuntime {
       }
       throw error;
     } finally {
+      abortController.signal.removeEventListener("abort", cancelReady);
+      activeRun.resolve(null);
+      if (hooks?.conversationId && this.activeConversationRuns.get(hooks.conversationId) === activeRun) {
+        this.activeConversationRuns.delete(hooks.conversationId);
+      }
       restoreProxyEnv();
       if (this.currentAbortController === abortController) {
         this.currentAbortController = null;
@@ -806,43 +861,74 @@ export class AgentRuntime {
 
       if (process.env.LILTO_E2E_MOCK === "1") {
         await runProxyPrecheckIfEnabled(providerSettings);
-        if (hooks?.onLoopEvent) {
-          hooks.onLoopEvent({
-            type: "session_bound",
-            requestId: hooks.requestId,
-            conversationId: hooks.conversationId,
-            agentSessionId: hooks.conversationId ?? "e2e-mock-session"
+        const controller = new AbortController();
+        this.currentAbortController = controller;
+        const additions: string[] = [];
+        const mockThread: Thread = {
+          id: hooks?.conversationId ?? "e2e-mock-session",
+          async steer(input) { additions.push(input); },
+          async runStreamed() { return { events: (async function* () {})() }; }
+        };
+        const activeRun = { ready: Promise.resolve(mockThread), resolve: () => {}, signal: controller.signal };
+        const conversationId = hooks?.mode !== "heartbeat" && !hooks?.freshContext ? hooks?.conversationId : undefined;
+        if (conversationId) this.activeConversationRuns.set(conversationId, activeRun);
+        try {
+          if (hooks?.onLoopEvent) {
+            hooks.onLoopEvent({
+              type: "session_bound",
+              requestId: hooks.requestId,
+              conversationId: hooks.conversationId,
+              agentSessionId: hooks.conversationId ?? "e2e-mock-session"
+            });
+            hooks.onLoopEvent({
+              type: "tool_execution_start",
+              requestId: hooks.requestId,
+              toolCallId: "e2e-read-file",
+              toolName: "shell",
+              args: { command: "Running command: read_file" }
+            });
+            hooks.onLoopEvent({
+              type: "tool_execution_end",
+              requestId: hooks.requestId,
+              toolCallId: "e2e-read-file",
+              toolName: "shell",
+              isError: false
+            });
+            hooks.onLoopEvent({
+              type: "tool_execution_start",
+              requestId: hooks.requestId,
+              toolCallId: "e2e-run-terminal",
+              toolName: "shell",
+              args: { command: "Running command: run_in_terminal" }
+            });
+            hooks.onLoopEvent({
+              type: "tool_execution_end",
+              requestId: hooks.requestId,
+              toolCallId: "e2e-run-terminal",
+              toolName: "shell",
+              isError: false
+            });
+          }
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(finish, Number(process.env.LILTO_E2E_TURN_DELAY_MS) || 0);
+            function finish() {
+              clearTimeout(timer);
+              controller.signal.removeEventListener("abort", finish);
+              resolve();
+            }
+            controller.signal.addEventListener("abort", finish, { once: true });
           });
-          hooks.onLoopEvent({
-            type: "tool_execution_start",
-            requestId: hooks.requestId,
-            toolCallId: "e2e-read-file",
-            toolName: "shell",
-            args: { command: "Running command: read_file" }
-          });
-          hooks.onLoopEvent({
-            type: "tool_execution_end",
-            requestId: hooks.requestId,
-            toolCallId: "e2e-read-file",
-            toolName: "shell",
-            isError: false
-          });
-          hooks.onLoopEvent({
-            type: "tool_execution_start",
-            requestId: hooks.requestId,
-            toolCallId: "e2e-run-terminal",
-            toolName: "shell",
-            args: { command: "Running command: run_in_terminal" }
-          });
-          hooks.onLoopEvent({
-            type: "tool_execution_end",
-            requestId: hooks.requestId,
-            toolCallId: "e2e-run-terminal",
-            toolName: "shell",
-            isError: false
-          });
+          if (controller.signal.aborted) {
+            return { ok: false, error: { code: "ABORTED", message: "中断しました", details: null, retryable: false } };
+          }
+          const suffix = additions.length ? ` 追加指示: ${additions.join(" / ")}` : "";
+          return { ok: true, text: `[E2E_MOCK_FINAL] 要求「${text}」を処理し、複数コマンドを実行して回答しました。${suffix}` };
+        } finally {
+          if (conversationId && this.activeConversationRuns.get(conversationId) === activeRun) {
+            this.activeConversationRuns.delete(conversationId);
+          }
+          if (this.currentAbortController === controller) this.currentAbortController = null;
         }
-        return { ok: true, text: `[E2E_MOCK_FINAL] 要求「${text}」を処理し、複数コマンドを実行して回答しました。` };
       }
 
       const runOptionsBase = { cwd: this.workspaceDir };

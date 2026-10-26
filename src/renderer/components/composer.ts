@@ -208,8 +208,8 @@ export class LiltComposer extends LitElement {
       <div class="composer-wrap">
         <div class="composer">
           <textarea
-            placeholder="Type a message..."
-            .disabled=${this.disabled && !this.isSending}
+            placeholder=${this.isSending ? "処理中の Agent に追加の指示を送信..." : "Type a message..."}
+            .disabled=${this.disabled}
             @input=${this._saveDraft}
             @compositionstart=${this._onCompositionStart}
             @compositionend=${this._onCompositionEnd}
@@ -244,7 +244,8 @@ export class LiltComposer extends LitElement {
               </button>
               ${this.isSending
                 ? html`<button class="btn-abort" @click=${this._onAbort}>中断</button>`
-                : html`<button .disabled=${this.disabled} @click=${this._onSend}>送信</button>`}
+                : null}
+              <button .disabled=${this.disabled} @click=${this._onSend}>${this.isSending ? "追加指示を送信" : "送信"}</button>
             </div>
           </div>
         </div>
@@ -333,7 +334,7 @@ export class LiltComposer extends LitElement {
   }
 
   private _onSend() {
-    if (this.disabled || this.isSending) return;
+    if (this.disabled) return;
     void this._cancelRecording();
     const text = this._textarea.value.trim();
     if (!text) return;

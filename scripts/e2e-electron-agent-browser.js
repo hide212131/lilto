@@ -6,6 +6,7 @@ const os = require("node:os");
 const assert = require("node:assert/strict");
 const { verifyLinkNavigation } = require("./verify-link-navigation");
 const { verifyComposerDrafts } = require("./verify-composer-drafts");
+const { verifyConversationSteering } = require("./verify-conversation-steering");
 const { verifyToolGroups } = require("./verify-tool-groups");
 const {
   collectMessages,
@@ -405,6 +406,7 @@ async function main() {
   const electronEnv = {
     ...process.env,
     LILTO_E2E_MOCK: "1",
+    LILTO_E2E_TURN_DELAY_MS: "2500",
     LILTO_PROVIDER_SETTINGS_PATH: mockProviderSettingsPath,
     HTTP_PROXY: "",
     http_proxy: "",
@@ -613,6 +615,7 @@ async function main() {
     if (countAfterReset !== 0) throw new Error(`Expected cleared messages after new session, got: ${countAfterReset}`);
     if (await isNewSessionDisabled(page)) throw new Error("New session button should be enabled after sending");
     console.log("✓ New session reset cleared conversation");
+    await verifyConversationSteering(page);
     await verifyComposerDrafts(page);
 
     await page.evaluate(() => {

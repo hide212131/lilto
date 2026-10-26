@@ -509,7 +509,7 @@ export class LiltApp extends LitElement {
   }
 
   private _canSend(): boolean {
-    if (this.isSending) return false;
+    if (this.isSending && this._currentSessionId !== this._pendingConversationId) return false;
     if (this.providerSettings.activeProvider === "oauth") {
       return (
         this.authState?.phase === "authenticated" &&
@@ -893,6 +893,31 @@ export class LiltApp extends LitElement {
 
   private async _onSendMessage(e: CustomEvent<{ text: string }>) {
     const text = e.detail.text;
+    if (this.isSending && text.trim()) {
+      const conversationId = this._pendingConversationId;
+      if (!conversationId || this._currentSessionId !== conversationId) return;
+      const messageId = this._appendMessageToSession(conversationId, {
+        id: this._nextMessageId(), role: "user", text
+      });
+      // Keep the eventual answer after the additional user instructions.
+      const movePendingLast = (messages: Message[]) => [
+        ...messages.filter((message) => message.id !== this._pendingAssistantMessageId),
+        ...messages.filter((message) => message.id === this._pendingAssistantMessageId)
+      ];
+      this._updateSession(conversationId, (session) => ({ ...session, messages: movePendingLast(session.messages) }));
+      this.messages = movePendingLast(this.messages);
+      try {
+        const result = await window.lilto.steerPrompt(text, conversationId);
+        if (!result.ok) throw new Error(result.error.message);
+      } catch (error) {
+        this._removeSessionMessage(conversationId, messageId);
+        this._appendMessageToSession(conversationId, {
+          id: this._nextMessageId(), role: "error", text: `追加指示を送信できませんでした: ${error instanceof Error ? error.message : String(error)}\n\n未送信の指示: ${text}`
+        });
+        if (this._currentSessionId === conversationId) this._composer?.restoreDraft(text);
+      }
+      return;
+    }
     if (!this._canSend() || !text) {
       if (!this._canSend()) {
         this._addMessage("system",
@@ -917,6 +942,7 @@ export class LiltApp extends LitElement {
   }
 
   private async _onRetryMessage(e: CustomEvent<{ messageId: string; text: string }>) {
+    if (this.isSending) return;
     if (!this._canSend()) return;
     const { messageId, text } = e.detail;
     const idx = this.messages.findIndex((m) => m.id === messageId);
