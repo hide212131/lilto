@@ -39,6 +39,7 @@ export function registerAgentConversationIpcHandlers({
   conversationHistory: ConversationHistoryService;
 }): void {
   const logger = createLogger("ipc");
+  const preparingRuns = new Map<string, { aborted: boolean; ready: Promise<void>; resolve: () => void }>();
 
   ipcMain.handle("agent:steerPrompt", async (_event, payload: unknown) => {
     const validation = validatePrompt(payload);
@@ -47,7 +48,14 @@ export function registerAgentConversationIpcHandlers({
     if (!conversationId) {
       return { ok: false, error: { code: "INVALID_REQUEST", message: "conversationId は必須です" } };
     }
+    const preparing = preparingRuns.get(conversationId);
     const normalized = await normalizePromptPluginMentions(text, pluginService);
+    if (preparing) {
+      await preparing.ready;
+      if (preparing.aborted || preparingRuns.get(conversationId) !== preparing) {
+        return { ok: false, error: { code: "NO_ACTIVE_TURN", message: "実行が終了したか、中断されました。再送信してください。" } };
+      }
+    }
     return agentRuntime.steerPrompt(normalized, conversationId);
   });
 
@@ -73,14 +81,32 @@ export function registerAgentConversationIpcHandlers({
     const freshContext = typeof (payload as { freshContext?: unknown }).freshContext === "boolean"
       ? (payload as { freshContext: boolean }).freshContext
       : false;
-    const text = await normalizePromptPluginMentions(originalText, pluginService);
+    let resolveReady!: () => void;
+    const ready = new Promise<void>((resolve) => { resolveReady = resolve; });
+    const preparation = { aborted: false, ready, resolve: resolveReady };
+    if (!silent && conversationId) {
+      if (preparingRuns.has(conversationId)) {
+        return { ok: false, error: { code: "CONVERSATION_BUSY", message: "この会話は実行中です。追加指示として送信してください。" } };
+      }
+      preparingRuns.set(conversationId, preparation);
+    }
     const requestId = randomUUID();
     if (!silent) {
       broadcastLoopEvent({ type: "run_start", requestId, conversationId });
     }
     try {
+      // Abort can settle the invoke even if plugin discovery is still pending.
+      const text = await Promise.race([
+        normalizePromptPluginMentions(originalText, pluginService),
+        preparation.ready.then(() => originalText)
+      ]);
+      if (preparation.aborted) {
+        const error = { code: "ABORTED", message: "中断しました" };
+        if (!silent) broadcastLoopEvent({ type: "run_end", requestId, status: "aborted" });
+        return { ok: false, requestId, error };
+      }
       const providerSettings = providerSettingsService.getState();
-      const result = await agentRuntime.submitPrompt(text, providerSettings, {
+      const response = agentRuntime.submitPrompt(text, providerSettings, {
         requestId,
         conversationId,
         backendSessionId,
@@ -91,6 +117,8 @@ export function registerAgentConversationIpcHandlers({
           }
         }
       });
+      preparation.resolve();
+      const result = await response;
       if (!result.ok) {
         if (!silent) {
           broadcastLoopEvent({
@@ -131,11 +159,24 @@ export function registerAgentConversationIpcHandlers({
         broadcastLoopEvent({ type: "run_end", requestId, status: "failed", errorMessage: message });
       }
       throw error;
+    } finally {
+      preparation.resolve();
+      if (conversationId && preparingRuns.get(conversationId) === preparation) preparingRuns.delete(conversationId);
     }
   });
 
-  ipcMain.handle("agent:abort", () => {
-    agentRuntime.abort();
+  ipcMain.handle("agent:abort", (_event, payload: unknown) => {
+    if (!payload || typeof payload !== "object" || typeof (payload as { conversationId?: unknown }).conversationId !== "string"
+      || !(payload as { conversationId: string }).conversationId.trim()) {
+      return { ok: false, error: { code: "INVALID_REQUEST", message: "conversationId は必須です" } };
+    }
+    const conversationId = (payload as { conversationId: string }).conversationId;
+    const preparing = preparingRuns.get(conversationId);
+    if (preparing) {
+      preparing.aborted = true;
+      preparing.resolve();
+    }
+    agentRuntime.abort(conversationId);
     return { ok: true };
   });
 

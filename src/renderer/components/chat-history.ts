@@ -6,6 +6,7 @@ import { extractActivityPreview, type ActivityPreview } from "../sidebar-activit
 @customElement("lilt-chat-history")
 export class LiltChatHistory extends LitElement {
   @property({ type: Array }) sessions: Session[] = [];
+  @property({ attribute: false }) runningSessionIds: string[] = [];
   @property() activeSessionId: string | null = null;
   @property({ type: Boolean }) activityMode = false;
   @property({ attribute: false }) activityPreviews: Record<string, ActivityPreview> = {};
@@ -93,6 +94,7 @@ export class LiltChatHistory extends LitElement {
       font-size: 12px;
       line-height: 1.5;
     }
+    .run-status { font-size: 10px; color: #765600; white-space: nowrap; }
     .session-item {
       position: relative;
       display: flex;
@@ -249,6 +251,7 @@ export class LiltChatHistory extends LitElement {
           @click=${() => this._selectSession(session)}
           @keydown=${(event: KeyboardEvent) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); this._selectSession(session); } }}>
         <div class="activity-topline"><span class="activity-title">${session.title}</span><time class="activity-date" title=${date.toLocaleString()}>${this._formatDate(date)}</time>
+          ${this._renderRunStatus(session.id)}
           ${session.hasUnread && session.id !== this.activeSessionId ? html`<span class="unread-dot" aria-label="未読"></span>` : ""}</div>
         <div class="activity-preview">${text || (matchingPreview?.status === "error" ? "内容を取得できませんでした" : matchingPreview?.status === "empty" ? "まだメッセージがありません" : "読み込み中…")}</div>
         </div>
@@ -263,6 +266,12 @@ export class LiltChatHistory extends LitElement {
     this.dispatchEvent(new CustomEvent("activity-preview-needed", { detail: { session }, bubbles: true, composed: true }));
   }
 
+  private _renderRunStatus(sessionId: string) {
+    return this.runningSessionIds.includes(sessionId)
+      ? html`<span class="run-status" aria-label="実行中">実行中</span>`
+      : "";
+  }
+
   private _renderItem(session: Session) {
     const isActive = session.id === this.activeSessionId;
     const isEditing = this._editingId === session.id;
@@ -271,6 +280,7 @@ export class LiltChatHistory extends LitElement {
     const menuOpen = this._menuOpenId === session.id;
     return html`
       <div
+        data-session-id=${session.id}
         class="session-item ${isActive ? "active" : ""} ${isEditing ? "editing" : ""}"
         @click=${() => !isEditing && this._selectSession(session)}
       >
@@ -290,6 +300,7 @@ export class LiltChatHistory extends LitElement {
             `
           }
         </div>
+        ${this._renderRunStatus(session.id)}
         ${session.hasUnread && !isActive && !isEditing
           ? html`<span class="unread-dot" aria-label="未読"></span>`
           : ""}

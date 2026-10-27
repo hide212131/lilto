@@ -53,7 +53,13 @@ export class LiltComposer extends LitElement {
     return this._textarea?.value ?? "";
   }
 
-  restoreDraft(text: string) {
+  restoreDraft(text: string, sessionId = this._draftSessionId) {
+    if (sessionId !== this._draftSessionId) {
+      const key = this._draftKey(sessionId);
+      const draft = localStorage.getItem(key) ?? "";
+      localStorage.setItem(key, draft ? `${text}\n${draft}` : text);
+      return;
+    }
     const draft = this.getDraftText();
     this._textarea.value = draft ? `${text}\n${draft}` : text;
     this._saveDraft();

@@ -40,6 +40,19 @@ type CompletedForegroundResponse = {
   toolCallIds: Set<string>;
 };
 
+type ConversationRun = {
+  conversationId: string;
+  pendingAssistantMessageId: string;
+  requestId: string | null;
+  responseReceived: boolean;
+  toolCallIds: Set<string>;
+  statusLines: string[];
+  thinkingText: string;
+  toolProgress: AssistantToolProgress[];
+  pendingLabel: string;
+  loopState: LoopState;
+};
+
 @customElement("lilt-app")
 export class LiltApp extends LitElement {
   @property({ type: Object }) authState: AuthState | null = null;
@@ -96,17 +109,13 @@ export class LiltApp extends LitElement {
   private _unsubscribeOpenConversationListener: (() => void) | null = null;
   private _unsubscribeAppUpdateListener: (() => void) | null = null;
   private _unsubscribeAppUpdateOpenListener: (() => void) | null = null;
-  private _pendingAssistantMessageId: string | null = null;
-  private _pendingConversationId: string | null = null;
-  private _activeRequestId: string | null = null;
+  private _conversationRuns = new Map<string, ConversationRun>();
+  private _conversationLoopStates = new Map<string, LoopState>();
   private _completedForegroundRequests = new Map<string, CompletedForegroundResponse | null>();
-  private _foregroundResponseReceived = false;
-  private _foregroundToolCallIds = new Set<string>();
   private _messageSeq = 0;
-  private _statusLines: string[] = [];
-  private _thinkingText = "";
-  private _toolProgress: AssistantToolProgress[] = [];
-  private _pendingLabel = "";
+  private _navigationVersion = 0;
+  private _creatingConversation = false;
+
   private _currentSessionId: string | null = null;
   private _seenSchedulerNotifications = new Map<string, number>();
   private _activityPreviewLoader: ActivityPreviewLoader | null = null;
@@ -284,16 +293,18 @@ export class LiltApp extends LitElement {
     }
   }
 
-  private _resetForegroundRequestState() {
-    this._pendingAssistantMessageId = null;
-    this._pendingConversationId = null;
-    this._activeRequestId = null;
-    this._foregroundResponseReceived = false;
-    this._foregroundToolCallIds.clear();
-    this._statusLines = [];
-    this._thinkingText = "";
-    this._toolProgress = [];
-    this._pendingLabel = "";
+  private _syncSelectedRun() {
+    const run = this._currentSessionId ? this._conversationRuns.get(this._currentSessionId) : undefined;
+    this.isSending = Boolean(run);
+    this.loopState = run?.loopState
+      ?? (this._currentSessionId ? this._conversationLoopStates.get(this._currentSessionId) : undefined)
+      ?? createInitialLoopState();
+    // Background completion can change the sidebar without changing selected state.
+    this.requestUpdate();
+  }
+
+  private _restoreConversationDraft(conversationId: string, text: string) {
+    this._composer.restoreDraft(text, conversationId);
   }
 
   private async _loadSessions() {
@@ -509,7 +520,6 @@ export class LiltApp extends LitElement {
   }
 
   private _canSend(): boolean {
-    if (this.isSending && this._currentSessionId !== this._pendingConversationId) return false;
     if (this.providerSettings.activeProvider === "oauth") {
       return (
         this.authState?.phase === "authenticated" &&
@@ -550,7 +560,7 @@ export class LiltApp extends LitElement {
     return html`
       <lilt-top-bar
         statusText=${this._statusText()}
-        .newSessionDisabled=${this.isSending}
+        .newSessionDisabled=${this._creatingConversation}
         .sidebarOpen=${this.sidebarOpen}
         @new-session=${this._onStartNewSession}
         @open-settings=${() => { this.settingsOpen = true; }}
@@ -563,6 +573,7 @@ export class LiltApp extends LitElement {
           style=${this.sidebarOpen ? `width: ${this.sidebarWidth}px; min-width: ${this.sidebarWidth}px;` : ""}
           .sessions=${this.sessions}
           .activeSessionId=${this.activeSessionId}
+          .runningSessionIds=${[...this._conversationRuns.keys()]}
           .activityMode=${this.sidebarActivityMode}
           .activityPreviews=${this.activityPreviews}
           @toggle-activity=${() => { this.sidebarActivityMode = !this.sidebarActivityMode; }}
@@ -638,18 +649,18 @@ export class LiltApp extends LitElement {
         ${status === "downloading" ? html`<progress max="100" value=${state.progress ?? 0}></progress>` : ""}
         <div class="update-actions">
           ${status === "available" ? html`<button @click=${() => void window.lilto.downloadAppUpdate().catch(() => undefined)}>更新をダウンロード</button>` : ""}
-          ${status === "downloaded" ? html`<button ?disabled=${this.isSending} @click=${() => void this._installAppUpdate()}>再起動してインストール</button>` : ""}
+          ${status === "downloaded" ? html`<button ?disabled=${this._conversationRuns.size > 0} @click=${() => void this._installAppUpdate()}>再起動してインストール</button>` : ""}
           ${status === "error" ? html`<button @click=${() => void window.lilto.checkAppUpdate()}>再試行</button>` : ""}
           ${status === "idle" || status === "unsupported" ? html`<button @click=${() => void window.lilto.checkAppUpdate()}>更新を確認</button>` : ""}
           <button ?disabled=${status === "installing"} @click=${() => { this.updateDialogOpen = false; }}>${status === "downloaded" || status === "preparing-install" ? "後で" : "閉じる"}</button>
         </div>
-        ${this.isSending ? html`<p>処理が完了してからインストールしてください。</p>` : ""}
+        ${this._conversationRuns.size > 0 ? html`<p>処理が完了してからインストールしてください。</p>` : ""}
       </section>
     </div>`;
   }
 
   private async _installAppUpdate() {
-    if (this.isSending) return;
+    if (this._conversationRuns.size > 0) return;
     try {
       await window.lilto.installAppUpdate();
     } catch {
@@ -696,6 +707,7 @@ export class LiltApp extends LitElement {
   }
 
   private async _openConversation(conversationId: string) {
+    if (this._creatingConversation) return;
     const session = this.sessions.find((entry) =>
       entry.id === conversationId || entry.backendSessionId === conversationId
     ) ?? null;
@@ -706,6 +718,7 @@ export class LiltApp extends LitElement {
       return;
     }
 
+    const navigationVersion = ++this._navigationVersion;
     const targetSessionId = session.id;
     this._saveCurrentSession();
     const nextSession = this._markSessionRead(targetSessionId)
@@ -715,10 +728,15 @@ export class LiltApp extends LitElement {
       return;
     }
 
+    this.messages = [...nextSession.messages];
+    this._activateSession(nextSession.id);
+    if (this._conversationRuns.has(nextSession.id)) return;
     const loaded = await window.lilto.readConversation(nextSession.backendSessionId ?? nextSession.id);
+    if (navigationVersion !== this._navigationVersion) return;
+    const latestSession = this.sessions.find((entry) => entry.id === nextSession.id) ?? nextSession;
     const hydratedSession = loaded.ok
-      ? this._mergeHydratedSession(this._normalizeSession(loaded.conversation), nextSession)
-      : nextSession;
+      ? this._mergeHydratedSession(this._normalizeSession(loaded.conversation), latestSession)
+      : latestSession;
     this.sessions = this._sortSessions([
       { ...hydratedSession, hasUnread: false },
       ...this.sessions.filter((entry) => entry.id !== hydratedSession.id)
@@ -726,8 +744,7 @@ export class LiltApp extends LitElement {
 
     this.messages = [...hydratedSession.messages];
     this._activateSession(nextSession.id);
-    this.loopState = createInitialLoopState();
-    this._resetForegroundRequestState();
+    this._syncSelectedRun();
   }
 
   private _onRenameSession(e: CustomEvent<{ sessionId: string; newTitle: string }>) {
@@ -776,21 +793,21 @@ export class LiltApp extends LitElement {
     this._composer.switchDraft(sessionId, migrate);
     this._currentSessionId = sessionId;
     this.activeSessionId = sessionId;
+    this._syncSelectedRun();
     if (sessionId) localStorage.setItem("lilto.composer-active-session.v1", sessionId);
     else localStorage.removeItem("lilto.composer-active-session.v1");
   }
 
   private _onStartNewSession() {
-    if (this.isSending) return;
+    if (this._creatingConversation) return;
+    ++this._navigationVersion;
     this._saveCurrentSession();
     this.messages = [];
-    this.loopState = createInitialLoopState();
-    this._resetForegroundRequestState();
     this._activateSession(null);
   }
 
   private _onAbortRequest() {
-    void window.lilto.abortPrompt();
+    if (this._currentSessionId) void window.lilto.abortPrompt(this._currentSessionId);
   }
 
   private async _doSend(text: string) {
@@ -806,19 +823,13 @@ export class LiltApp extends LitElement {
       text: "実行開始を待っています...",
       pending: true
     });
-    this._pendingAssistantMessageId = pendingMessageId;
-    this._pendingConversationId = conversationId;
-    this._activeRequestId = null;
-    this._statusLines = [];
-    this._thinkingText = "";
-    this._toolProgress = [];
-    this._pendingLabel = "";
-    this._foregroundToolCallIds.clear();
-    this.loopState = {
-      ...createInitialLoopState(),
-      status: "running"
+    const run: ConversationRun = {
+      conversationId, pendingAssistantMessageId: pendingMessageId, requestId: null,
+      responseReceived: false, toolCallIds: new Set(), statusLines: [], thinkingText: "",
+      toolProgress: [], pendingLabel: "", loopState: { ...createInitialLoopState(), status: "running" }
     };
-    this.isSending = true;
+    this._conversationRuns.set(conversationId, run);
+    this._syncSelectedRun();
 
     try {
       const activeSession = this.sessions.find((session) => session.id === conversationId) ?? null;
@@ -828,13 +839,14 @@ export class LiltApp extends LitElement {
         activeSession?.backendSessionId ?? null
       );
       this._markForegroundResponseReceived(
+        run,
         result.requestId,
         result.ok
           ? {
               conversationId,
               messageId: pendingMessageId,
-              progress: this._buildProgress(),
-              toolCallIds: new Set(this._foregroundToolCallIds)
+              progress: this._buildProgress(run),
+              toolCallIds: new Set(run.toolCallIds)
             }
           : null,
         result.ok ? "completed" : "failed",
@@ -844,7 +856,7 @@ export class LiltApp extends LitElement {
         this._updateSessionMessage(conversationId, pendingMessageId, {
           text: result.response.text,
           pending: false,
-          progress: this._buildProgress()
+          progress: this._buildProgress(run)
         });
         await this._refreshConversation(conversationId);
         await this.updateComplete;
@@ -858,9 +870,10 @@ export class LiltApp extends LitElement {
         this._updateSessionMessage(conversationId, pendingMessageId, {
           text: "",
           pending: false,
-          progress: this._buildProgress()
+          progress: this._buildProgress(run)
         });
       } else {
+        this._restoreConversationDraft(conversationId, text);
         this._removeSessionMessage(conversationId, pendingMessageId);
         this._appendMessageToSession(conversationId, {
           id: this._nextMessageId(),
@@ -874,11 +887,12 @@ export class LiltApp extends LitElement {
           error.code === "WINDOWS_SANDBOX_SETUP_FAILED" ||
           error.code === "WINDOWS_SANDBOX_UNSUPPORTED_MODE"
         ) {
-          this.settingsOpen = true;
+          if (this._currentSessionId === conversationId) this.settingsOpen = true;
         }
       }
     } catch (err) {
-      this._markForegroundResponseReceived(undefined, null, "failed", String(err));
+      this._restoreConversationDraft(conversationId, text);
+      this._markForegroundResponseReceived(run, undefined, null, "failed", String(err));
       this._removeSessionMessage(conversationId, pendingMessageId);
       this._appendMessageToSession(conversationId, {
         id: this._nextMessageId(),
@@ -886,23 +900,29 @@ export class LiltApp extends LitElement {
         text: `UNEXPECTED: ${String(err)}`
       });
     } finally {
-      this.isSending = false;
-      this._resetForegroundRequestState();
+      this._conversationLoopStates.set(conversationId, run.loopState);
+      if (this._conversationRuns.get(conversationId) === run) this._conversationRuns.delete(conversationId);
+      this._syncSelectedRun();
     }
   }
 
   private async _onSendMessage(e: CustomEvent<{ text: string }>) {
     const text = e.detail.text;
+    if (this._creatingConversation) {
+      this._composer.restoreDraft(text);
+      return;
+    }
     if (this.isSending && text.trim()) {
-      const conversationId = this._pendingConversationId;
-      if (!conversationId || this._currentSessionId !== conversationId) return;
+      const conversationId = this._currentSessionId;
+      const run = conversationId ? this._conversationRuns.get(conversationId) : undefined;
+      if (!conversationId || !run) return;
       const messageId = this._appendMessageToSession(conversationId, {
         id: this._nextMessageId(), role: "user", text
       });
       // Keep the eventual answer after the additional user instructions.
       const movePendingLast = (messages: Message[]) => [
-        ...messages.filter((message) => message.id !== this._pendingAssistantMessageId),
-        ...messages.filter((message) => message.id === this._pendingAssistantMessageId)
+        ...messages.filter((message) => message.id !== run.pendingAssistantMessageId),
+        ...messages.filter((message) => message.id === run.pendingAssistantMessageId)
       ];
       this._updateSession(conversationId, (session) => ({ ...session, messages: movePendingLast(session.messages) }));
       this.messages = movePendingLast(this.messages);
@@ -914,7 +934,7 @@ export class LiltApp extends LitElement {
         this._appendMessageToSession(conversationId, {
           id: this._nextMessageId(), role: "error", text: `追加指示を送信できませんでした: ${error instanceof Error ? error.message : String(error)}\n\n未送信の指示: ${text}`
         });
-        if (this._currentSessionId === conversationId) this._composer?.restoreDraft(text);
+        this._restoreConversationDraft(conversationId, text);
       }
       return;
     }
@@ -932,7 +952,16 @@ export class LiltApp extends LitElement {
 
     this._addMessage("user", text);
     const title = text.slice(0, 40) + (text.length > 40 ? "…" : "");
-    const conversationId = await this._ensureConversation(title);
+    ++this._navigationVersion;
+    this._creatingConversation = true;
+    this.requestUpdate();
+    let conversationId: string | null;
+    try {
+      conversationId = await this._ensureConversation(title);
+    } finally {
+      this._creatingConversation = false;
+      this.requestUpdate();
+    }
     if (!conversationId) {
       this._composer.restoreDraft(text);
       return;
@@ -963,41 +992,28 @@ export class LiltApp extends LitElement {
       return;
     }
 
-    if (!this._shouldTrackForegroundLoopEvent(event)) {
-      return;
-    }
-
-    this.loopState = reduceLoopState(this.loopState, event);
-    this._appendProgressLineFromLoopEvent(event);
-  }
-
-  private _shouldTrackForegroundLoopEvent(event: AgentLoopEvent): boolean {
-    if (this._foregroundResponseReceived) {
-      return false;
-    }
-
-    if (this._activeRequestId) {
-      return event.requestId === this._activeRequestId;
-    }
-
-    if (!this._pendingConversationId) {
-      return false;
-    }
-
-    return event.type === "run_start" && event.conversationId === this._pendingConversationId;
+    const run = event.type === "run_start" && event.conversationId
+      ? this._conversationRuns.get(event.conversationId)
+      : [...this._conversationRuns.values()].find((entry) => entry.requestId === event.requestId);
+    if (!run || run.responseReceived) return;
+    if (run.requestId && run.requestId !== event.requestId) return;
+    run.loopState = reduceLoopState(run.loopState, event);
+    this._appendProgressLineFromLoopEvent(event, run);
+    this._syncSelectedRun();
   }
 
   private _markForegroundResponseReceived(
+    run: ConversationRun,
     requestId?: string,
     completedResponse: CompletedForegroundResponse | null = null,
     status?: LoopState["status"],
     lastError?: string | null
   ) {
-    this._foregroundResponseReceived = true;
-    const completedRequestId = requestId ?? this.loopState.requestId ?? this._activeRequestId;
+    run.responseReceived = true;
+    const completedRequestId = requestId ?? run.loopState.requestId ?? run.requestId;
     if (status) {
-      this.loopState = {
-        ...this.loopState,
+      run.loopState = {
+        ...run.loopState,
         requestId: completedRequestId,
         status,
         activeTools: [],
@@ -1205,36 +1221,36 @@ export class LiltApp extends LitElement {
     return false;
   }
 
-  private _appendProgressLineFromLoopEvent(event: AgentLoopEvent) {
-    if (!this._pendingAssistantMessageId || !this._pendingConversationId) return;
+  private _appendProgressLineFromLoopEvent(event: AgentLoopEvent, run: ConversationRun) {
+    if (!run.pendingAssistantMessageId || !run.conversationId) return;
 
     let changed = false;
     switch (event.type) {
       case "run_start":
-        this._activeRequestId = event.requestId;
-        this._attachRequestIdToPendingMessage(event.requestId);
+        run.requestId = event.requestId;
+        this._attachRequestIdToPendingMessage(event.requestId, run);
         changed = true;
         break;
       case "session_bound":
         changed = false;
         break;
       case "thinking_start":
-        if (this._statusLines.length === 0 || this._statusLines[this._statusLines.length - 1] !== "考え中...") {
-          this._statusLines = [...this._statusLines, "考え中..."];
+        if (run.statusLines.length === 0 || run.statusLines[run.statusLines.length - 1] !== "考え中...") {
+          run.statusLines = [...run.statusLines, "考え中..."];
           changed = true;
         }
         break;
       case "thinking_delta":
         if (event.delta) {
-          this._pendingLabel += event.delta;
+          run.pendingLabel += event.delta;
           changed = true;
         }
         break;
       case "thinking_end":
         {
-          const nextStatusLines = this._statusLines.filter((line) => line !== "考え中...");
-          if (nextStatusLines.length !== this._statusLines.length) {
-            this._statusLines = nextStatusLines;
+          const nextStatusLines = run.statusLines.filter((line) => line !== "考え中...");
+          if (nextStatusLines.length !== run.statusLines.length) {
+            run.statusLines = nextStatusLines;
             changed = true;
           } else {
             changed = false;
@@ -1243,29 +1259,29 @@ export class LiltApp extends LitElement {
         break;
       case "text_delta":
         if (event.delta) {
-          this._pendingLabel += event.delta;
+          run.pendingLabel += event.delta;
           changed = true;
         }
         break;
       case "tool_execution_start":
         {
-          if (this._foregroundToolCallIds.has(event.toolCallId)) {
+          if (run.toolCallIds.has(event.toolCallId)) {
             changed = false;
             break;
           }
-          this._foregroundToolCallIds.add(event.toolCallId);
+          run.toolCallIds.add(event.toolCallId);
 
           const newTool: AssistantToolProgress = { toolName: event.toolName };
           const detail = this._formatToolArgs(event.args);
           if (detail) {
             newTool.detail = detail;
           }
-          const label = this._pendingLabel.trim();
+          const label = run.pendingLabel.trim();
           if (label) {
             newTool.label = label;
           }
-          this._pendingLabel = "";
-          this._toolProgress = [...this._toolProgress, newTool];
+          run.pendingLabel = "";
+          run.toolProgress = [...run.toolProgress, newTool];
           changed = true;
         }
         break;
@@ -1274,10 +1290,10 @@ export class LiltApp extends LitElement {
         break;
       case "run_end":
         if (event.status === "aborted") {
-          this._statusLines = [...this._statusLines, "中断しました"];
+          run.statusLines = [...run.statusLines, "中断しました"];
           changed = true;
         } else if (event.status === "failed") {
-          this._statusLines = [...this._statusLines, `実行失敗: ${event.errorMessage ?? "不明なエラー"}`];
+          run.statusLines = [...run.statusLines, `実行失敗: ${event.errorMessage ?? "不明なエラー"}`];
           changed = true;
         }
         break;
@@ -1287,26 +1303,26 @@ export class LiltApp extends LitElement {
 
     if (!changed) return;
 
-    this._updateSessionMessage(this._pendingConversationId, this._pendingAssistantMessageId, {
+    this._updateSessionMessage(run.conversationId, run.pendingAssistantMessageId, {
       text: "実行中...",
       pending: true,
-      progress: this._buildProgress()
+      progress: this._buildProgress(run)
     });
   }
 
-  private _buildProgress(): AssistantProgress | undefined {
-    const hasStatus = this._statusLines.length > 0;
-    const hasThinking = this._thinkingText.trim().length > 0;
-    const hasTools = this._toolProgress.length > 0;
-    const hasPendingLabel = this._pendingLabel.trim().length > 0;
+  private _buildProgress(run: ConversationRun): AssistantProgress | undefined {
+    const hasStatus = run.statusLines.length > 0;
+    const hasThinking = run.thinkingText.trim().length > 0;
+    const hasTools = run.toolProgress.length > 0;
+    const hasPendingLabel = run.pendingLabel.trim().length > 0;
 
     if (!hasStatus && !hasThinking && !hasTools && !hasPendingLabel) return undefined;
 
     return {
-      statusLines: [...this._statusLines],
-      thinkingText: hasThinking ? this._thinkingText : undefined,
-      tools: [...this._toolProgress],
-      pendingLabel: hasPendingLabel ? this._pendingLabel : undefined
+      statusLines: [...run.statusLines],
+      thinkingText: hasThinking ? run.thinkingText : undefined,
+      tools: [...run.toolProgress],
+      pendingLabel: hasPendingLabel ? run.pendingLabel : undefined
     };
   }
 
@@ -1333,7 +1349,7 @@ export class LiltApp extends LitElement {
     const msg: Message = {
       id: this._nextMessageId(),
       createdAt: Date.now(),
-      requestId: this._activeRequestId ?? undefined,
+      requestId: undefined,
       role,
       text,
       progress
@@ -1346,7 +1362,7 @@ export class LiltApp extends LitElement {
     const msg: Message = {
       id: this._nextMessageId(),
       createdAt: Date.now(),
-      requestId: this._activeRequestId ?? undefined,
+      requestId: undefined,
       role,
       text,
       pending: true,
@@ -1356,9 +1372,9 @@ export class LiltApp extends LitElement {
     return msg.id;
   }
 
-  private _attachRequestIdToPendingMessage(requestId: string) {
-    if (!this._pendingAssistantMessageId || !this._pendingConversationId) return;
-    this._updateSessionMessage(this._pendingConversationId, this._pendingAssistantMessageId, { requestId });
+  private _attachRequestIdToPendingMessage(requestId: string, run: ConversationRun) {
+    if (!run.pendingAssistantMessageId || !run.conversationId) return;
+    this._updateSessionMessage(run.conversationId, run.pendingAssistantMessageId, { requestId });
   }
 
   private _nextMessageId(): string {
