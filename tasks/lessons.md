@@ -1,5 +1,11 @@
 # Lessons
 
+## 2026-10-27 Parallel conversation ownership
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| 会話ごとの並行実行を追加し、追加指示・中断・下書き復元を分離する。 | 選択中の会話を実行の所有者にすると、切替後の進捗や finally が別会話の状態を更新する。プロセス全体の proxy 環境変数変更も並行処理に干渉する。 | 実行状態は会話 ID、イベントは request ID、非同期処理は開始時の実行オブジェクトで所有させる。切替では状態を破棄せず、中断に会話 ID を必須とする。背景失敗時は元会話の下書きを復元する。実画面で2会話の同時実行・切替・片方だけの中断・追加指示・背景失敗を確認してから最終 E2E を行う。 |
+
 ## 2026-10-26 Keep same-turn steering separate from parallel conversations
 
 | Change | Mistake/Context | Rule to repeat |

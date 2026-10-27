@@ -161,7 +161,7 @@ declare global {
         | { ok: true; requestId: string; response: { text: string } }
         | { ok: false; requestId?: string; error?: { code?: string; message?: string; retryable?: boolean } }
       >;
-      abortPrompt: () => Promise<{ ok: boolean }>;
+      abortPrompt: (conversationId: string) => Promise<{ ok: boolean }>;
       steerPrompt: (text: string, conversationId: string) => Promise<
         | { ok: true }
         | { ok: false; error: { code: string; message: string } }

@@ -27,7 +27,11 @@ async function verifyConversationSteering(page) {
   // still shows a running turn although the backend has already completed it.
   await page.evaluate(() => {
     const app = document.querySelector("lilt-app");
-    app._pendingConversationId = app._currentSessionId;
+    app._conversationRuns.set(app._currentSessionId, {
+      conversationId: app._currentSessionId, pendingAssistantMessageId: "completed-race",
+      requestId: null, responseReceived: false, toolCallIds: new Set(), statusLines: [],
+      thinkingText: "", toolProgress: [], pendingLabel: "", loopState: app.loopState
+    });
     app.isSending = true;
   });
   await input.fill("終了直後の追加指示");
@@ -40,7 +44,7 @@ async function verifyConversationSteering(page) {
   await page.evaluate(() => {
     const app = document.querySelector("lilt-app");
     app.isSending = false;
-    app._pendingConversationId = null;
+    app._conversationRuns.delete(app._currentSessionId);
   });
   await input.fill("");
 

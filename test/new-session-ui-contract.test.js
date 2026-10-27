@@ -14,9 +14,9 @@ test("lilt-app が new-session で会話状態を初期化する", () => {
   assert.match(content, /@new-session=\$\{this\._onStartNewSession\}/);
   assert.match(content, /messages = \[\]/);
   assert.match(content, /loopState = createInitialLoopState\(\)/);
-  assert.match(content, /_pendingAssistantMessageId = null/);
-  assert.match(content, /_pendingConversationId = null/);
-  assert.match(content, /_statusLines = \[\]/);
+  assert.match(content, /_conversationRuns = new Map/);
+  assert.match(content, /this\._activateSession\(null\)/);
+  assert.match(content, /\.newSessionDisabled=\$\{this\._creatingConversation\}/);
 });
 
 test("lilt-app は送信開始時の session に assistant 応答を書き戻す", () => {
@@ -30,7 +30,7 @@ test("lilt-app は送信開始時の session に assistant 応答を書き戻す
 test("lilt-app が user 送信前と retry 巻き戻し直後に session snapshot を保存する", () => {
   const content = fs.readFileSync("src/renderer/app.ts", "utf8");
   assert.match(content, /this\._addMessage\("user", text\);/);
-  assert.match(content, /const conversationId = await this\._ensureConversation\(title\);/);
+  assert.match(content, /conversationId = await this\._ensureConversation\(title\);/);
   assert.match(content, /this\._saveCurrentSession\(\);\s*await this\._doSend\(text\);/s);
   assert.match(content, /this\.messages = this\.messages\.slice\(0, idx \+ 1\);\s*this\._saveCurrentSession\(\);\s*await this\._doSend\(text\);/s);
 });

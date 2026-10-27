@@ -987,9 +987,100 @@ test("起動準備中の中断は追加指示の待機も解消し、新しい�
   });
   const response = runtime.submitPrompt("first", createProviderSettings(), { requestId: "req", conversationId: "a" });
   const steer = runtime.steerPrompt("second", "a");
-  runtime.abort();
+  runtime.abort("a");
   assert.equal((await steer).error.code, "NO_ACTIVE_TURN");
   ready();
   assert.equal((await response).error.code, "ABORTED");
   assert.equal(starts, 0);
+});
+
+function deferredRun() {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+test("2会話の実行・進捗・追加指示・中断は分離し、片方の終了後も busy を保持する", async () => {
+  const started = { a: deferredRun(), b: deferredRun() };
+  const finish = { a: deferredRun(), b: deferredRun() };
+  const signals = {};
+  const additions = { a: [], b: [] };
+  const events = { a: [], b: [] };
+  const environments = {};
+  const runtime = new AgentRuntime({
+    authService: createAuthService(),
+    createSession: async (options) => {
+      const id = options.schedulerSessionId;
+      environments[id] = options.environment;
+      return {
+        id,
+        async steer(text) { additions[id].push(text); },
+        async runStreamed(_text, { signal }) {
+          signals[id] = signal;
+          signal.addEventListener("abort", () => finish[id].resolve(), { once: true });
+          started[id].resolve();
+          return { events: (async function* () {
+            yield { type: "item.started", item: { id: `${id}-tool`, type: "command_execution", command: `tool-${id}`, status: "in_progress" } };
+            await finish[id].promise;
+            yield { type: "item.completed", item: { id: `${id}-answer`, type: "agent_message", text: `${id}: ${additions[id].join("/")}` } };
+          })() };
+        }
+      };
+    }
+  });
+  const a = runtime.submitPrompt("A", createProviderSettings(), { requestId: "req-a", conversationId: "a", onLoopEvent: (e) => events.a.push(e) });
+  const b = runtime.submitPrompt("B", createProviderSettings(), { requestId: "req-b", conversationId: "b", onLoopEvent: (e) => events.b.push(e) });
+  await Promise.all([started.a.promise, started.b.promise]);
+  assert.equal(runtime.isBusy, true);
+  assert.equal((await runtime.submitPrompt("duplicate", createProviderSettings(), { requestId: "duplicate", conversationId: "a" })).error.code, "CONVERSATION_BUSY");
+  assert.equal((await runtime.steerPrompt("only A", "a")).ok, true);
+  assert.equal((await runtime.steerPrompt("only B", "b")).ok, true);
+  runtime.abort("unknown");
+  assert.equal(signals.a.aborted, false);
+  runtime.abort("a");
+  assert.equal((await a).error.code, "ABORTED");
+  assert.equal(signals.b.aborted, false);
+  assert.equal(runtime.isBusy, true);
+  assert.equal((await runtime.steerPrompt("B continues", "b")).ok, true);
+  finish.b.resolve();
+  assert.equal((await b).text, "b: only B/B continues");
+  assert.equal(runtime.isBusy, false);
+  assert.deepEqual(additions.a, ["only A"]);
+  assert.ok(events.a.every((e) => e.requestId === "req-a"));
+  assert.ok(events.b.every((e) => e.requestId === "req-b"));
+  assert.ok(events.a.some((e) => e.type === "tool_execution_start" && e.toolCallId === "a-tool"));
+  assert.ok(events.b.some((e) => e.type === "tool_execution_start" && e.toolCallId === "b-tool"));
+  assert.equal(environments.a.HTTP_PROXY, "");
+});
+
+test("別会話の準備失敗は進行中の応答・追加指示・busy 状態に影響しない", async () => {
+  const started = deferredRun();
+  const finish = deferredRun();
+  let instructions = "";
+  const runtime = new AgentRuntime({
+    authService: createAuthService(),
+    createSession: async ({ schedulerSessionId }) => {
+      if (schedulerSessionId === "bad") throw new Error("isolated startup failure");
+      return {
+        id: schedulerSessionId,
+        async steer(text) { instructions = text; },
+        async runStreamed() {
+          started.resolve();
+          return { events: (async function* () {
+            await finish.promise;
+            yield { type: "item.completed", item: { id: "answer", type: "agent_message", text: instructions } };
+          })() };
+        }
+      };
+    }
+  });
+  const good = runtime.submitPrompt("good", createProviderSettings(), { requestId: "good", conversationId: "good" });
+  await started.promise;
+  const bad = await runtime.submitPrompt("bad", createProviderSettings(), { requestId: "bad", conversationId: "bad" });
+  assert.equal(bad.ok, false);
+  assert.equal(runtime.isBusy, true);
+  assert.equal((await runtime.steerPrompt("still working", "good")).ok, true);
+  finish.resolve();
+  assert.equal((await good).text, "still working");
+  assert.equal(runtime.isBusy, false);
 });

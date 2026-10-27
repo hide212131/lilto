@@ -6,6 +6,7 @@ const os = require("node:os");
 const assert = require("node:assert/strict");
 const { verifyLinkNavigation } = require("./verify-link-navigation");
 const { verifyComposerDrafts } = require("./verify-composer-drafts");
+const { verifyParallelConversations } = require("./verify-parallel-conversations");
 const { verifyConversationSteering } = require("./verify-conversation-steering");
 const { verifyToolGroups } = require("./verify-tool-groups");
 const {
@@ -406,7 +407,7 @@ async function main() {
   const electronEnv = {
     ...process.env,
     LILTO_E2E_MOCK: "1",
-    LILTO_E2E_TURN_DELAY_MS: "2500",
+    LILTO_E2E_TURN_DELAY_MS: "6000",
     LILTO_PROVIDER_SETTINGS_PATH: mockProviderSettingsPath,
     HTTP_PROXY: "",
     http_proxy: "",
@@ -505,15 +506,15 @@ async function main() {
 
     await setAppSendingState(page, true);
     await new Promise((resolve) => setTimeout(resolve, 200));
-    if (!(await isNewSessionDisabled(page))) {
-      throw new Error("New session button should be disabled when app isSending=true");
+    if (await isNewSessionDisabled(page)) {
+      throw new Error("New session button should be enabled while another conversation runs");
     }
     await setAppSendingState(page, false);
     await new Promise((resolve) => setTimeout(resolve, 200));
     if (await isNewSessionDisabled(page)) {
       throw new Error("New session button should be enabled when app isSending=false");
     }
-    console.log("✓ New session button enable/disable state toggles with isSending");
+    console.log("✓ New session button remains enabled during a run");
 
     await holdComposerDictation(page);
     await waitForDictationStatus(page, ["音声入力中...", "録音中...", "Listening..."]);
@@ -617,6 +618,7 @@ async function main() {
     console.log("✓ New session reset cleared conversation");
     await verifyConversationSteering(page);
     await verifyComposerDrafts(page);
+    await verifyParallelConversations(page);
 
     await page.evaluate(() => {
       const app = document.querySelector("lilt-app");

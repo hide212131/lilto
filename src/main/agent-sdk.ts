@@ -149,35 +149,14 @@ async function runProxyPrecheckIfEnabled(settings: ProviderSettings): Promise<vo
   });
 }
 
-function withScopedProxyEnvironment(settings: ProviderSettings): () => void {
+function getSessionProxyEnvironment(settings: ProviderSettings): Record<string, string> {
   const source = settings.networkProxy.useProxy
     ? getProxyEnvironmentValues()
     : { httpProxy: "", httpsProxy: "", noProxy: "" };
-  const targetEntries: Array<[string, string]> = [
-    ["HTTP_PROXY", source.httpProxy],
-    ["http_proxy", source.httpProxy],
-    ["HTTPS_PROXY", source.httpsProxy],
-    ["https_proxy", source.httpsProxy],
-    ["NO_PROXY", source.noProxy],
-    ["no_proxy", source.noProxy]
-  ];
-  const previous = new Map<string, string | undefined>();
-  for (const [key, value] of targetEntries) {
-    previous.set(key, process.env[key]);
-    if (value) {
-      process.env[key] = value;
-    } else {
-      delete process.env[key];
-    }
-  }
-  return () => {
-    for (const [key, prevValue] of previous.entries()) {
-      if (prevValue === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = prevValue;
-      }
-    }
+  return {
+    HTTP_PROXY: source.httpProxy, http_proxy: source.httpProxy,
+    HTTPS_PROXY: source.httpsProxy, https_proxy: source.httpsProxy,
+    NO_PROXY: source.noProxy, no_proxy: source.noProxy
   };
 }
 
@@ -193,6 +172,7 @@ export async function createCodexThreadFromSdk(options: {
   schedulerSessionId?: string;
   sandboxMode?: "danger-full-access" | "workspace-write";
   config?: CodexConfig;
+  environment?: Record<string, string>;
 }, dependencies?: {
   createCodex?: (options: {
     apiKey?: string;
@@ -259,7 +239,7 @@ export async function createCodexThreadFromSdk(options: {
     codexHomeDir: options.codexHomeDir,
     prependPathEntries: packagedCodex?.extraPath ? [packagedCodex.extraPath] : undefined,
     appendPathEntries: process.platform === "win32" ? WINDOWS_POWERSHELL_PATHS : undefined,
-    overrides: envOverrides
+    overrides: { ...envOverrides, ...options.environment }
   });
   const mcpConfig = options.schedulerBridge
     ? {
@@ -330,6 +310,7 @@ export async function createCodexThreadFromAppServer(options: {
   config?: CodexConfig;
   ephemeralThread?: boolean;
   serviceName?: string;
+  environment?: Record<string, string>;
 }): Promise<Thread> {
   const packagedCodex = resolvePackagedCodexBinary();
   const bridgeEnv = options.schedulerBridge
@@ -342,7 +323,7 @@ export async function createCodexThreadFromAppServer(options: {
     codexHomeDir: options.codexHomeDir,
     prependPathEntries: packagedCodex?.extraPath ? [packagedCodex.extraPath] : undefined,
     appendPathEntries: process.platform === "win32" ? WINDOWS_POWERSHELL_PATHS : undefined,
-    overrides: envOverrides
+    overrides: { ...envOverrides, ...options.environment }
   });
   const mcpConfig = options.schedulerBridge
     ? {
@@ -579,6 +560,7 @@ export class AgentRuntime {
     config?: CodexConfig;
     ephemeralThread?: boolean;
     serviceName?: string;
+    environment?: Record<string, string>;
   }) => Promise<Thread>;
   private readonly authService: Pick<ClaudeAuthService, "getState" | "getApiKey">;
   private readonly logger: Logger;
@@ -589,7 +571,7 @@ export class AgentRuntime {
   private readonly platform: NodeJS.Platform;
   private readonly sessionCache = new Map<string, CodexSession>();
   private readonly conversationThreads = new Map<string, string>();
-  private currentAbortController: AbortController | null = null;
+  private readonly runningRequests = new Map<symbol, { conversationId?: string; controller: AbortController }>();
   private readonly activeConversationRuns = new Map<string, {
     ready: Promise<Thread | null>;
     resolve: (thread: Thread | null) => void;
@@ -614,7 +596,7 @@ export class AgentRuntime {
   }
 
   get isBusy(): boolean {
-    return this.currentAbortController !== null;
+    return this.runningRequests.size > 0;
   }
 
   constructor({
@@ -641,6 +623,7 @@ export class AgentRuntime {
       config?: CodexConfig;
       ephemeralThread?: boolean;
       serviceName?: string;
+      environment?: Record<string, string>;
     }) => Promise<Thread>;
     authService: Pick<ClaudeAuthService, "getState" | "getApiKey">;
     workspaceDir?: string;
@@ -661,9 +644,10 @@ export class AgentRuntime {
     this.platform = platform;
   }
 
-  abort(): void {
-    this.currentAbortController?.abort();
-    this.currentAbortController = null;
+  abort(conversationId: string): void {
+    for (const run of this.runningRequests.values()) {
+      if (run.conversationId === conversationId) run.controller.abort();
+    }
   }
 
   refreshSkills(_skills?: Array<{ name: string }>): void {
@@ -700,6 +684,7 @@ export class AgentRuntime {
     freshContext?: boolean;
     ephemeralThread?: boolean;
     serviceName?: string;
+    environment?: Record<string, string>;
     threadOptions: SessionThreadOptions;
   }): Promise<CodexSession> {
     const cwd = options.cwd ?? process.cwd();
@@ -715,7 +700,8 @@ export class AgentRuntime {
       sandboxMode: options.threadOptions.sandboxMode,
       config: options.threadOptions.config ?? null,
       cwd,
-      freshContext: options.freshContext === true
+      freshContext: options.freshContext === true,
+      environment: options.environment
     });
     if (!options.freshContext) {
       const existing = this.sessionCache.get(signature);
@@ -737,7 +723,8 @@ export class AgentRuntime {
       sandboxMode: options.threadOptions.sandboxMode,
       config: options.threadOptions.config,
       ephemeralThread: options.ephemeralThread,
-      serviceName: options.serviceName
+      serviceName: options.serviceName,
+      environment: options.environment
     });
     const session = { signature, thread };
     if (!options.freshContext) {
@@ -759,6 +746,7 @@ export class AgentRuntime {
       serviceName?: string;
     },
     providerSettings: ProviderSettings,
+    abortController: AbortController,
     hooks?: {
       requestId: string;
       conversationId?: string;
@@ -767,9 +755,6 @@ export class AgentRuntime {
       mode?: "default" | "heartbeat";
     }
   ): Promise<AgentResult> {
-    const restoreProxyEnv = withScopedProxyEnvironment(providerSettings);
-    const abortController = new AbortController();
-    this.currentAbortController = abortController;
     let resolveReady!: (thread: Thread | null) => void;
     const ready = new Promise<Thread | null>((resolve) => { resolveReady = resolve; });
     const activeRun = { ready, resolve: resolveReady, signal: abortController.signal };
@@ -781,6 +766,7 @@ export class AgentRuntime {
     try {
       const session = await this.ensureSession({
         ...options,
+        environment: getSessionProxyEnvironment(providerSettings),
         threadOptions: buildSessionThreadOptions(providerSettings, this.platform)
       });
       if (abortController.signal.aborted) throw new Error("中断しました");
@@ -818,6 +804,7 @@ export class AgentRuntime {
         state.textOutput = next.textOutput;
       }
 
+      if (abortController.signal.aborted) throw new Error("中断しました");
       const output = state.textOutput.trim() ? state.textOutput : "エージェント応答は空でした。";
       return { ok: true, text: output };
     } catch (error) {
@@ -833,10 +820,6 @@ export class AgentRuntime {
       activeRun.resolve(null);
       if (hooks?.conversationId && this.activeConversationRuns.get(hooks.conversationId) === activeRun) {
         this.activeConversationRuns.delete(hooks.conversationId);
-      }
-      restoreProxyEnv();
-      if (this.currentAbortController === abortController) {
-        this.currentAbortController = null;
       }
     }
   }
@@ -855,14 +838,21 @@ export class AgentRuntime {
       mode?: "default" | "heartbeat";
     }
   ): Promise<AgentResult> {
+    // Reserve a foreground conversation before any asynchronous preparation.
+    const conversationId = hooks?.mode !== "heartbeat" && !hooks?.freshContext ? hooks?.conversationId : undefined;
+    if (conversationId && [...this.runningRequests.values()].some((run) => run.conversationId === conversationId)) {
+      return { ok: false, error: { code: "CONVERSATION_BUSY", message: "この会話は実行中です。追加指示として送信してください。", details: null, retryable: true } };
+    }
+    const runKey = Symbol();
+    const controller = new AbortController();
+    this.runningRequests.set(runKey, { conversationId, controller });
     try {
       const usesAuxiliaryThread = hooks?.freshContext === true
         && (hooks.mode === "heartbeat" || text.startsWith(SCHEDULER_FOLLOW_UP_PROMPT_PREFIX));
 
       if (process.env.LILTO_E2E_MOCK === "1") {
         await runProxyPrecheckIfEnabled(providerSettings);
-        const controller = new AbortController();
-        this.currentAbortController = controller;
+        if (controller.signal.aborted) return { ok: false, error: { code: "ABORTED", message: "中断しました", details: null, retryable: false } };
         const additions: string[] = [];
         const mockThread: Thread = {
           id: hooks?.conversationId ?? "e2e-mock-session",
@@ -921,13 +911,15 @@ export class AgentRuntime {
           if (controller.signal.aborted) {
             return { ok: false, error: { code: "ABORTED", message: "中断しました", details: null, retryable: false } };
           }
+          if (text.startsWith("[E2E_MOCK_FAIL]")) {
+            return { ok: false, error: { code: "E2E_MOCK_FAILURE", message: "会話単位の失敗検証", details: null, retryable: true } };
+          }
           const suffix = additions.length ? ` 追加指示: ${additions.join(" / ")}` : "";
           return { ok: true, text: `[E2E_MOCK_FINAL] 要求「${text}」を処理し、複数コマンドを実行して回答しました。${suffix}` };
         } finally {
           if (conversationId && this.activeConversationRuns.get(conversationId) === activeRun) {
             this.activeConversationRuns.delete(conversationId);
           }
-          if (this.currentAbortController === controller) this.currentAbortController = null;
         }
       }
 
@@ -985,6 +977,7 @@ export class AgentRuntime {
             ...runOptionsBase
           },
           providerSettings,
+          controller,
           hooks
         );
       }
@@ -1027,12 +1020,15 @@ export class AgentRuntime {
           ...runOptionsBase
         },
         providerSettings,
+        controller,
         hooks
       );
     } catch (error) {
       const normalized = standardizeExecutionError(error);
       this.logger.error("agent_prompt_failed", normalized);
       return { ok: false, error: normalized };
+    } finally {
+      this.runningRequests.delete(runKey);
     }
   }
 }

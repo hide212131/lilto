@@ -27,8 +27,8 @@ test("preload は scheduler notification listener を公開する", () => {
 test("renderer app は backendSessionId または conversationId で scheduler notification を対応付ける", () => {
   const content = fs.readFileSync("src/renderer/app.ts", "utf8");
   assert.match(content, /event\.type === "session_bound"/);
-  assert.match(content, /event\.requestId === this\._activeRequestId/);
-  assert.match(content, /event\.type === "run_start" && event\.conversationId === this\._pendingConversationId/);
+  assert.match(content, /entry\.requestId === event\.requestId/);
+  assert.match(content, /event\.type === "run_start" && event\.conversationId/);
   assert.match(content, /backendSessionId/);
   assert.match(content, /_onSchedulerNotification/);
   assert.match(content, /_markSchedulerNotificationSeen\(event\)/);
@@ -55,7 +55,7 @@ test("renderer app は backendSessionId または conversationId で scheduler n
   assert.match(content, /return mergeSessionMessages\(hydratedMessages, localMessages\)/);
   assert.match(content, /private _mergeHydratedSession\(hydratedSession: Session, localSession: Session \| null\): Session/);
   assert.match(content, /const nextSession = this\._mergeHydratedSession\(hydratedSession, existing\)/);
-  assert.match(content, /\? this\._mergeHydratedSession\(this\._normalizeSession\(loaded\.conversation\), nextSession\)/);
+  assert.match(content, /\? this\._mergeHydratedSession\(this\._normalizeSession\(loaded\.conversation\), latestSession\)/);
 });
 
 test("settings-modal は Schedules タブから schedule 一覧取得と削除を行える", () => {
