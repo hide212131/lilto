@@ -1,0 +1,65 @@
+{
+  "_fixture": "Captured from Codex 0.163.0 thread/read; identifiers and message text anonymized; path set to null to exercise API-only recovery.",
+  "thread": {
+    "id": "recorded-timestamp-thread",
+    "createdAt": 1781098482,
+    "updatedAt": 1781102002,
+    "path": null,
+    "turns": [
+      {
+        "id": "turn-0",
+        "status": "completed",
+        "startedAt": 1781098482,
+        "completedAt": 1781098486,
+        "durationMs": 3328,
+        "error": null,
+        "items": [
+          {
+            "type": "userMessage",
+            "id": "user-0-0",
+            "content": [
+              {
+                "type": "text",
+                "text": "質問1",
+                "text_elements": []
+              }
+            ]
+          },
+          {
+            "type": "agentMessage",
+            "id": "assistant-0-1",
+            "text": "回答1",
+            "phase": "final_answer"
+          }
+        ]
+      },
+      {
+        "id": "turn-1",
+        "status": "completed",
+        "startedAt": 1781101999,
+        "completedAt": 1781102002,
+        "durationMs": 3386,
+        "error": null,
+        "items": [
+          {
+            "type": "userMessage",
+            "id": "user-1-0",
+            "content": [
+              {
+                "type": "text",
+                "text": "質問2",
+                "text_elements": []
+              }
+            ]
+          },
+          {
+            "type": "agentMessage",
+            "id": "assistant-1-1",
+            "text": "回答2",
+            "phase": "final_answer"
+          }
+        ]
+      }
+    ]
+  }
+}

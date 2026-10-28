@@ -2,6 +2,9 @@ import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 
 import { stripSchedulerPromptGuidance } from "./agent-sdk-config";
+import { createLogger } from "./logger";
+
+const logger = createLogger("conversations");
 
 function timestampKey(turnId: string, role: string, text: string): string {
   return JSON.stringify([turnId, role, text]);
@@ -43,8 +46,11 @@ export async function readRolloutTimestamps(rolloutPath: unknown): Promise<(turn
         values.push(createdAt);
         timestamps.set(key, values);
       }
-    } catch {
+    } catch (error) {
       // Missing/unreadable rollout files must not prevent opening API history.
+      logger.error("rollout_timestamps_unavailable", {
+        code: (error as NodeJS.ErrnoException).code ?? "UNKNOWN"
+      });
     } finally {
       lines.close();
       input.destroy();

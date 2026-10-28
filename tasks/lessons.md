@@ -1,5 +1,12 @@
 # Lessons
 
+## 2026-10-28 Timestamp fix must be verified against actual persisted API history
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| v0.1.9 公開後もタイムスタンプが直っていないとの指摘を受け、実データと読込経路を再調査する。 | 手作りの thread/read 応答と rollout を組み合わせたテストだけで、利用環境でも個別時刻が復元できると判断した。ファイル読込失敗や対応付け失敗は黙ってスレッド作成時刻に戻っていた。 | 履歴修正は実際の固定バージョンの App Server が返す応答と保存形式を突き合わせ、再起動・再読込を含めて確認する。テスト用データで成功しても実環境での再現条件が未確認なら解決済みと断定しない。 |
+| 同梱 Codex 0.163.0 の実際の thread/read 応答に startedAt/completedAt があることを確認し、API 時刻へのフォールバックを追加する。 | 参照用 Codex ソースの Turn 定義には時刻がなく、それを同梱バイナリの仕様と見なした結果、実 API が返す時刻を無視した。 | ローカル参照リポジトリと同梱バイナリのバージョンを同一視しない。API 契約は実バイナリで確認し、匿名化した実応答をテストに残す。 |
+
 ## 2026-10-28 Recover persisted message timestamps when API history omits them
 
 | Change | Mistake/Context | Rule to repeat |
