@@ -97,7 +97,10 @@ function parseMessagesFromTurns(
     }
     const turnRecord = turn as Record<string, unknown>;
     const turnId = typeof turnRecord.id === "string" ? turnRecord.id : "";
-    const turnTimestamp = resolveRecordTimestamp(turnRecord, fallbackTimestamp);
+    const turnTimestamp = normalizeTimestamp(
+      turnRecord.startedAt, resolveRecordTimestamp(turnRecord, fallbackTimestamp)
+    );
+    const turnCompletedAt = normalizeTimestamp(turnRecord.completedAt, turnTimestamp);
     const items = Array.isArray(turnRecord.items) ? turnRecord.items : [];
     for (const item of items) {
       if (!item || typeof item !== "object") {
@@ -106,7 +109,8 @@ function parseMessagesFromTurns(
       const record = item as Record<string, unknown>;
       const id = typeof record.id === "string" ? record.id : `msg-${messages.length + 1}`;
       const createdAtFor = (role: string, text: string) => resolveRecordTimestamp(
-        record, rolloutTimestamp(turnId, role, text) ?? turnTimestamp
+        record, rolloutTimestamp(turnId, role, text)
+          ?? (role === "user" || record.phase === "commentary" ? turnTimestamp : turnCompletedAt)
       );
       switch (record.type) {
         case "userMessage": {
@@ -142,7 +146,7 @@ function parseMessagesFromTurns(
     if (turnRecord.error && typeof turnRecord.error === "object" && typeof (turnRecord.error as { message?: unknown }).message === "string") {
       messages.push({
         id: typeof turnRecord.id === "string" ? `${turnRecord.id}-error` : `turn-error-${messages.length + 1}`,
-        createdAt: rolloutTimestamp(turnId, "error", (turnRecord.error as { message: string }).message) ?? turnTimestamp,
+        createdAt: rolloutTimestamp(turnId, "error", (turnRecord.error as { message: string }).message) ?? turnCompletedAt,
         role: "error",
         text: (turnRecord.error as { message: string }).message
       });

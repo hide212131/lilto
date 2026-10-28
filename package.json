@@ -1,6 +1,6 @@
 {
   "name": "lilt-o",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "private": true,
   "author": "hide",
   "description": "Lilt-o desktop shell with Codex SDK bridge",

@@ -91,3 +91,54 @@ test("turn IDのない旧履歴も発言順に復元する", async (t) => {
   ]);
   assert.deepEqual(messages.map(m => m.createdAt), times.map(Date.parse));
 });
+
+test("Codex 0.163.0のstartedAt/completedAtを使い、rollout欠落時も全発言をスレッド作成時刻に戻さない", async (t) => {
+  const firstStart = createdAt / 1000 + 120;
+  const firstEnd = firstStart + 185;
+  const secondStart = firstStart + 86400;
+  const secondEnd = secondStart + 90;
+  const turns = [
+    { id: "t1", startedAt: firstStart, completedAt: firstEnd, durationMs: 185000,
+      items: [user("u1", "質問"), agent("a1", "回答")] },
+    { id: "t2", startedAt: secondStart, completedAt: secondEnd, durationMs: 90000,
+      items: [user("u2", "質問"), agent("a2", "回答")] }
+  ];
+  for (const extra of [{ path: null }, {}]) {
+    const messages = await readHistory(t, turns, undefined, extra);
+    assert.deepEqual(messages.map(m => m.createdAt), [firstStart, firstEnd, secondStart, secondEnd].map(t => t * 1000));
+    assert.deepEqual(messages.map(m => m.id), ["u1", "a1", "u2", "a2"]);
+  }
+});
+
+test("rolloutの本文やturn IDが一致しない場合もAPI時刻を使う", async (t) => {
+  const start = createdAt + 120000;
+  const end = start + 185000;
+  const turns = [{ id: "api-turn", startedAt: start, completedAt: end, items: [
+    user("u", "質問"), agent("a", "回答")
+  ] }];
+  const messages = await readHistory(t, turns, [
+    event("2026-10-22T01:01:00Z", { type: "task_started", turn_id: "other-turn" }),
+    event("2026-10-22T01:01:00Z", { type: "user_message", message: "別の質問" })
+  ]);
+  assert.deepEqual(messages.map(m => m.createdAt), [start, end]);
+});
+
+test("進捗文は開始時刻、最終回答とエラーは終了時刻、実行中は開始時刻を使う", async (t) => {
+  const start = createdAt / 1000 + 120;
+  const end = start + 185;
+  const messages = await readHistory(t, [
+    { id: "t1", startedAt: start, completedAt: end, error: { message: "失敗" }, items: [
+      user("u1", "質問"), { ...agent("c", "調べています"), phase: "commentary" },
+      { ...agent("a", "回答"), phase: "final_answer" }
+    ] },
+    { id: "t2", startedAt: end + 60, completedAt: null, items: [user("u2", "次の質問"), agent("c2", "処理中")] }
+  ]);
+  assert.deepEqual(messages.map(m => m.createdAt), [start, start, end, end, end + 60, end + 60].map(t => t * 1000));
+});
+
+test("実際のCodex 0.163.0 API応答でも履歴ファイルに依存せず送信・完了時刻を復元する", async (t) => {
+  const { thread } = require("./fixtures/codex-0.163-thread-read-timestamps.json");
+  const messages = await readHistory(t, thread.turns, undefined, thread);
+  assert.deepEqual(messages.map(m => m.createdAt), thread.turns.flatMap(t => [t.startedAt * 1000, t.completedAt * 1000]));
+  assert.equal(new Set(messages.map(m => m.createdAt)).size, 4);
+});

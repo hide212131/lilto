@@ -198,15 +198,35 @@ async function verifyConversationTimestamps(page) {
       close: () => {}
     });
     const hydrated = await service.readConversation("timestamp-regression");
+    // Codex 0.163.0 exposes per-turn API timestamps even when its rollout path
+    // is null or unreadable. The UI must survive both cases after reopening.
+    const histories = [hydrated];
+    for (const rolloutPath of [null, path.join(dir, "missing.jsonl")]) {
+      service.createClient = async () => ({
+        request: async () => ({ thread: {
+          id: "timestamp-regression", path: rolloutPath, createdAt: Date.parse(times[0]) / 1000,
+          turns: ["turn-1", "turn-2"].map((id, index) => ({
+            id, startedAt: Date.parse(times[index * 2]) / 1000,
+            completedAt: Date.parse(times[index * 2 + 1]) / 1000,
+            items: [
+              { id: `u-${index}`, type: "userMessage", content: [{ text: "質問" }] },
+              { id: `a-${index}`, type: "agentMessage", text: "回答", phase: "final_answer" }
+            ]
+          }))
+        } }),
+        close: () => {}
+      });
+      histories.push(await service.readConversation("timestamp-regression"));
+    }
     const expected = times.map(time => formatMessageTimestamp(Date.parse(time)));
-    const rounds = await page.evaluate(async (history) => {
+    const rounds = await page.evaluate(async (histories) => {
       const app = document.querySelector("lilt-app");
       const originalMessages = app.messages;
-      let local = { ...history, messages: [] };
+      let local = { ...histories[0], messages: [] };
       const observations = [];
       try {
         for (let round = 0; round < 3; round += 1) {
-          local = app._mergeHydratedSession(history, local);
+          local = app._mergeHydratedSession(histories[round], local);
           app.messages = local.messages;
           await app.updateComplete;
           const list = app.shadowRoot.querySelector("lilt-message-list");
@@ -218,9 +238,9 @@ async function verifyConversationTimestamps(page) {
         await app.updateComplete;
       }
       return observations;
-    }, hydrated);
+    }, histories);
     for (const timestamps of rounds) assert.deepEqual(timestamps, expected);
-    console.log("✓ Persisted message timestamps remain distinct across history reloads");
+    console.log("✓ Message timestamps survive history reloads with readable, null and missing rollout paths");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
