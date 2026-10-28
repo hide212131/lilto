@@ -1,5 +1,11 @@
 # Lessons
 
+## 2026-10-28 Recover persisted message timestamps when API history omits them
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| スレッド内の全発言が同じ時刻になる指摘を受け、App Server の thread.path にある発言イベントから個別時刻を復元する。 | thread/read の turn/item には個別時刻がなく、スレッド作成時刻へのフォールバックが全発言を同時刻にしていた。順序の修正だけでは時刻の正しさを保証できない。 | 履歴の順序と時刻を別々に検証する。API に個別時刻がなければ元の保存イベントを turn ID・role・本文・出現順で対応させ、response_item の重複を数えない。同文の繰り返し・日付跨ぎ・再読込・履歴ファイル欠落を検証する。 |
+
 ## 2026-10-27 Parallel conversation ownership
 
 | Change | Mistake/Context | Rule to repeat |

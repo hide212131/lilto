@@ -4,6 +4,7 @@ import { stripSchedulerPromptGuidance } from "./agent-sdk-config";
 import { CodexAppServerClient } from "./codex-app-server-client";
 import { resolveCodexProcessEnvironment, WINDOWS_POWERSHELL_PATHS } from "./codex-environment";
 import { resolvePackagedCodexBinary } from "./app-paths";
+import { readRolloutTimestamps } from "./conversation-rollout-timestamps";
 
 type ConversationMessage = {
   id: string;
@@ -80,7 +81,11 @@ function extractUserMessageText(item: Record<string, unknown>): string {
     .join("\n");
 }
 
-function parseMessagesFromTurns(turns: unknown, fallbackTimestamp: number): ConversationMessage[] {
+function parseMessagesFromTurns(
+  turns: unknown,
+  fallbackTimestamp: number,
+  rolloutTimestamp: (turnId: string, role: string, text: string) => number | undefined
+): ConversationMessage[] {
   if (!Array.isArray(turns)) {
     return [];
   }
@@ -91,6 +96,7 @@ function parseMessagesFromTurns(turns: unknown, fallbackTimestamp: number): Conv
       continue;
     }
     const turnRecord = turn as Record<string, unknown>;
+    const turnId = typeof turnRecord.id === "string" ? turnRecord.id : "";
     const turnTimestamp = resolveRecordTimestamp(turnRecord, fallbackTimestamp);
     const items = Array.isArray(turnRecord.items) ? turnRecord.items : [];
     for (const item of items) {
@@ -99,19 +105,21 @@ function parseMessagesFromTurns(turns: unknown, fallbackTimestamp: number): Conv
       }
       const record = item as Record<string, unknown>;
       const id = typeof record.id === "string" ? record.id : `msg-${messages.length + 1}`;
-      const createdAt = resolveRecordTimestamp(record, turnTimestamp);
+      const createdAtFor = (role: string, text: string) => resolveRecordTimestamp(
+        record, rolloutTimestamp(turnId, role, text) ?? turnTimestamp
+      );
       switch (record.type) {
         case "userMessage": {
           const text = stripSchedulerPromptGuidance(extractUserMessageText(record));
           if (text) {
-            messages.push({ id, createdAt, role: "user", text });
+            messages.push({ id, createdAt: createdAtFor("user", text), role: "user", text });
           }
           break;
         }
         case "agentMessage": {
           const text = typeof record.text === "string" ? record.text : "";
           if (text) {
-            messages.push({ id, createdAt, role: "assistant", text });
+            messages.push({ id, createdAt: createdAtFor("assistant", text), role: "assistant", text });
           }
           break;
         }
@@ -122,7 +130,7 @@ function parseMessagesFromTurns(turns: unknown, fallbackTimestamp: number): Conv
               ? (record.error as { message: string }).message
               : "";
           if (text) {
-            messages.push({ id, createdAt, role: "error", text });
+            messages.push({ id, createdAt: createdAtFor("error", text), role: "error", text });
           }
           break;
         }
@@ -134,7 +142,7 @@ function parseMessagesFromTurns(turns: unknown, fallbackTimestamp: number): Conv
     if (turnRecord.error && typeof turnRecord.error === "object" && typeof (turnRecord.error as { message?: unknown }).message === "string") {
       messages.push({
         id: typeof turnRecord.id === "string" ? `${turnRecord.id}-error` : `turn-error-${messages.length + 1}`,
-        createdAt: turnTimestamp,
+        createdAt: rolloutTimestamp(turnId, "error", (turnRecord.error as { message: string }).message) ?? turnTimestamp,
         role: "error",
         text: (turnRecord.error as { message: string }).message
       });
@@ -188,13 +196,14 @@ export class ConversationHistoryService {
         return null;
       }
       const threadCreatedAt = normalizeTimestamp(thread.createdAt);
+      const rolloutTimestamp = await readRolloutTimestamps(thread.path);
       return {
         id: typeof thread.id === "string" ? thread.id : conversationId,
         title: fallbackTitleFromThread(thread),
         createdAt: threadCreatedAt,
         updatedAt: normalizeTimestamp(thread.updatedAt ?? thread.createdAt),
         backendSessionId: typeof thread.id === "string" ? thread.id : conversationId,
-        messages: parseMessagesFromTurns(thread.turns, threadCreatedAt)
+        messages: parseMessagesFromTurns(thread.turns, threadCreatedAt, rolloutTimestamp)
       };
     } finally {
       client.close();

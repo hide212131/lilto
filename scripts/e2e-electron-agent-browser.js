@@ -170,6 +170,62 @@ async function verifySidebarActivity(page) {
   }
 }
 
+async function verifyConversationTimestamps(page) {
+  const { ConversationHistoryService } = require("../dist/main/conversation-history.js");
+  const { formatMessageTimestamp } = require("../dist/shared/format-message-timestamp.js");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lilto-timestamp-e2e-"));
+  try {
+    const rolloutPath = path.join(dir, "rollout.jsonl");
+    const times = ["2026-10-22T01:00:00Z", "2026-10-22T01:05:00Z", "2026-10-23T02:00:00Z", "2026-10-23T02:07:00Z"];
+    const payloads = [
+      { type: "task_started", turn_id: "turn-1" },
+      { type: "user_message", message: "質問" }, { type: "agent_message", message: "回答" },
+      { type: "task_started", turn_id: "turn-2" },
+      { type: "user_message", message: "質問" }, { type: "agent_message", message: "回答" }
+    ];
+    fs.writeFileSync(rolloutPath, payloads.map((payload, index) => JSON.stringify({
+      type: "event_msg", timestamp: times[[0, 0, 1, 2, 2, 3][index]], payload
+    })).join("\n"));
+    const service = new ConversationHistoryService({ workspaceDir: dir });
+    service.createClient = async () => ({
+      request: async () => ({ thread: {
+        id: "timestamp-regression", path: rolloutPath, createdAt: Date.parse(times[0]) / 1000,
+        turns: ["turn-1", "turn-2"].map((id, index) => ({ id, items: [
+          { id: `u-${index}`, type: "userMessage", content: [{ text: "質問" }] },
+          { id: `a-${index}`, type: "agentMessage", text: "回答" }
+        ] }))
+      } }),
+      close: () => {}
+    });
+    const hydrated = await service.readConversation("timestamp-regression");
+    const expected = times.map(time => formatMessageTimestamp(Date.parse(time)));
+    const rounds = await page.evaluate(async (history) => {
+      const app = document.querySelector("lilt-app");
+      const originalMessages = app.messages;
+      let local = { ...history, messages: [] };
+      const observations = [];
+      try {
+        for (let round = 0; round < 3; round += 1) {
+          local = app._mergeHydratedSession(history, local);
+          app.messages = local.messages;
+          await app.updateComplete;
+          const list = app.shadowRoot.querySelector("lilt-message-list");
+          await list.updateComplete;
+          observations.push(Array.from(list.shadowRoot.querySelectorAll(".msg-timestamp"), e => e.textContent));
+        }
+      } finally {
+        app.messages = originalMessages;
+        await app.updateComplete;
+      }
+      return observations;
+    }, hydrated);
+    for (const timestamps of rounds) assert.deepEqual(timestamps, expected);
+    console.log("✓ Persisted message timestamps remain distinct across history reloads");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 async function injectSchedulerNotification(page, messageText, followUpInstruction) {
   await page.evaluate(
     ({ message, followUp }) => {
@@ -457,6 +513,7 @@ async function main() {
     console.log("✓ lilt-app rendered");
     ({ browser, page } = await verifyLinkNavigation(browser, page, cdpPort));
     await verifyConversationOrder(page);
+    await verifyConversationTimestamps(page);
     await verifyToolGroups(page);
 
     const initialStatus = await waitForStatus(page, [
