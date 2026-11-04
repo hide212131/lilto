@@ -194,8 +194,14 @@ export function registerAgentConversationIpcHandlers({
     if (!payload || typeof payload !== "object" || typeof (payload as { conversationId?: unknown }).conversationId !== "string") {
       return { ok: false, error: { code: "INVALID_REQUEST", message: "conversationId は必須です" } };
     }
+    const page = (payload as { page?: import("../../shared/conversation-history-window").HistoryPageRequest }).page;
+    if (page !== undefined && (!page || typeof page !== "object"
+      || (page.cursor !== undefined && (typeof page.cursor !== "string" || page.cursor.length > 16384))
+      || (page.direction !== undefined && page.direction !== "older" && page.direction !== "newer"))) {
+      return { ok: false, error: { code: "INVALID_REQUEST", message: "履歴の取得条件が不正です" } };
+    }
     try {
-      const conversation = await conversationHistory.readConversation((payload as { conversationId: string }).conversationId);
+      const conversation = await conversationHistory.readConversation((payload as { conversationId: string }).conversationId, page);
       if (!conversation) {
         return { ok: false, error: { code: "CONVERSATION_NOT_FOUND", message: "会話が見つかりません" } };
       }

@@ -1,5 +1,11 @@
 # Lessons
 
+## 2026-11-04 Bounded conversation history includes acquisition and retained state
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| 長い会話を最新ページから表示し、スクロールで前後へ段階取得する。 | 全履歴を取得してから表示だけを切り取っても取得・保持メモリは減らない。ページ追加時の無条件末尾スクロールや、hydrationで解放済みキャッシュを再統合する処理も遡り閲覧を壊す。 | 使用中のバイナリの実APIを確認し、metadata-only readとページAPIを使う。保持ページ数を制限し、逆向きカーソルで解放範囲を再取得する。1,000ターンの実画面で初期件数、DOM件数、表示位置、往復と会話切替競合を検証する。 |
+
 ## 2026-11-04 Integrate concurrent sidebar changes before merging
 
 | Change | Mistake/Context | Rule to repeat |

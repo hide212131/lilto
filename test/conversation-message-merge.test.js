@@ -97,15 +97,16 @@ test("個別時刻のないApp Server履歴を読み直しても質問・回答�
   let closed = false;
   service.createClient = async () => ({
     request: async (method, params) => {
-      assert.equal(method, "thread/read");
-      assert.equal(params.includeTurns, true);
+      if (method === "thread/read") {
+        assert.equal(params.includeTurns, false);
+        return { thread: { id: "thread-order-test", createdAt: timestamp / 1000 } };
+      }
+      assert.equal(method, "thread/turns/list");
+      assert.equal(params.itemsView, "full");
       const items = expected.map(({ id, role, text }) => role === "user"
         ? { id, type: "userMessage", content: [{ text }] }
         : { id, type: "agentMessage", text });
-      return { thread: {
-        id: "thread-order-test", createdAt: timestamp / 1000,
-        turns: [{ id: "turn-1", items: items.slice(0, 2) }, { id: "turn-2", items: items.slice(2) }]
-      } };
+      return { data: [{ id: "turn-2", items: items.slice(2) }, { id: "turn-1", items: items.slice(0, 2) }], nextCursor: null, backwardsCursor: null };
     },
     close: () => { closed = true; }
   });
@@ -126,7 +127,7 @@ test("履歴では内部用scheduler英文をユーザー発言から取り除�
 
   const service = new ConversationHistoryService({ workspaceDir: process.cwd() });
   service.createClient = async () => ({
-    request: async () => ({
+    request: async (method) => method === "thread/turns/list" ? { data: [{ id: "turn-1", items: [{ id: "item-user", type: "userMessage", content: [{ text: augmentedPrompt }] }] }], nextCursor: null, backwardsCursor: null } : ({
       thread: {
         id: "thread-scheduler-prompt",
         createdAt: timestamp / 1000,

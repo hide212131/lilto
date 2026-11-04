@@ -19,7 +19,7 @@ async function readHistory(t, turns, lines, extra = {}) {
   const service = new ConversationHistoryService({ workspaceDir: dir });
   let closed = false;
   service.createClient = async () => ({
-    request: async () => ({ thread: { id: "thread-times", createdAt: createdAt / 1000, path: rolloutPath, turns, ...extra } }),
+    request: async (method) => method === "thread/turns/list" ? { data: [...turns].reverse(), nextCursor: null, backwardsCursor: null } : ({ thread: { id: "thread-times", createdAt: createdAt / 1000, path: rolloutPath, turns, ...extra } }),
     close: () => { closed = true; }
   });
   const history = await service.readConversation("thread-times");

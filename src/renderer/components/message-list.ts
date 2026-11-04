@@ -1,4 +1,4 @@
-import { LitElement, html, css } from "lit";
+import { LitElement, html, css, type PropertyValues } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { marked } from "marked";
@@ -11,6 +11,16 @@ const MASCOT_URL = "./mascot.png";
 export class LiltMessageList extends LitElement {
   @property({ type: Array }) messages: Message[] = [];
   @property({ type: Boolean }) showToolExecutionDetails = false;
+  @property() conversationId = "";
+  @property({ type: Boolean }) hasOlder = false;
+  @property({ type: Boolean }) hasNewer = false;
+  @property({ type: Boolean }) historyLoading = false;
+  @property() historyError = "";
+  private _stickToBottom = true;
+  private _lastScrollTop = 0;
+  private _restoringScroll = false;
+  private _anchor: { id: string; offset: number } | null = null;
+  private _resetScroll = false;
   private static readonly THINKING_PREVIEW_LINES = 24;
   private static readonly TOOL_PREVIEW_LINES = 16;
   private _expandedThinkingById = new Set<string>();
@@ -34,6 +44,17 @@ export class LiltMessageList extends LitElement {
       gap: 12px;
       align-items: stretch;
     }
+    .history-control {
+      align-self: center;
+      flex-shrink: 0;
+      padding: 8px 16px;
+      border: 1px solid var(--line, #dddddf);
+      border-radius: 8px;
+      background: var(--surface, #fff);
+      color: var(--text, #1f2328);
+      cursor: pointer;
+    }
+    .history-error { color: #b91c1c; font-size: 13px; }
     .msg {
       width: calc(100% - 32px);
       box-sizing: border-box;
@@ -448,14 +469,64 @@ export class LiltMessageList extends LitElement {
     }
   `;
 
-  updated() {
-    if (this.messages.length === 0) {
-      this._expandedThinkingById.clear();
-      this._expandedThinkingMoreById.clear();
+  protected willUpdate(changed: PropertyValues) {
+    this._resetScroll = changed.has("conversationId");
+    if (this._resetScroll) this._stickToBottom = true;
+    const chat = this.renderRoot.querySelector<HTMLElement>(".chat");
+    this._anchor = null;
+    if (chat && !this._resetScroll && (!this._stickToBottom || this.hasNewer)) {
+      const top = chat.getBoundingClientRect().top;
+      const visible = [...chat.querySelectorAll<HTMLElement>("[data-message-id]")]
+        .find((element) => element.getBoundingClientRect().bottom > top);
+      if (visible) this._anchor = { id: visible.dataset.messageId!, offset: visible.getBoundingClientRect().top - top };
     }
+  }
 
-    const chat = this.renderRoot.querySelector(".chat");
-    if (chat) chat.scrollTop = chat.scrollHeight;
+  updated() {
+    const keys = new Set(this.messages.map((message) => this._stateKeyForMessage(message)));
+    for (const key of this._expandedThinkingById) if (!keys.has(key)) this._expandedThinkingById.delete(key);
+    for (const key of this._expandedThinkingMoreById) if (!keys.has(key)) this._expandedThinkingMoreById.delete(key);
+    const chat = this.renderRoot.querySelector<HTMLElement>(".chat");
+    if (!chat) return;
+    this._restoringScroll = true;
+    if (this._resetScroll || (this._stickToBottom && !this.hasNewer)) {
+      chat.scrollTop = chat.scrollHeight;
+    } else if (this._anchor) {
+      const anchor = [...chat.querySelectorAll<HTMLElement>("[data-message-id]")]
+        .find((element) => element.dataset.messageId === this._anchor!.id);
+      if (anchor) chat.scrollTop += anchor.getBoundingClientRect().top - chat.getBoundingClientRect().top - this._anchor.offset;
+    }
+    this._lastScrollTop = chat.scrollTop;
+    requestAnimationFrame(() => { this._restoringScroll = false; });
+  }
+
+  get isFollowingLatest() {
+    return this._stickToBottom && !this.hasNewer;
+  }
+
+  followLatest() {
+    this._stickToBottom = true;
+    this.requestUpdate();
+  }
+
+  private _loadHistory(direction: "older" | "newer") {
+    if (this.historyLoading) return;
+    // A page insertion must preserve the visible message, including at the
+    // old bottom when loading newer history after evicting recent pages.
+    this._stickToBottom = false;
+    this.dispatchEvent(new CustomEvent("load-history", { detail: { direction }, bubbles: true, composed: true }));
+  }
+
+  private _onScroll(event: Event) {
+    if (this._restoringScroll) return;
+    const chat = event.currentTarget as HTMLElement;
+    const upwards = chat.scrollTop < this._lastScrollTop;
+    const downwards = chat.scrollTop > this._lastScrollTop;
+    this._lastScrollTop = chat.scrollTop;
+    const atBottom = chat.scrollHeight - chat.scrollTop - chat.clientHeight < 80;
+    this._stickToBottom = atBottom && !this.hasNewer;
+    if (!this.historyError && upwards && chat.scrollTop < 80 && this.hasOlder) this._loadHistory("older");
+    else if (!this.historyError && downwards && atBottom && this.hasNewer) this._loadHistory("newer");
   }
 
   private _handleThinkingToggle(messageId: string, event: Event) {
@@ -661,11 +732,13 @@ export class LiltMessageList extends LitElement {
 
   render() {
     return html`
-      <div class="chat" aria-live="polite" @click=${this._handleChatClick}>
+      <div class="chat" aria-live="polite" @click=${this._handleChatClick} @scroll=${this._onScroll}>
+        ${this.hasOlder ? html`<button class="history-control history-older" ?disabled=${this.historyLoading} @click=${() => this._loadHistory("older")}>${this.historyLoading ? "読み込み中…" : "以前の履歴を読み込む"}</button>` : ""}
+        ${this.historyError ? html`<div class="history-error" role="alert">${this.historyError}</div>` : ""}
         ${this.messages.map(
           (m) => m.role === "assistant"
             ? html`
-                <div class="assistant-row">
+                <div class="assistant-row" data-message-id=${m.id}>
                   <div class="mascot-avatar ${m.pending ? "talking" : ""}">
                     <img src=${MASCOT_URL} alt="" aria-hidden="true" draggable="false"/>
                   </div>
@@ -686,7 +759,7 @@ export class LiltMessageList extends LitElement {
               `
             : m.role === "user"
               ? html`
-                  <div class="msg-wrapper-user">
+                  <div class="msg-wrapper-user" data-message-id=${m.id}>
                     <div class="msg-shell msg-shell-user">
                       ${this._renderMessageTimestamp(m, "user")}
                       <div class="msg msg-user ${m.pending ? "msg-pending" : ""}">${this._renderMarkdown(m.text ?? "")}</div>
@@ -703,15 +776,16 @@ export class LiltMessageList extends LitElement {
                 `
               : m.role === "error"
                 ? html`
-                    <div class="msg-wrapper-error">
+                    <div class="msg-wrapper-error" data-message-id=${m.id}>
                       <div class="msg-shell msg-shell-error">
                         <div class="msg msg-error ${m.pending ? "msg-pending" : ""}">${this._renderMarkdown(m.text ?? "")}</div>
                         ${this._renderMessageTimestamp(m, "error")}
                       </div>
                     </div>
                   `
-              : html`<div class="msg msg-${m.role} ${m.pending ? "msg-pending" : ""}">${this._renderMarkdown(m.text ?? "")}</div>`
+              : html`<div data-message-id=${m.id} class="msg msg-${m.role} ${m.pending ? "msg-pending" : ""}">${this._renderMarkdown(m.text ?? "")}</div>`
         )}
+        ${this.hasNewer ? html`<button class="history-control history-newer" ?disabled=${this.historyLoading} @click=${() => this._loadHistory("newer")}>${this.historyLoading ? "読み込み中…" : "新しい履歴を読み込む"}</button>` : ""}
       </div>
     `;
   }

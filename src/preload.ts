@@ -28,7 +28,7 @@ contextBridge.exposeInMainWorld("lilto", {
   steerPrompt: async (text: string, conversationId: string) =>
     ipcRenderer.invoke("agent:steerPrompt", { text, conversationId }),
   listConversations: async () => ipcRenderer.invoke("conversations:list"),
-  readConversation: async (conversationId: string) => ipcRenderer.invoke("conversations:read", { conversationId }),
+  readConversation: async (conversationId: string, page?: import("./shared/conversation-history-window").HistoryPageRequest) => ipcRenderer.invoke("conversations:read", { conversationId, page }),
   createConversation: async (title?: string) => ipcRenderer.invoke("conversations:create", { title }),
   renameConversation: async (conversationId: string, title: string) =>
     ipcRenderer.invoke("conversations:rename", { conversationId, title }),
