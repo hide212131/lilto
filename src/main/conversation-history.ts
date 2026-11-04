@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { HistoryPageRequest, HistoryPageInfo } from "../shared/conversation-history-window";
 
 import { stripSchedulerPromptGuidance } from "./agent-sdk-config";
 import { CodexAppServerClient } from "./codex-app-server-client";
@@ -23,6 +24,7 @@ export type ConversationRecord = {
   updatedAt: number;
   backendSessionId: string;
   messages: ConversationMessage[];
+  historyPage?: HistoryPageInfo;
 };
 
 function normalizeTimestamp(value: unknown, fallback = Date.now()): number {
@@ -188,26 +190,48 @@ export class ConversationHistoryService {
     }
   }
 
-  async readConversation(conversationId: string): Promise<ConversationRecord | null> {
+  async readConversation(conversationId: string, page: HistoryPageRequest = {}): Promise<ConversationRecord | null> {
     const client = await this.createClient();
     try {
       const result = await client.request<{ thread?: Record<string, unknown> }>("thread/read", {
         threadId: conversationId,
-        includeTurns: true
+        includeTurns: false
       });
       const thread = result?.thread;
       if (!thread || typeof thread !== "object") {
         return null;
       }
       const threadCreatedAt = normalizeTimestamp(thread.createdAt);
-      const rolloutTimestamp = await readRolloutTimestamps(thread.path);
+      const direction = page.direction ?? "older";
+      const resultPage = await client.request<{
+        data: Array<Record<string, unknown>>;
+        nextCursor: string | null;
+        backwardsCursor: string | null;
+      }>("thread/turns/list", {
+        threadId: conversationId,
+        cursor: page.cursor,
+        limit: 20,
+        sortDirection: direction === "older" ? "desc" : "asc",
+        itemsView: "full"
+      });
+      const turns = direction === "older" ? [...resultPage.data].reverse() : resultPage.data;
+      // Current API timestamps avoid scanning a growing rollout for every page.
+      // Legacy producers need the fallback, restricted to the requested turns.
+      const needsRollout = turns.some((turn) => typeof turn.startedAt !== "number");
+      const rolloutTimestamp = needsRollout
+        ? await readRolloutTimestamps(thread.path, new Set(turns.map((turn) => String(turn.id ?? ""))))
+        : () => undefined;
+      const historyPage: HistoryPageInfo = direction === "older"
+        ? { olderCursor: resultPage.nextCursor, newerCursor: page.cursor ? resultPage.backwardsCursor : null }
+        : { olderCursor: resultPage.backwardsCursor, newerCursor: resultPage.nextCursor };
       return {
         id: typeof thread.id === "string" ? thread.id : conversationId,
         title: fallbackTitleFromThread(thread),
         createdAt: threadCreatedAt,
         updatedAt: normalizeTimestamp(thread.updatedAt ?? thread.createdAt),
         backendSessionId: typeof thread.id === "string" ? thread.id : conversationId,
-        messages: parseMessagesFromTurns(thread.turns, threadCreatedAt, rolloutTimestamp)
+        messages: parseMessagesFromTurns(turns, threadCreatedAt, rolloutTimestamp),
+        historyPage
       };
     } finally {
       client.close();

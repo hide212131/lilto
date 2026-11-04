@@ -76,7 +76,8 @@ test("agent と conversation IPC の payload 契約を固定する", () => {
   assert.match(ipcContractContent, /message: "silent の形式が不正です"/);
   assert.match(ipcContractContent, /message: "freshContext の形式が不正です"/);
 
-  assert.match(preloadContent, /readConversation: async \(conversationId: string\) => ipcRenderer\.invoke\("conversations:read", \{ conversationId \}\)/);
+  assert.match(preloadContent, /readConversation: async \(conversationId: string, page\?/);
+  assert.match(preloadContent, /ipcRenderer\.invoke\("conversations:read", \{ conversationId, page \}\)/);
   assert.match(preloadContent, /createConversation: async \(title\?: string\) => ipcRenderer\.invoke\("conversations:create", \{ title \}\)/);
   assert.match(preloadContent, /renameConversation: async \(conversationId: string, title: string\) =>\s*ipcRenderer\.invoke\("conversations:rename", \{ conversationId, title \}\)/);
   assert.match(preloadContent, /archiveConversation: async \(conversationId: string\) =>\s*ipcRenderer\.invoke\("conversations:archive", \{ conversationId \}\)/);

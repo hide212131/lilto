@@ -135,11 +135,13 @@ export type Message = {
   requestId?: string;
   role: "user" | "assistant" | "system" | "error";
   text: string;
+  persisted?: boolean;
   pending?: boolean;
   progress?: AssistantProgress;
 };
 
 export type Session = {
+  historyPage?: import("../shared/conversation-history-window.js").HistoryPageInfo;
   id: string;
   title: string;
   createdAt: number;
@@ -170,7 +172,7 @@ declare global {
         | { ok: true; conversations: Session[] }
         | { ok: false; error: { code: string; message: string } }
       >;
-      readConversation: (conversationId: string) => Promise<
+      readConversation: (conversationId: string, page?: import("../shared/conversation-history-window.js").HistoryPageRequest) => Promise<
         | { ok: true; conversation: Session }
         | { ok: false; error: { code: string; message: string } }
       >;

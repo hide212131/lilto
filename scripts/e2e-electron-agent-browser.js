@@ -1,3 +1,5 @@
+const { seedHistory } = require("../test/helpers/history-fixture");
+const { verifyConversationHistory } = require("./verify-conversation-history");
 const { spawn } = require("node:child_process");
 const net = require("node:net");
 const fs = require("node:fs");
@@ -197,7 +199,22 @@ async function verifyConversationTimestamps(page) {
       } }),
       close: () => {}
     });
-    const hydrated = await service.readConversation("timestamp-regression");
+    const readHistory = async () => {
+      const createClient = service.createClient;
+      service.createClient = async () => {
+        const client = await createClient();
+        const request = client.request;
+        client.request = async (method) => {
+          const result = await request();
+          return method === "thread/turns/list"
+            ? { data: [...result.thread.turns].reverse(), nextCursor: null, backwardsCursor: null } : result;
+        };
+        return client;
+      };
+      try { return await service.readConversation("timestamp-regression"); }
+      finally { service.createClient = createClient; }
+    };
+    const hydrated = await readHistory();
     // Codex 0.163.0 exposes per-turn API timestamps even when its rollout path
     // is null or unreadable. The UI must survive both cases after reopening.
     const histories = [hydrated];
@@ -216,7 +233,7 @@ async function verifyConversationTimestamps(page) {
         } }),
         close: () => {}
       });
-      histories.push(await service.readConversation("timestamp-regression"));
+      histories.push(await readHistory());
     }
     const expected = times.map(time => formatMessageTimestamp(Date.parse(time)));
     const rounds = await page.evaluate(async (histories) => {
@@ -543,6 +560,8 @@ async function main() {
   delete electronEnv.ELECTRON_RUN_AS_NODE;
 
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "lilto-electron-e2e-"));
+  electronEnv.CODEX_HOME = path.join(userDataDir, "codex");
+  const historyFixtureId = seedHistory(electronEnv.CODEX_HOME, rootDir);
   const electron = spawn(electronBin, [".", `--remote-debugging-port=${cdpPort}`, `--user-data-dir=${userDataDir}`], {
     cwd: rootDir,
     shell: shouldUseShellForCommand(electronBin),
@@ -580,6 +599,7 @@ async function main() {
 
     console.log("✓ lilt-app rendered");
     ({ browser, page } = await verifyLinkNavigation(browser, page, cdpPort));
+    await verifyConversationHistory(page, historyFixtureId);
     await verifyConversationOrder(page);
     await verifyConversationTimestamps(page);
     await verifyToolGroups(page);

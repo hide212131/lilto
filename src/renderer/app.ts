@@ -21,9 +21,11 @@ import "./components/message-list.js";
 import "./components/composer.js";
 import "./components/settings-modal.js";
 import "./components/chat-history.js";
+import type { LiltMessageList } from "./components/message-list.js";
 import type { LiltComposer } from "./components/composer.js";
 import type { AgentLoopEvent, LoopState } from "../shared/agent-loop.js";
 import { createInitialLoopState, reduceLoopState } from "../shared/agent-loop.js";
+import { ConversationHistoryWindow, type HistoryDirection } from "../shared/conversation-history-window.js";
 import { mergeSessionMessages } from "../shared/conversation-message-merge.js";
 import { ActivityPreviewLoader, type ActivityPreview } from "./sidebar-activity.js";
 
@@ -115,6 +117,10 @@ export class LiltApp extends LitElement {
   private _completedForegroundRequests = new Map<string, CompletedForegroundResponse | null>();
   private _messageSeq = 0;
   private _navigationVersion = 0;
+  @query("lilt-message-list") private _messageList!: LiltMessageList;
+  private _historyWindow = new ConversationHistoryWindow<Message>();
+  @property({ type: Boolean }) private _historyLoading = false;
+  @property() private _historyError = "";
   private _creatingConversation = false;
 
   private _currentSessionId: string | null = null;
@@ -362,6 +368,7 @@ export class LiltApp extends LitElement {
       createdAt,
       updatedAt,
       hasUnread: session.hasUnread === true,
+      historyPage: session.historyPage,
       backendSessionId: typeof session.backendSessionId === "string" ? session.backendSessionId : undefined,
       messages: Array.isArray(session.messages)
         ? session.messages.map((message) => this._normalizeMessage(message, createdAt))
@@ -390,7 +397,9 @@ export class LiltApp extends LitElement {
     return {
       ...hydratedSession,
       hasUnread: localSession.hasUnread,
-      messages: this._mergeSessionMessages(hydratedSession.messages, localSession.messages)
+      messages: this._mergeSessionMessages(hydratedSession.messages,
+        hydratedSession.historyPage ? localSession.messages.filter((message) => !message.persisted
+          || hydratedSession.messages.some((entry) => entry.id === message.id)) : localSession.messages)
     };
   }
 
@@ -496,13 +505,20 @@ export class LiltApp extends LitElement {
     return session.id;
   }
 
-  private async _refreshConversation(conversationId: string) {
+  private _isReadingHistory(conversationId: string) {
+    return this._currentSessionId === conversationId && this._messageList && !this._messageList.isFollowingLatest;
+  }
+
+  private async _refreshConversation(conversationId: string, followLatest = false) {
+    if (!followLatest && this._isReadingHistory(conversationId)) return;
     const result = await window.lilto.readConversation(conversationId);
     if (!result.ok) {
       return;
     }
 
+    if (!followLatest && this._isReadingHistory(conversationId)) return;
     const hydratedSession = this._normalizeSession(result.conversation);
+    hydratedSession.messages = hydratedSession.messages.map((message) => ({ ...message, persisted: true }));
     const existing = this.sessions.find((session) => session.id === conversationId) ?? null;
     const nextSession = this._mergeHydratedSession(hydratedSession, existing);
     this.sessions = this._sortSessions([
@@ -515,6 +531,8 @@ export class LiltApp extends LitElement {
     ));
 
     if (this._currentSessionId === conversationId) {
+      this._historyWindow.reset(hydratedSession);
+      if (followLatest) this._messageList.followLatest();
       this.messages = [...nextSession.messages];
       this.activeSessionId = conversationId;
     }
@@ -609,6 +627,12 @@ export class LiltApp extends LitElement {
           <div class="stage">
             <lilt-message-list
               .messages=${this.messages}
+              .conversationId=${this.activeSessionId ?? ""}
+              .hasOlder=${Boolean(this._historyWindow.cursor("older"))}
+              .hasNewer=${Boolean(this._historyWindow.cursor("newer"))}
+              .historyLoading=${this._historyLoading}
+              .historyError=${this._historyError}
+              @load-history=${this._onLoadHistory}
               .showToolExecutionDetails=${this.providerSettings.chatSettings?.showToolExecutionDetails ?? false}
               @retry-message=${this._onRetryMessage}
             ></lilt-message-list>
@@ -750,6 +774,7 @@ export class LiltApp extends LitElement {
     const loaded = await window.lilto.readConversation(nextSession.backendSessionId ?? nextSession.id);
     if (navigationVersion !== this._navigationVersion) return;
     const latestSession = this.sessions.find((entry) => entry.id === nextSession.id) ?? nextSession;
+    if (loaded.ok) loaded.conversation.messages = loaded.conversation.messages.map((message) => ({ ...message, persisted: true }));
     const hydratedSession = loaded.ok
       ? this._mergeHydratedSession(this._normalizeSession(loaded.conversation), latestSession)
       : latestSession;
@@ -758,9 +783,39 @@ export class LiltApp extends LitElement {
       ...this.sessions.filter((entry) => entry.id !== hydratedSession.id)
     ]);
 
+    this._historyWindow.reset(loaded.ok ? this._normalizeSession(loaded.conversation) : undefined);
     this.messages = [...hydratedSession.messages];
     this._activateSession(nextSession.id);
     this._syncSelectedRun();
+  }
+
+  private async _onLoadHistory(event: CustomEvent<{ direction: HistoryDirection }>) {
+    const direction = event.detail.direction;
+    const cursor = this._historyWindow.cursor(direction);
+    const conversationId = this._currentSessionId;
+    if (!cursor || !conversationId || this._historyLoading) return;
+    const version = this._navigationVersion;
+    const historyRevision = this._historyWindow.revision;
+    this._historyLoading = true;
+    this._historyError = "";
+    try {
+      const session = this.sessions.find((entry) => entry.id === conversationId);
+      const result = await window.lilto.readConversation(session?.backendSessionId ?? conversationId, { cursor, direction });
+      if (version !== this._navigationVersion || conversationId !== this._currentSessionId || historyRevision !== this._historyWindow.revision) return;
+      if (!result.ok) throw new Error(result.error.message);
+      const page = this._normalizeSession(result.conversation);
+      page.messages = page.messages.map((message) => ({ ...message, persisted: true }));
+      this._historyWindow.add(page, direction);
+      const local = this.messages.filter((message) => !message.persisted || message.progress);
+      const visibleIds = new Set(this._historyWindow.messages.map((message) => message.id));
+      this.messages = this._mergeSessionMessages(this._historyWindow.messages,
+        local.filter((message) => !message.persisted || visibleIds.has(message.id)));
+      this.sessions = this.sessions.map((entry) => entry.id === conversationId ? { ...entry, messages: this.messages } : entry);
+    } catch (error) {
+      if (version === this._navigationVersion) this._historyError = `履歴を読み込めませんでした: ${error instanceof Error ? error.message : String(error)}`;
+    } finally {
+      if (version === this._navigationVersion) this._historyLoading = false;
+    }
   }
 
   private _onRenameSession(e: CustomEvent<{ sessionId: string; newTitle: string }>) {
@@ -806,6 +861,17 @@ export class LiltApp extends LitElement {
   }
 
   private _activateSession(sessionId: string | null, migrate = false) {
+    if (sessionId !== this._currentSessionId) {
+      // Backend history can be fetched again. Keep only local notices/progress
+      // for inactive sessions, and never discard an in-flight conversation.
+      this.sessions = this.sessions.map((session) => session.id !== sessionId && !this._conversationRuns.has(session.id)
+        && !isHeartbeatAssistantSessionId(session.id)
+        ? { ...session, messages: session.messages.filter((message) => !message.persisted || message.progress).slice(-150) }
+        : session);
+      this._historyWindow.reset(this.sessions.find((session) => session.id === sessionId));
+      this._historyLoading = false;
+      this._historyError = "";
+    }
     this._composer.switchDraft(sessionId, migrate);
     this._currentSessionId = sessionId;
     this.activeSessionId = sessionId;
@@ -967,13 +1033,16 @@ export class LiltApp extends LitElement {
       return;
     }
 
-    this._addMessage("user", text);
     const title = text.slice(0, 40) + (text.length > 40 ? "…" : "");
     ++this._navigationVersion;
     this._creatingConversation = true;
     this.requestUpdate();
     let conversationId: string | null;
     try {
+      if (this._currentSessionId && this._isReadingHistory(this._currentSessionId)) {
+        await this._refreshConversation(this._currentSessionId, true);
+      }
+      this._addMessage("user", text);
       conversationId = await this._ensureConversation(title);
     } finally {
       this._creatingConversation = false;

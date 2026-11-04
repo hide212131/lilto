@@ -9,7 +9,7 @@ function deferred() {
   return { promise, resolve };
 }
 
-function setup({ listPlugins = async () => ({ ok: false }), submitPrompt = async () => ({ ok: true, text: "done" }) } = {}) {
+function setup({ conversationHistory = {}, listPlugins = async () => ({ ok: false }), submitPrompt = async () => ({ ok: true, text: "done" }) } = {}) {
   const handlers = new Map();
   const events = [];
   const aborted = [];
@@ -32,7 +32,7 @@ function setup({ listPlugins = async () => ({ ok: false }), submitPrompt = async
   exported.registerAgentConversationIpcHandlers({
     agentRuntime: { submitPrompt, abort: (id) => aborted.push(id), steerPrompt: async (text, id) => { steered.push([text, id]); return { ok: true }; } },
     providerSettingsService: { getState: () => ({}) }, notificationService: {},
-    pluginService: { listPlugins }, conversationHistory: {}
+    pluginService: { listPlugins }, conversationHistory
   });
   return { invoke: (name, payload) => handlers.get(name)(null, payload), events, aborted, steered };
 }
@@ -88,4 +88,24 @@ test("IPC の追加指示は元の会話の準備完了を待って同じ実行�
   assert.deepEqual(ipc.steered, [["additional", "a"]]);
   finish.resolve();
   assert.equal((await a).ok, true);
+});
+
+
+test("履歴ページIPCは不正なカーソルを拒否し、取得方向とカーソルをそのまま渡す", async () => {
+  const reads = [];
+  const ipc = setup({ conversationHistory: { readConversation: async (...args) => {
+    reads.push(args);
+    return { id: "thread", messages: [], historyPage: { olderCursor: null, newerCursor: "back" } };
+  } } });
+  for (const page of [null, 1, { cursor: 1 }, { cursor: "x".repeat(16385) }, { direction: "sideways" }]) {
+    const result = await ipc.invoke("conversations:read", { conversationId: "thread", page });
+    assert.equal(result.error.code, "INVALID_REQUEST");
+  }
+  assert.equal(reads.length, 0);
+  const page = { cursor: "opaque-cursor", direction: "newer" };
+  const result = await ipc.invoke("conversations:read", { conversationId: "thread", page });
+  assert.equal(result.ok, true);
+  assert.equal(reads[0][0], "thread");
+  assert.equal(reads[0][1], page);
+  assert.equal(result.conversation.historyPage.newerCursor, "back");
 });
