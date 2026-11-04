@@ -119,6 +119,7 @@ export class LiltApp extends LitElement {
   private _navigationVersion = 0;
   @query("lilt-message-list") private _messageList!: LiltMessageList;
   private _historyWindow = new ConversationHistoryWindow<Message>();
+  private _historyRequest: object | null = null;
   @property({ type: Boolean }) private _historyLoading = false;
   @property() private _historyError = "";
   private _creatingConversation = false;
@@ -796,6 +797,7 @@ export class LiltApp extends LitElement {
     if (!cursor || !conversationId || this._historyLoading) return;
     const version = this._navigationVersion;
     const historyRevision = this._historyWindow.revision;
+    const request = this._historyRequest = {};
     this._historyLoading = true;
     this._historyError = "";
     try {
@@ -814,7 +816,10 @@ export class LiltApp extends LitElement {
     } catch (error) {
       if (version === this._navigationVersion) this._historyError = `履歴を読み込めませんでした: ${error instanceof Error ? error.message : String(error)}`;
     } finally {
-      if (version === this._navigationVersion) this._historyLoading = false;
+      if (this._historyRequest === request) {
+        this._historyRequest = null;
+        this._historyLoading = false;
+      }
     }
   }
 
@@ -869,6 +874,7 @@ export class LiltApp extends LitElement {
         ? { ...session, messages: session.messages.filter((message) => !message.persisted || message.progress).slice(-150) }
         : session);
       this._historyWindow.reset(this.sessions.find((session) => session.id === sessionId));
+      this._historyRequest = null;
       this._historyLoading = false;
       this._historyError = "";
     }

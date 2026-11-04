@@ -113,6 +113,15 @@ async function verifyConversationHistory(page, fixtureId, count = 1000) {
     assert.equal((await state()).count, 40);
     assert.equal((await state()).last, `History answer ${count - 1}`);
     assert.ok(await chat.evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight < 2));
+    const cancelled = await page.evaluate(async () => {
+      const app = document.querySelector("lilt-app");
+      const pending = app._onLoadHistory(new CustomEvent("load-history", { detail: { direction: "older" } }));
+      // Sending invalidates navigation without changing the selected session.
+      ++app._navigationVersion;
+      await pending;
+      return app._historyLoading;
+    });
+    assert.equal(cancelled, false);
     const navigation = await page.evaluate(async () => {
       const app = document.querySelector("lilt-app");
       const pending = app._onLoadHistory(new CustomEvent("load-history", { detail: { direction: "older" } }));
