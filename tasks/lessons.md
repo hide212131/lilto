@@ -1,5 +1,11 @@
 # Lessons
 
+## 2026-11-04 Integrate concurrent sidebar changes before merging
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| サイドパネルの検索追加中に main 側も変更されるとの指摘を受け、最新 main の定期タスク分類・アクティビティ表示と統合する。 | 古い作業元では表示構成が異なり、そのままでは新しい分類や表示切替と検索が衝突する。 | マージ前に origin/main を取得し、関連コンポーネントの差分を確認する。検索を共通の対象一覧へ適用して既存の分類・表示切替を保ち、組合せを実画面と最終 E2E で検証する。作業元だけにある無関係な変更は PR に含めない。 |
+
 ## 2026-10-28 Timestamp fix must be verified against actual persisted API history
 
 | Change | Mistake/Context | Rule to repeat |

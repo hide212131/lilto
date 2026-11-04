@@ -1,4 +1,4 @@
-import { LitElement, html, css } from "lit";
+import { LitElement, html, css, type PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { Session } from "../types.js";
 import { extractActivityPreview, type ActivityPreview } from "../sidebar-activity.js";
@@ -15,6 +15,43 @@ export class LiltChatHistory extends LitElement {
   @state() private _menuOpenId: string | null = null;
   @state() private _editingId: string | null = null;
   @state() private _editingTitle = "";
+  @state() private _keyword = "";
+  @state() private _searching = false;
+  @state() private _searchFailed = false;
+  private _searchGeneration = 0;
+  private _searchTimer?: ReturnType<typeof setTimeout>;
+  private _searchContent = new Map<string, { updatedAt: number; text: string }>();
+
+  private async _loadSearchContent() {
+    const generation = this._searchGeneration;
+    const pending = this.sessions.filter((session) =>
+      session.backendSessionId && this._searchContent.get(session.id)?.updatedAt !== session.updatedAt);
+    const worker = async () => {
+      while (pending.length && generation === this._searchGeneration) {
+        const session = pending.shift()!;
+        try {
+          const result = await window.lilto.readConversation(session.id);
+          if (generation !== this._searchGeneration) return;
+          if (!result.ok) throw new Error("History unavailable");
+          this._searchContent.set(session.id, {
+            updatedAt: session.updatedAt,
+            text: result.conversation.messages.map((message) => message.text).join("\n").toLocaleLowerCase()
+          });
+          this.requestUpdate();
+        } catch {
+          if (generation === this._searchGeneration) this._searchFailed = true;
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(4, pending.length) }, worker));
+    if (generation === this._searchGeneration) this._searching = false;
+  }
+
+  private _onSearchInput(event: Event) {
+    this._keyword = (event.target as HTMLInputElement).value;
+    this._menuOpenId = null;
+  }
+
   private _activityObserver: IntersectionObserver | null = null;
 
   private _onDocClick = () => {
@@ -31,11 +68,27 @@ export class LiltChatHistory extends LitElement {
   disconnectedCallback() {
     super.disconnectedCallback();
     document.removeEventListener("click", this._onDocClick);
+    clearTimeout(this._searchTimer);
+    this._searchGeneration += 1;
     this._activityObserver?.disconnect();
     this._activityObserver = null;
   }
 
-  updated() {
+  updated(changed: PropertyValues) {
+    if (changed.has("sessions") || changed.has("_keyword")) {
+      clearTimeout(this._searchTimer);
+      this._searchGeneration += 1;
+      this._searching = Boolean(this._keyword.trim());
+      this._searchFailed = false;
+      if (this._searching) {
+        this._searchTimer = setTimeout(() => void this._loadSearchContent(), 200);
+      }
+      const ids = new Set(this.sessions.map((session) => session.id));
+      for (const id of this._searchContent.keys()) {
+        if (!ids.has(id)) this._searchContent.delete(id);
+      }
+    }
+
     this._activityObserver?.disconnect();
     this._activityObserver = null;
     if (!this.activityMode || !("IntersectionObserver" in window)) return;
@@ -67,6 +120,45 @@ export class LiltChatHistory extends LitElement {
       flex: 1;
       overflow-y: auto;
       padding: 6px 8px 10px;
+    }
+    .search {
+      display: flex;
+      gap: 4px;
+      padding: 10px 8px 4px;
+      align-items: center;
+    }
+    .search input {
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+      border: 1px solid var(--line, #dddddf);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font: inherit;
+      font-size: 13px;
+      color: var(--text, #1f2328);
+      background: var(--surface, #ffffff);
+    }
+    .search input:focus-visible {
+      outline: 2px solid #2f6df6;
+      outline-offset: 1px;
+    }
+    .search input::-webkit-search-cancel-button {
+      display: none;
+    }
+    .search button, .search-status button {
+      border: none;
+      border-radius: 6px;
+      padding: 6px;
+      background: transparent;
+      color: var(--muted, #6b7280);
+      cursor: pointer;
+      font: inherit;
+    }
+    .search-status {
+      padding: 4px 12px;
+      font-size: 12px;
+      color: var(--muted, #6b7280);
     }
     .sidebar-header { display: flex; align-items: center; justify-content: space-between; min-height: 48px; padding: 0 12px 0 16px; border-bottom: 1px solid var(--line, #dddddf); }
     .sidebar-heading { margin: 0; font-size: 14px; font-weight: 600; color: var(--text, #1f2328); }
@@ -236,13 +328,20 @@ export class LiltChatHistory extends LitElement {
   `;
 
   render() {
+    const keyword = this._keyword.trim().toLocaleLowerCase();
+    const sessions = keyword ? this.sessions.filter((session) =>
+      session.title.toLocaleLowerCase().includes(keyword)
+      || session.messages.some((message) => message.text.toLocaleLowerCase().includes(keyword))
+      || (this._searchContent.get(session.id)?.updatedAt === session.updatedAt
+        && this._searchContent.get(session.id)!.text.includes(keyword))) : this.sessions;
+
     const cronSessionIds = new Set(
       this.schedules.filter((schedule) => schedule.kind === "cron").map((schedule) => schedule.sessionId)
     );
     const isScheduled = (session: Session) => cronSessionIds.has(session.id)
       || (!!session.backendSessionId && cronSessionIds.has(session.backendSessionId));
-    const scheduledSessions = this.sessions.filter(isScheduled);
-    const regularSessions = this.sessions.filter((session) => !isScheduled(session));
+    const scheduledSessions = sessions.filter(isScheduled);
+    const regularSessions = sessions.filter((session) => !isScheduled(session));
     return html`
       <div class="sidebar-header">
         <h2 class="sidebar-heading">${this.activityMode ? "アクティビティ" : "チャット"}</h2>
@@ -252,14 +351,27 @@ export class LiltChatHistory extends LitElement {
           <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>
         </button>
       </div>
+      <div class="search" role="search">
+        <input type="search" placeholder="タイトル・本文で絞り込み" aria-label="会話をキーワードで絞り込み"
+          .value=${this._keyword} @input=${this._onSearchInput}
+          @keydown=${(event: KeyboardEvent) => { if (event.key === "Escape") this._keyword = ""; }} />
+        ${this._keyword ? html`<button aria-label="絞り込みを解除" @click=${() => { this._keyword = ""; }}>×</button>` : ""}
+      </div>
+      <div class="search-status" role="status" ?hidden=${!keyword}>
+        ${this._searching ? "会話を検索中…" : `${sessions.length}件`}
+        ${this._searchFailed ? html`<span>一部の会話を検索できませんでした</span>
+          <button @click=${() => { this._searchFailed = false; this._searching = true; void this._loadSearchContent(); }}>再試行</button>` : ""}
+      </div>
       <div class="list">
-        ${this.activityMode
+        ${keyword && sessions.length === 0
+          ? this._searching ? "" : html`<div class="empty">${this._searchFailed ? "検索できた会話に一致するものはありません" : "一致する会話はありません"}</div>`
+          : this.activityMode
           ? this.sessions.length === 0
             ? html`<div class="empty">まだアクティビティがありません</div>`
-            : this.sessions.map((session) => this._renderActivityItem(session))
+            : sessions.map((session) => this._renderActivityItem(session))
           : html`
-              ${this._renderCategory("scheduled", "定期タスク", scheduledSessions, "定期タスクはありません")}
-              ${this._renderCategory("sessions", "セッション", regularSessions, "まだ会話がありません")}
+              ${this._renderCategory("scheduled", "定期タスク", scheduledSessions, keyword ? "一致する定期タスクはありません" : "定期タスクはありません")}
+              ${this._renderCategory("sessions", "セッション", regularSessions, keyword ? "一致するセッションはありません" : "まだ会話がありません")}
             `}
       </div>
     `;
