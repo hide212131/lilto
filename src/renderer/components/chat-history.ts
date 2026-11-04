@@ -370,8 +370,8 @@ export class LiltChatHistory extends LitElement {
             ? html`<div class="empty">まだアクティビティがありません</div>`
             : sessions.map((session) => this._renderActivityItem(session))
           : html`
-              ${this._renderCategory("scheduled", "定期タスク", scheduledSessions, "定期タスクはありません")}
-              ${this._renderCategory("sessions", "セッション", regularSessions, "まだ会話がありません")}
+              ${this._renderCategory("scheduled", "定期タスク", scheduledSessions, keyword ? "一致する定期タスクはありません" : "定期タスクはありません")}
+              ${this._renderCategory("sessions", "セッション", regularSessions, keyword ? "一致するセッションはありません" : "まだ会話がありません")}
             `}
       </div>
     `;
