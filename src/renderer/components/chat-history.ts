@@ -2,11 +2,13 @@ import { LitElement, html, css } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { Session } from "../types.js";
 import { extractActivityPreview, type ActivityPreview } from "../sidebar-activity.js";
+import type { SchedulerScheduleSummary } from "../../shared/scheduler.js";
 
 @customElement("lilt-chat-history")
 export class LiltChatHistory extends LitElement {
   @property({ type: Array }) sessions: Session[] = [];
   @property({ attribute: false }) runningSessionIds: string[] = [];
+  @property({ type: Array }) schedules: SchedulerScheduleSummary[] = [];
   @property() activeSessionId: string | null = null;
   @property({ type: Boolean }) activityMode = false;
   @property({ attribute: false }) activityPreviews: Record<string, ActivityPreview> = {};
@@ -95,6 +97,19 @@ export class LiltChatHistory extends LitElement {
       line-height: 1.5;
     }
     .run-status { font-size: 10px; color: #765600; white-space: nowrap; }
+    .category + .category {
+      margin-top: 14px;
+      padding-top: 8px;
+      border-top: 1px solid var(--line, #dddddf);
+    }
+    .category-title {
+      margin: 0;
+      padding: 10px 12px 6px;
+      color: var(--muted, #6b7280);
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1.5;
+    }
     .session-item {
       position: relative;
       display: flex;
@@ -221,6 +236,13 @@ export class LiltChatHistory extends LitElement {
   `;
 
   render() {
+    const cronSessionIds = new Set(
+      this.schedules.filter((schedule) => schedule.kind === "cron").map((schedule) => schedule.sessionId)
+    );
+    const isScheduled = (session: Session) => cronSessionIds.has(session.id)
+      || (!!session.backendSessionId && cronSessionIds.has(session.backendSessionId));
+    const scheduledSessions = this.sessions.filter(isScheduled);
+    const regularSessions = this.sessions.filter((session) => !isScheduled(session));
     return html`
       <div class="sidebar-header">
         <h2 class="sidebar-heading">${this.activityMode ? "アクティビティ" : "チャット"}</h2>
@@ -231,10 +253,14 @@ export class LiltChatHistory extends LitElement {
         </button>
       </div>
       <div class="list">
-        ${this.sessions.length === 0
-          ? html`<div class="empty">${this.activityMode ? "まだアクティビティがありません" : "まだ会話がありません"}</div>`
-          : this.activityMode ? this.sessions.map((s) => this._renderActivityItem(s)) : this.sessions.map((s) => this._renderItem(s))
-        }
+        ${this.activityMode
+          ? this.sessions.length === 0
+            ? html`<div class="empty">まだアクティビティがありません</div>`
+            : this.sessions.map((session) => this._renderActivityItem(session))
+          : html`
+              ${this._renderCategory("scheduled", "定期タスク", scheduledSessions, "定期タスクはありません")}
+              ${this._renderCategory("sessions", "セッション", regularSessions, "まだ会話がありません")}
+            `}
       </div>
     `;
   }
@@ -270,6 +296,17 @@ export class LiltChatHistory extends LitElement {
     return this.runningSessionIds.includes(sessionId)
       ? html`<span class="run-status" aria-label="実行中">実行中</span>`
       : "";
+  }
+
+  private _renderCategory(id: string, title: string, sessions: Session[], emptyText: string) {
+    return html`
+      <section class="category" aria-labelledby=${id}>
+        <h2 class="category-title" id=${id}>${title}</h2>
+        ${sessions.length === 0
+          ? html`<div class="empty">${emptyText}</div>`
+          : sessions.map((session) => this._renderItem(session))}
+      </section>
+    `;
   }
 
   private _renderItem(session: Session) {

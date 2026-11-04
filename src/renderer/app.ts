@@ -14,7 +14,7 @@ import {
   parseSchedulerNotificationDecision,
   shouldRunConditionalSchedulerFollowUp
 } from "../shared/scheduler-follow-up.js";
-import type { SchedulerNotificationEvent } from "../shared/scheduler.js";
+import type { SchedulerNotificationEvent, SchedulerScheduleSummary } from "../shared/scheduler.js";
 import type { AppUpdateSnapshot } from "../shared/app-update.js";
 import "./components/top-bar.js";
 import "./components/message-list.js";
@@ -95,6 +95,7 @@ export class LiltApp extends LitElement {
   @property({ type: Boolean }) sidebarOpen = false;
   @property({ type: Number }) sidebarWidth = DEFAULT_SIDEBAR_WIDTH;
   @property({ type: Array }) sessions: Session[] = [];
+  @property({ type: Array }) schedules: SchedulerScheduleSummary[] = [];
   @property() activeSessionId: string | null = null;
   @property({ type: Boolean }) sidebarActivityMode = false;
   @property({ attribute: false }) activityPreviews: Record<string, ActivityPreview> = {};
@@ -239,6 +240,7 @@ export class LiltApp extends LitElement {
       const sessionId = localStorage.getItem("lilto.composer-active-session.v1");
       if (!this._currentSessionId && sessionId) await this._openConversation(sessionId);
     });
+    void this._loadSchedules();
     this._loadSidebarWidth();
     void this._hydrate();
     this._unsubscribeAuthListener = window.lilto.onAuthStateChanged((state) => {
@@ -330,6 +332,15 @@ export class LiltApp extends LitElement {
 
   private _saveSessions() {
     this.sessions = this._sortSessions(this.sessions);
+  }
+
+  private async _loadSchedules() {
+    try {
+      const result = await window.lilto.listSchedules();
+      if (result.ok) this.schedules = result.schedules;
+    } catch (error) {
+      console.error("Failed to load sidebar schedules", error);
+    }
   }
 
   private _normalizeMessage(message: Omit<Message, "createdAt"> & { createdAt?: number }, fallbackCreatedAt = Date.now()): Message {
@@ -572,6 +583,7 @@ export class LiltApp extends LitElement {
           ?hidden=${!this.sidebarOpen}
           style=${this.sidebarOpen ? `width: ${this.sidebarWidth}px; min-width: ${this.sidebarWidth}px;` : ""}
           .sessions=${this.sessions}
+          .schedules=${this.schedules}
           .activeSessionId=${this.activeSessionId}
           .runningSessionIds=${[...this._conversationRuns.keys()]}
           .activityMode=${this.sidebarActivityMode}
@@ -615,7 +627,10 @@ export class LiltApp extends LitElement {
         .open=${this.settingsOpen}
         .authState=${this.authState}
         .providerSettings=${this.providerSettings}
-        @close-settings=${() => { this.settingsOpen = false; }}
+        @close-settings=${() => {
+          this.settingsOpen = false;
+          void this._loadSchedules();
+        }}
         @provider-settings-changed=${this._onProviderSettingsChanged}
         @auth-state-updated=${this._onAuthStateUpdated}
       ></lilt-settings-modal>
@@ -690,6 +705,7 @@ export class LiltApp extends LitElement {
 
   private _onToggleSidebar() {
     this.sidebarOpen = !this.sidebarOpen;
+    if (this.sidebarOpen) void this._loadSchedules();
   }
 
   private _onSidebarResizeStart(event: PointerEvent) {
@@ -903,6 +919,7 @@ export class LiltApp extends LitElement {
       this._conversationLoopStates.set(conversationId, run.loopState);
       if (this._conversationRuns.get(conversationId) === run) this._conversationRuns.delete(conversationId);
       this._syncSelectedRun();
+      void this._loadSchedules();
     }
   }
 
@@ -1054,6 +1071,7 @@ export class LiltApp extends LitElement {
   }
 
   private _onSchedulerNotification(event: SchedulerNotificationEvent) {
+    void this._loadSchedules();
     if (this._markSchedulerNotificationSeen(event)) {
       return;
     }

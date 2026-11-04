@@ -265,6 +265,54 @@ async function injectSchedulerNotification(page, messageText, followUpInstructio
   );
 }
 
+async function verifySidebarCategories(page) {
+  const original = await page.evaluate(() => {
+    const app = document.querySelector("lilt-app");
+    const saved = { sessions: app.sessions, schedules: app.schedules, sidebarOpen: app.sidebarOpen, activeSessionId: app.activeSessionId };
+    const now = Date.now();
+    app.sessions = [
+      { id: "sidebar-regular", title: "通常の相談", createdAt: now, updatedAt: now, messages: [] },
+      { id: "sidebar-cron", backendSessionId: "backend-cron", title: "毎朝のニュース", createdAt: now, updatedAt: now, messages: [], hasUnread: true },
+      { id: "sidebar-once", title: "一度だけの予約", createdAt: now, updatedAt: now, messages: [] },
+      { id: "sidebar-direct", title: "毎週のまとめ", createdAt: now, updatedAt: now, messages: [] }
+    ];
+    app.schedules = [
+      { id: "cron-1", kind: "cron", sessionId: "backend-cron" },
+      { id: "cron-2", kind: "cron", sessionId: "backend-cron" },
+      { id: "cron-3", kind: "cron", sessionId: "sidebar-direct" },
+      { id: "once", kind: "one_shot", sessionId: "sidebar-once" }
+    ];
+    app.activeSessionId = "sidebar-direct";
+    app.sidebarOpen = true;
+    return saved;
+  });
+  const history = page.locator("lilt-chat-history");
+  const scheduled = history.locator('section[aria-labelledby="scheduled"]');
+  const sessions = history.locator('section[aria-labelledby="sessions"]');
+  try {
+    await scheduled.getByRole("heading", { name: "定期タスク" }).waitFor();
+    assert.deepEqual(await scheduled.locator(".session-title").allTextContents(), ["毎朝のニュース", "毎週のまとめ"]);
+    assert.deepEqual(await sessions.locator(".session-title").allTextContents(), ["通常の相談", "一度だけの予約"]);
+    assert.equal(await scheduled.locator(".unread-dot").count(), 1);
+    assert.equal(await scheduled.locator(".active .session-title").textContent(), "毎週のまとめ");
+    // Exercise the existing menu in the new category without mutating backend fixtures.
+    await scheduled.locator(".session-item").first().hover();
+    await scheduled.getByTitle("オプション").first().click();
+    await scheduled.getByText("名称変更", { exact: true }).click();
+    await scheduled.locator("input").fill("編集中の定期タスク");
+    await scheduled.locator("input").press("Escape");
+    assert.equal(await scheduled.locator(".session-title").first().textContent(), "毎朝のニュース");
+    await page.evaluate(() => { document.querySelector("lilt-app").schedules = []; });
+    await scheduled.getByText("定期タスクはありません", { exact: true }).waitFor();
+    assert.equal(await sessions.locator(".session-item").count(), 4);
+    await page.evaluate(() => { document.querySelector("lilt-app").sessions = []; });
+    await sessions.getByText("まだ会話がありません", { exact: true }).waitFor();
+    console.log("✓ Sidebar separates cron sessions, preserves controls, and updates after schedule removal");
+  } finally {
+    await page.evaluate((saved) => Object.assign(document.querySelector("lilt-app"), saved), original);
+  }
+}
+
 async function clickSettingsButton(page) {
   await resolveNamedLocator(page, "settingsButton").click();
 }
@@ -535,6 +583,7 @@ async function main() {
     await verifyConversationOrder(page);
     await verifyConversationTimestamps(page);
     await verifyToolGroups(page);
+    await verifySidebarCategories(page);
 
     const initialStatus = await waitForStatus(page, [
       "待機中",
