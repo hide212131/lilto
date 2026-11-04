@@ -121,6 +121,63 @@ async function verifyConversationOrder(page) {
   console.log("✓ Question/answer display order preserved across repeated history merges");
 }
 
+async function verifyHistoryFiltering(page) {
+  await page.evaluate(async () => {
+    const history = document.createElement("lilt-chat-history");
+    history.id = "history-filter-regression";
+    const now = Date.now();
+    history.sessions = [
+      { id: "filter-1", title: "旅行の相談", createdAt: now, updatedAt: now,
+        messages: [{ id: "m1", role: "assistant", text: "京都の紅葉を見に行く", createdAt: now }] },
+      { id: "filter-2", title: "仕事の計画", createdAt: now, updatedAt: now,
+        messages: [{ id: "m2", role: "user", text: "Release CHECKLIST", createdAt: now }] }
+    ];
+    history.schedules = [{ id: "filter-cron", kind: "cron", sessionId: "filter-1" }];
+    history.addEventListener("toggle-activity", (event) => {
+      event.stopImmediatePropagation();
+      history.activityMode = !history.activityMode;
+    });
+    document.body.append(history);
+    await history.updateComplete;
+  });
+  const history = page.locator("#history-filter-regression");
+  const input = history.getByRole("searchbox");
+  const titles = history.locator(".session-title");
+  const waitForTitles = async (expected) => {
+    await page.waitForFunction(({ expected }) => {
+      const history = document.querySelector("#history-filter-regression");
+      return JSON.stringify(Array.from(history.shadowRoot.querySelectorAll(".session-title"), (el) => el.textContent))
+        === JSON.stringify(expected);
+    }, { expected });
+    assert.deepEqual(await titles.allTextContents(), expected);
+  };
+  try {
+    await input.fill("旅行");
+    await waitForTitles(["旅行の相談"]);
+    await input.fill("紅葉");
+    await waitForTitles(["旅行の相談"]);
+    assert.equal(await history.locator('[aria-labelledby="scheduled"] .session-title').textContent(), "旅行の相談");
+    assert.equal(await history.locator('[aria-labelledby="sessions"] .session-title').count(), 0);
+    await history.getByRole("button", { name: "アクティビティを表示" }).click();
+    await history.locator(".activity-title").waitFor();
+    assert.deepEqual(await history.locator(".activity-title").allTextContents(), ["旅行の相談"]);
+    await history.getByRole("button", { name: "チャット一覧を表示" }).click();
+    await waitForTitles(["旅行の相談"]);
+    await input.fill("  checklist  ");
+    await waitForTitles(["仕事の計画"]);
+    await input.fill("該当しない言葉");
+    await history.getByText("一致する会話はありません", { exact: true }).waitFor();
+    await history.getByRole("button", { name: "絞り込みを解除" }).click();
+    await waitForTitles(["旅行の相談", "仕事の計画"]);
+    await input.fill("紅葉");
+    await input.press("Escape");
+    await waitForTitles(["旅行の相談", "仕事の計画"]);
+    console.log("✓ Sidebar keyword filtering: title, message body, case, whitespace, no matches and reset");
+  } finally {
+    await history.evaluate((element) => element.remove());
+  }
+}
+
 async function verifySidebarActivity(page) {
   const history = page.locator("#activity-contract-fixture");
   const before = await page.evaluate(async () => {
@@ -581,6 +638,7 @@ async function main() {
     console.log("✓ lilt-app rendered");
     ({ browser, page } = await verifyLinkNavigation(browser, page, cdpPort));
     await verifyConversationOrder(page);
+    await verifyHistoryFiltering(page);
     await verifyConversationTimestamps(page);
     await verifyToolGroups(page);
     await verifySidebarCategories(page);
