@@ -6,6 +6,12 @@
 |---|---|---|
 | 長い会話を最新ページから表示し、スクロールで前後へ段階取得する。 | 全履歴を取得してから表示だけを切り取っても取得・保持メモリは減らない。ページ追加時の無条件末尾スクロールや、hydrationで解放済みキャッシュを再統合する処理も遡り閲覧を壊す。 | 使用中のバイナリの実APIを確認し、metadata-only readとページAPIを使う。保持ページ数を制限し、逆向きカーソルで解放範囲を再取得する。1,000ターンの実画面で初期件数、DOM件数、表示位置、往復と会話切替競合を検証する。 |
 
+## 2026-11-04 Integrate concurrent sidebar changes before merging
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| サイドパネルの検索追加中に main 側も変更されるとの指摘を受け、最新 main の定期タスク分類・アクティビティ表示と統合する。 | 古い作業元では表示構成が異なり、そのままでは新しい分類や表示切替と検索が衝突する。 | マージ前に origin/main を取得し、関連コンポーネントの差分を確認する。検索を共通の対象一覧へ適用して既存の分類・表示切替を保ち、組合せを実画面と最終 E2E で検証する。作業元だけにある無関係な変更は PR に含めない。 |
+
 ## 2026-10-28 Timestamp fix must be verified against actual persisted API history
 
 | Change | Mistake/Context | Rule to repeat |
