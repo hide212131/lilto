@@ -170,13 +170,29 @@ export class ConversationHistoryService {
   async listConversations(): Promise<ConversationRecord[]> {
     const client = await this.createClient();
     try {
-      const result = await client.request<{ data?: Array<Record<string, unknown>> }>("thread/list", {
-        sourceKinds: ["vscode", "appServer"],
-        archived: false,
-        sortKey: "updated_at",
-        cwd: this.options.workspaceDir
-      });
-      const data = Array.isArray(result?.data) ? result.data : [];
+      const data: Array<Record<string, unknown>> = [];
+      const seenCursors = new Set<string>();
+      let cursor: string | undefined;
+      do {
+        const result = await client.request<{
+          data?: Array<Record<string, unknown>>;
+          nextCursor?: string | null;
+        }>("thread/list", {
+          sourceKinds: ["vscode", "appServer"],
+          archived: false,
+          sortKey: "updated_at",
+          cwd: this.options.workspaceDir,
+          ...(cursor === undefined ? {} : { cursor })
+        });
+        data.push(...(Array.isArray(result?.data) ? result.data : []));
+        cursor = result.nextCursor ?? undefined;
+        if (cursor !== undefined) {
+          if (seenCursors.has(cursor)) {
+            throw new Error("codex app-server returned a repeated thread/list cursor");
+          }
+          seenCursors.add(cursor);
+        }
+      } while (cursor !== undefined);
       return data.map((thread) => ({
         id: typeof thread.id === "string" ? thread.id : "",
         title: fallbackTitleFromThread(thread),

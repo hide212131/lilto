@@ -1,5 +1,11 @@
 # Lessons
 
+## 2026-11-04 Load all sidebar history pages
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| サイドパネルの会話一覧で Codex App Server の全ページを取得する。 | `thread/list` の最初の `data` だけを使い、`nextCursor` を無視して古い会話が欠落していた。 | 一覧 API は公式プロトコルの継続カーソルがなくなるまで同じフィルターで取得する。空ページや表示対象外のみのページでも継続し、途中失敗を部分成功として返さない。複数ページ・終了条件・接続解放を検証する。 |
+
 ## 2026-11-04 Bounded conversation history includes acquisition and retained state
 
 | Change | Mistake/Context | Rule to repeat |
