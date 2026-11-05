@@ -827,16 +827,26 @@ async function main() {
 
     await page.evaluate(() => {
       const app = document.querySelector("lilt-app");
-      app.updateState = { status: "available", currentVersion: "0.1.4", targetVersion: "0.1.5", source: "startup", revision: 100 };
-      app.updateDialogOpen = true;
+      app._onAppUpdateState({ status: "available", currentVersion: "0.1.4", targetVersion: "0.1.5", source: "poll", revision: 100 });
     });
     const updateDialog = page.locator(".update-dialog");
     await updateDialog.waitFor({ state: "visible" });
-    await updateDialog.getByText("Lilt-o 0.1.5 を利用できます。", { exact: true }).waitFor();
-    await updateDialog.getByRole("button", { name: "更新をダウンロード" }).waitFor();
+    await updateDialog.getByText("最新版があります。更新しますか？（Lilt-o 0.1.5）", { exact: true }).waitFor();
+    await updateDialog.getByRole("button", { name: "更新する" }).waitFor();
     const focusedUpdateControl = await page.evaluate(() => document.querySelector("lilt-app").shadowRoot.activeElement?.textContent?.trim());
-    if (focusedUpdateControl !== "更新をダウンロード") throw new Error("Update dialog should focus its primary action");
+    if (focusedUpdateControl !== "更新する") throw new Error("Update dialog should focus its primary action");
     await page.keyboard.press("Escape");
+    await updateDialog.waitFor({ state: "hidden" });
+    await page.evaluate(() => {
+      document.querySelector("lilt-app")._onAppUpdateState({ status: "available", currentVersion: "0.1.4", targetVersion: "0.1.5", source: "poll", revision: 101 });
+    });
+    assert.equal(await updateDialog.count(), 0, "Same version should not reopen the dismissed prompt");
+    await page.evaluate(() => {
+      document.querySelector("lilt-app")._onAppUpdateState({ status: "available", currentVersion: "0.1.4", targetVersion: "0.1.6", source: "poll", revision: 102 });
+    });
+    await updateDialog.waitFor({ state: "visible" });
+    await updateDialog.getByText("最新版があります。更新しますか？（Lilt-o 0.1.6）", { exact: true }).waitFor();
+    await updateDialog.getByRole("button", { name: "後で", exact: true }).click();
     await updateDialog.waitFor({ state: "hidden" });
     const restoredFocus = await page.evaluate(() => document.querySelector("lilt-app").shadowRoot.activeElement?.localName);
     if (restoredFocus !== "lilt-composer") throw new Error("Closing update dialog should restore composer focus");
@@ -844,7 +854,7 @@ async function main() {
     await updateDialog.waitFor({ state: "visible" });
     await page.evaluate(() => {
       const app = document.querySelector("lilt-app");
-      app.updateState = { status: "downloaded", currentVersion: "0.1.4", targetVersion: "0.1.5", revision: 101 };
+      app.updateState = { status: "downloaded", currentVersion: "0.1.4", targetVersion: "0.1.6", revision: 103 };
     });
     const draftInput = page.locator("lilt-composer").locator("textarea");
     await draftInput.fill("更新前に失わない入力内容");

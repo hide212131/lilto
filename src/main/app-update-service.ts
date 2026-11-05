@@ -7,7 +7,13 @@ function loadAutoUpdater(): AppUpdater {
   return require("electron-updater").autoUpdater as AppUpdater;
 }
 
+export const APP_UPDATE_POLL_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const MAX_POLL_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
 export class AppUpdateService {
+  private polling = false;
+  private pollTimer: ReturnType<typeof setTimeout> | null = null;
+  private pollFailures = 0;
   private snapshot: AppUpdateSnapshot;
   private revision = 0;
   private checkPromise: Promise<void> | null = null;
@@ -58,7 +64,29 @@ export class AppUpdateService {
     return { ...this.snapshot };
   }
 
-  check(source: "startup" | "manual"): Promise<void> {
+  startPolling(): void {
+    if (this.polling || this.snapshot.status === "unsupported") return;
+    this.polling = true;
+    void this.poll("startup");
+  }
+
+  stopPolling(): void {
+    this.polling = false;
+    if (this.pollTimer) clearTimeout(this.pollTimer);
+    this.pollTimer = null;
+  }
+
+  private async poll(source: "startup" | "poll"): Promise<void> {
+    await this.check(source);
+    if (!this.polling) return;
+    this.pollFailures = this.snapshot.status === "error" ? this.pollFailures + 1 : 0;
+    // Delay from completion: slow requests and wake from sleep never cause catch-up bursts.
+    const delay = Math.min(APP_UPDATE_POLL_INTERVAL_MS * 2 ** Math.min(this.pollFailures, 2), MAX_POLL_INTERVAL_MS);
+    this.pollTimer = setTimeout(() => { void this.poll("poll"); }, delay);
+    this.pollTimer.unref();
+  }
+
+  check(source: "startup" | "manual" | "poll"): Promise<void> {
     if (["unsupported", "downloading", "downloaded", "preparing-install", "installing"].includes(this.snapshot.status)) {
       return Promise.resolve();
     }

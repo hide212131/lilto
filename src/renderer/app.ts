@@ -664,10 +664,15 @@ export class LiltApp extends LitElement {
     `;
   }
 
+  private _notifiedUpdateVersion: string | undefined;
+
   private _onAppUpdateState(state: AppUpdateSnapshot) {
     if (this.updateState && state.revision < this.updateState.revision) return;
     this.updateState = state;
-    if (state.status === "available" && state.source === "startup") this.updateDialogOpen = true;
+    if (state.status === "available" && state.source !== "manual" && state.targetVersion !== this._notifiedUpdateVersion) {
+      this._notifiedUpdateVersion = state.targetVersion;
+      this.updateDialogOpen = true;
+    }
   }
 
   private _renderAppUpdateDialog() {
@@ -677,7 +682,7 @@ export class LiltApp extends LitElement {
     let message = "更新を確認しています…";
     if (status === "unsupported") message = "自動更新はWindowsのインストール版で利用できます。";
     else if (status === "idle") message = `最新バージョンです（${state.currentVersion}）。`;
-    else if (status === "available") message = `Lilt-o ${state.targetVersion} を利用できます。`;
+    else if (status === "available") message = `最新版があります。更新しますか？（Lilt-o ${state.targetVersion}）`;
     else if (status === "downloading") message = `更新をダウンロードしています（${Math.floor(state.progress ?? 0)}%）。`;
     else if (status === "downloaded") message = `Lilt-o ${state.targetVersion} の準備ができました。再起動してインストールします。`;
     else if (status === "preparing-install") message = "実行中の処理を確認しています…";
@@ -689,11 +694,11 @@ export class LiltApp extends LitElement {
         <p aria-live="polite">${message}</p>
         ${status === "downloading" ? html`<progress max="100" value=${state.progress ?? 0}></progress>` : ""}
         <div class="update-actions">
-          ${status === "available" ? html`<button @click=${() => void window.lilto.downloadAppUpdate().catch(() => undefined)}>更新をダウンロード</button>` : ""}
+          ${status === "available" ? html`<button @click=${() => void window.lilto.downloadAppUpdate().catch(() => undefined)}>更新する</button>` : ""}
           ${status === "downloaded" ? html`<button ?disabled=${this._conversationRuns.size > 0} @click=${() => void this._installAppUpdate()}>再起動してインストール</button>` : ""}
           ${status === "error" ? html`<button @click=${() => void window.lilto.checkAppUpdate()}>再試行</button>` : ""}
           ${status === "idle" || status === "unsupported" ? html`<button @click=${() => void window.lilto.checkAppUpdate()}>更新を確認</button>` : ""}
-          <button ?disabled=${status === "installing"} @click=${() => { this.updateDialogOpen = false; }}>${status === "downloaded" || status === "preparing-install" ? "後で" : "閉じる"}</button>
+          <button ?disabled=${status === "installing"} @click=${() => { this.updateDialogOpen = false; }}>${status === "available" || status === "downloaded" || status === "preparing-install" ? "後で" : "閉じる"}</button>
         </div>
         ${this._conversationRuns.size > 0 ? html`<p>処理が完了してからインストールしてください。</p>` : ""}
       </section>
