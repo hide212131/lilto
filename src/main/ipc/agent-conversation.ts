@@ -1,3 +1,4 @@
+import type { PromptImage } from "../../shared/prompt-images";
 import { randomUUID } from "node:crypto";
 
 import { BrowserWindow, ipcMain } from "electron";
@@ -56,7 +57,7 @@ export function registerAgentConversationIpcHandlers({
         return { ok: false, error: { code: "NO_ACTIVE_TURN", message: "実行が終了したか、中断されました。再送信してください。" } };
       }
     }
-    return agentRuntime.steerPrompt(normalized, conversationId);
+    return agentRuntime.steerPrompt(normalized, conversationId, (payload as { images?: PromptImage[] }).images);
   });
 
   ipcMain.handle("agent:submitPrompt", async (_event, payload: unknown) => {
@@ -107,6 +108,7 @@ export function registerAgentConversationIpcHandlers({
       }
       const providerSettings = providerSettingsService.getState();
       const response = agentRuntime.submitPrompt(text, providerSettings, {
+        images: (payload as { images?: PromptImage[] }).images,
         requestId,
         conversationId,
         backendSessionId,

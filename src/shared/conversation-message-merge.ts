@@ -4,6 +4,7 @@ type ConversationMessage = {
   text: string;
   createdAt: number;
   progress?: unknown;
+  images?: { dataUrl: string }[];
   requestId?: string;
 };
 
@@ -26,7 +27,8 @@ export function mergeSessionMessages<T extends ConversationMessage>(hydratedMess
         const hydrated = hydratedMessages[candidateIndex];
         if (!matchedIndexes.has(candidateIndex)
           && hydrated.role === message.role
-          && hydrated.text === message.text) {
+          && hydrated.text === message.text
+          && JSON.stringify(hydrated.images?.map((i) => i.dataUrl) ?? []) === JSON.stringify(message.images?.map((i) => i.dataUrl) ?? [])) {
           index = candidateIndex;
           break;
         }
@@ -47,7 +49,7 @@ export function mergeSessionMessages<T extends ConversationMessage>(hydratedMess
       continue;
     }
 
-    const signature = JSON.stringify([message.role, message.text, message.createdAt]);
+    const signature = JSON.stringify([message.role, message.text, message.images, message.createdAt]);
     if (!localSignatures.has(signature)) {
       localSignatures.add(signature);
       const messages = insertions.get(nextIndex) ?? [];

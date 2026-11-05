@@ -1,3 +1,4 @@
+import type { PromptImage } from "../shared/prompt-images.js";
 import { LitElement, html, css } from "lit";
 import { customElement, property, query } from "lit/decorators.js";
 import {
@@ -898,7 +899,7 @@ export class LiltApp extends LitElement {
     if (this._currentSessionId) void window.lilto.abortPrompt(this._currentSessionId);
   }
 
-  private async _doSend(text: string) {
+  private async _doSend(text: string, images: PromptImage[] = []) {
     const conversationId = this._currentSessionId;
     if (!conversationId) {
       this._addMessage("error", "UNEXPECTED: 会話セッションを開始できませんでした");
@@ -924,7 +925,8 @@ export class LiltApp extends LitElement {
       const result = await window.lilto.submitPrompt(
         text,
         conversationId,
-        activeSession?.backendSessionId ?? null
+        activeSession?.backendSessionId ?? null,
+        { images }
       );
       this._markForegroundResponseReceived(
         run,
@@ -962,6 +964,7 @@ export class LiltApp extends LitElement {
         });
       } else {
         this._restoreConversationDraft(conversationId, text);
+        this._composer.restoreImages(images, conversationId);
         this._removeSessionMessage(conversationId, pendingMessageId);
         this._appendMessageToSession(conversationId, {
           id: this._nextMessageId(),
@@ -980,6 +983,7 @@ export class LiltApp extends LitElement {
       }
     } catch (err) {
       this._restoreConversationDraft(conversationId, text);
+      this._composer.restoreImages(images, conversationId);
       this._markForegroundResponseReceived(run, undefined, null, "failed", String(err));
       this._removeSessionMessage(conversationId, pendingMessageId);
       this._appendMessageToSession(conversationId, {
@@ -995,18 +999,20 @@ export class LiltApp extends LitElement {
     }
   }
 
-  private async _onSendMessage(e: CustomEvent<{ text: string }>) {
+  private async _onSendMessage(e: CustomEvent<{ text: string; images?: PromptImage[] }>) {
     const text = e.detail.text;
+    const images = e.detail.images ?? [];
     if (this._creatingConversation) {
       this._composer.restoreDraft(text);
+      this._composer.restoreImages(images);
       return;
     }
-    if (this.isSending && text.trim()) {
+    if (this.isSending && (text.trim() || images.length)) {
       const conversationId = this._currentSessionId;
       const run = conversationId ? this._conversationRuns.get(conversationId) : undefined;
       if (!conversationId || !run) return;
       const messageId = this._appendMessageToSession(conversationId, {
-        id: this._nextMessageId(), role: "user", text
+        id: this._nextMessageId(), role: "user", text, images
       });
       // Keep the eventual answer after the additional user instructions.
       const movePendingLast = (messages: Message[]) => [
@@ -1016,7 +1022,7 @@ export class LiltApp extends LitElement {
       this._updateSession(conversationId, (session) => ({ ...session, messages: movePendingLast(session.messages) }));
       this.messages = movePendingLast(this.messages);
       try {
-        const result = await window.lilto.steerPrompt(text, conversationId);
+        const result = await window.lilto.steerPrompt(text, conversationId, images);
         if (!result.ok) throw new Error(result.error.message);
       } catch (error) {
         this._removeSessionMessage(conversationId, messageId);
@@ -1024,10 +1030,11 @@ export class LiltApp extends LitElement {
           id: this._nextMessageId(), role: "error", text: `追加指示を送信できませんでした: ${error instanceof Error ? error.message : String(error)}\n\n未送信の指示: ${text}`
         });
         this._restoreConversationDraft(conversationId, text);
+        this._composer.restoreImages(images, conversationId);
       }
       return;
     }
-    if (!this._canSend() || !text) {
+    if (!this._canSend() || (!text && !images.length)) {
       if (!this._canSend()) {
         this._addMessage("system",
           this.providerSettings.activeProvider === "oauth"
@@ -1039,7 +1046,7 @@ export class LiltApp extends LitElement {
       return;
     }
 
-    const title = text.slice(0, 40) + (text.length > 40 ? "…" : "");
+    const title = text.slice(0, 40) + (text.length > 40 ? "…" : "") || "画像";
     ++this._navigationVersion;
     this._creatingConversation = true;
     this.requestUpdate();
@@ -1048,7 +1055,7 @@ export class LiltApp extends LitElement {
       if (this._currentSessionId && this._isReadingHistory(this._currentSessionId)) {
         await this._refreshConversation(this._currentSessionId, true);
       }
-      this._addMessage("user", text);
+      this._addMessage("user", text, undefined, images);
       conversationId = await this._ensureConversation(title);
     } finally {
       this._creatingConversation = false;
@@ -1056,10 +1063,11 @@ export class LiltApp extends LitElement {
     }
     if (!conversationId) {
       this._composer.restoreDraft(text);
+      this._composer.restoreImages(images);
       return;
     }
     this._saveCurrentSession();
-    await this._doSend(text);
+    await this._doSend(text, images);
   }
 
   private async _onRetryMessage(e: CustomEvent<{ messageId: string; text: string }>) {
@@ -1071,7 +1079,7 @@ export class LiltApp extends LitElement {
     // Remove all messages from idx+1 onwards (clears the assistant response and any subsequent messages)
     this.messages = this.messages.slice(0, idx + 1);
     this._saveCurrentSession();
-    await this._doSend(text);
+    await this._doSend(text, this.messages[idx]?.images);
   }
 
   private _onLoopEvent(event: AgentLoopEvent) {
@@ -1438,13 +1446,14 @@ export class LiltApp extends LitElement {
     return preview.length > 120 ? `${preview.slice(0, 117)}...` : preview;
   }
 
-  private _addMessage(role: Message["role"], text: string, progress?: AssistantProgress): string {
+  private _addMessage(role: Message["role"], text: string, progress?: AssistantProgress, images?: PromptImage[]): string {
     const msg: Message = {
       id: this._nextMessageId(),
       createdAt: Date.now(),
       requestId: undefined,
       role,
       text,
+      images,
       progress
     };
     this.messages = [...this.messages, msg];

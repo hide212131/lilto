@@ -1,3 +1,4 @@
+import type { PromptImage } from "./shared/prompt-images";
 import { contextBridge, ipcRenderer } from "electron";
 import type { AgentLoopEvent } from "./shared/agent-loop";
 import type { AudioTranscriptionResult } from "./shared/audio-transcription";
@@ -15,18 +16,19 @@ contextBridge.exposeInMainWorld("lilto", {
     text: string,
     conversationId?: string | null,
     backendSessionId?: string | null,
-    options?: { silent?: boolean; freshContext?: boolean }
+    options?: { silent?: boolean; freshContext?: boolean; images?: PromptImage[] }
   ) =>
     ipcRenderer.invoke("agent:submitPrompt", {
       text,
       conversationId,
       backendSessionId,
       silent: options?.silent === true,
-      freshContext: options?.freshContext === true
+      freshContext: options?.freshContext === true,
+      images: options?.images
     }),
   abortPrompt: async (conversationId: string) => ipcRenderer.invoke("agent:abort", { conversationId }),
-  steerPrompt: async (text: string, conversationId: string) =>
-    ipcRenderer.invoke("agent:steerPrompt", { text, conversationId }),
+  steerPrompt: async (text: string, conversationId: string, images?: PromptImage[]) =>
+    ipcRenderer.invoke("agent:steerPrompt", { text, conversationId, images }),
   listConversations: async () => ipcRenderer.invoke("conversations:list"),
   readConversation: async (conversationId: string, page?: import("./shared/conversation-history-window").HistoryPageRequest) => ipcRenderer.invoke("conversations:read", { conversationId, page }),
   createConversation: async (title?: string) => ipcRenderer.invoke("conversations:create", { title }),

@@ -109,3 +109,16 @@ test("履歴ページIPCは不正なカーソルを拒否し、取得方向と�
   assert.equal(reads[0][1], page);
   assert.equal(result.conversation.historyPage.newerCursor, "back");
 });
+
+
+test("IPC forwards image-only input through normal submission", async () => {
+  const images = [{ name: "clip.png", dataUrl: "data:image/png;base64,aGVsbG8=" }];
+  let received;
+  const ipc = setup({ submitPrompt: async (text, settings, hooks) => {
+    received = { text, images: hooks.images };
+    return { ok: true, text: "done" };
+  } });
+  assert.equal((await ipc.invoke("agent:submitPrompt", { text: "", images, conversationId: "a" })).ok, true);
+  assert.equal(received.text, "");
+  assert.deepEqual(received.images, images);
+});

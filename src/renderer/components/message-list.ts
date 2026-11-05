@@ -64,6 +64,7 @@ export class LiltMessageList extends LitElement {
       font-size: 14px;
       font-family: "Hiragino Sans", "Yu Gothic", sans-serif;
     }
+    .message-image { display: block; max-width: min(280px, 100%); max-height: 240px; border-radius: 10px; margin: 4px 0 8px; object-fit: contain; }
     .msg-user {
       margin-left: auto;
       margin-right: 0;
@@ -762,7 +763,7 @@ export class LiltMessageList extends LitElement {
                   <div class="msg-wrapper-user" data-message-id=${m.id}>
                     <div class="msg-shell msg-shell-user">
                       ${this._renderMessageTimestamp(m, "user")}
-                      <div class="msg msg-user ${m.pending ? "msg-pending" : ""}">${this._renderMarkdown(m.text ?? "")}</div>
+                      <div class="msg msg-user ${m.pending ? "msg-pending" : ""}">${m.images?.map((image) => html`<img class="message-image" src=${image.dataUrl} alt=${image.name} loading="lazy" />`)}${this._renderMarkdown(m.text ?? "")}</div>
                     </div>
                     <div class="msg-actions">
                       <button class="action-btn" title="再送信" @click=${() => this._retryMessage(m)}>
@@ -778,12 +779,12 @@ export class LiltMessageList extends LitElement {
                 ? html`
                     <div class="msg-wrapper-error" data-message-id=${m.id}>
                       <div class="msg-shell msg-shell-error">
-                        <div class="msg msg-error ${m.pending ? "msg-pending" : ""}">${this._renderMarkdown(m.text ?? "")}</div>
+                        <div class="msg msg-error ${m.pending ? "msg-pending" : ""}">${m.images?.map((image) => html`<img class="message-image" src=${image.dataUrl} alt=${image.name} loading="lazy" />`)}${this._renderMarkdown(m.text ?? "")}</div>
                         ${this._renderMessageTimestamp(m, "error")}
                       </div>
                     </div>
                   `
-              : html`<div data-message-id=${m.id} class="msg msg-${m.role} ${m.pending ? "msg-pending" : ""}">${this._renderMarkdown(m.text ?? "")}</div>`
+              : html`<div data-message-id=${m.id} class="msg msg-${m.role} ${m.pending ? "msg-pending" : ""}">${m.images?.map((image) => html`<img class="message-image" src=${image.dataUrl} alt=${image.name} loading="lazy" />`)}${this._renderMarkdown(m.text ?? "")}</div>`
         )}
         ${this.hasNewer ? html`<button class="history-control history-newer" ?disabled=${this.historyLoading} @click=${() => this._loadHistory("newer")}>${this.historyLoading ? "読み込み中…" : "新しい履歴を読み込む"}</button>` : ""}
       </div>

@@ -1,3 +1,4 @@
+import type { PromptImage } from "../shared/prompt-images.js";
 import type { AgentLoopEvent } from "../shared/agent-loop.js";
 import type { AudioTranscriptionResult } from "../shared/audio-transcription.js";
 import type { HeartbeatAssistantStatus } from "../shared/heartbeat-assistant.js";
@@ -130,6 +131,7 @@ export type AssistantProgress = {
 };
 
 export type Message = {
+  images?: PromptImage[];
   id: string;
   createdAt: number;
   requestId?: string;
@@ -158,13 +160,13 @@ declare global {
         text: string,
         conversationId?: string | null,
         backendSessionId?: string | null,
-        options?: { silent?: boolean; freshContext?: boolean }
+        options?: { silent?: boolean; freshContext?: boolean; images?: PromptImage[] }
       ) => Promise<
         | { ok: true; requestId: string; response: { text: string } }
         | { ok: false; requestId?: string; error?: { code?: string; message?: string; retryable?: boolean } }
       >;
       abortPrompt: (conversationId: string) => Promise<{ ok: boolean }>;
-      steerPrompt: (text: string, conversationId: string) => Promise<
+      steerPrompt: (text: string, conversationId: string, images?: PromptImage[]) => Promise<
         | { ok: true }
         | { ok: false; error: { code: string; message: string } }
       >;

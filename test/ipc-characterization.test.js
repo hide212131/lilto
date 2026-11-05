@@ -64,7 +64,7 @@ test("main ipc と preload invoke は同じ 38 チャネルを公開する", () 
 test("agent と conversation IPC の payload 契約を固定する", () => {
   assert.match(
     preloadContent,
-    /submitPrompt: async \(\s*text: string,\s*conversationId\?: string \| null,\s*backendSessionId\?: string \| null,\s*options\?: \{ silent\?: boolean; freshContext\?: boolean \}\s*\)\s*=>\s*ipcRenderer\.invoke\("agent:submitPrompt", \{\s*text,\s*conversationId,\s*backendSessionId,\s*silent: options\?\.silent === true,\s*freshContext: options\?\.freshContext === true\s*\}\)/s
+    /submitPrompt: async \(\s*text: string,\s*conversationId\?: string \| null,\s*backendSessionId\?: string \| null,\s*options\?: \{ silent\?: boolean; freshContext\?: boolean; images\?: PromptImage\[\] \}\s*\)\s*=>\s*ipcRenderer\.invoke\("agent:submitPrompt", \{\s*text,\s*conversationId,\s*backendSessionId,\s*silent: options\?\.silent === true,\s*freshContext: options\?\.freshContext === true,\s*images: options\?\.images\s*\}\)/s
   );
   assert.match(ipcContractContent, /export type PromptPayload = \{/);
   assert.match(ipcContractContent, /conversationId\?: string \| null;/);

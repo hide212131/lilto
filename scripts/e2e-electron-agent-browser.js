@@ -1,3 +1,4 @@
+const { verifyClipboardImages } = require("./verify-clipboard-images");
 const { seedHistory } = require("../test/helpers/history-fixture");
 const { verifyConversationHistory } = require("./verify-conversation-history");
 const { spawn } = require("node:child_process");
@@ -857,6 +858,14 @@ async function main() {
     await updateDialog.waitFor({ state: "hidden" });
     console.log("✓ Update notice renders and install attempt preserves the saved unsent draft");
 
+    await verifyClipboardImages(page, () => page.locator('lilt-composer textarea').evaluate((textarea) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 32;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#2288bb'; ctx.fillRect(0, 0, 32, 32);
+      const bytes = Uint8Array.from(atob(canvas.toDataURL().split(',')[1]), c => c.charCodeAt(0));
+      return navigator.clipboard.write([new ClipboardItem({ 'image/png': new Blob([bytes], { type: 'image/png' }) })]);
+    }));
     await page.screenshot({ path: screenshotPath, fullPage: true });
     console.log(`✓ Final screenshot: ${screenshotPath}`);
 

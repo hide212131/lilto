@@ -1,3 +1,4 @@
+import { MAX_PROMPT_IMAGES, MAX_IMAGE_BYTES, type PromptImage } from "../../shared/prompt-images.js";
 import { LitElement, html, css } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
 import { AudioRecorder } from "../audio-recorder.js";
@@ -7,6 +8,53 @@ export class LiltComposer extends LitElement {
   @property({ type: Boolean }) disabled = false;
   @property({ type: Boolean }) isSending = false;
   @property({ type: Boolean }) enterToSend = false;
+
+  @state() private _images: PromptImage[] = [];
+  @state() private _imageError = "";
+  @state() private _readingImages = false;
+  private _imageDrafts = new Map<string | null, PromptImage[]>();
+
+  restoreImages(images: PromptImage[], sessionId = this._draftSessionId) {
+    const current = sessionId === this._draftSessionId ? this._images : this._imageDrafts.get(sessionId) ?? [];
+    const restored = [...images, ...current];
+    if (sessionId === this._draftSessionId) this._images = restored;
+    this._imageDrafts.set(sessionId, restored);
+  }
+
+  private _onPaste(event: ClipboardEvent) {
+    const files = Array.from(event.clipboardData?.items ?? [])
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile()).filter((file): file is File => file !== null);
+    if (!files.length || this.disabled) return;
+    event.preventDefault();
+    void this._addImages(files);
+  }
+
+  private async _addImages(files: File[]) {
+    if (this._readingImages) return;
+    const sessionId = this._draftSessionId;
+    this._readingImages = true;
+    this._imageError = "";
+    try {
+      for (const file of files) {
+        if ((sessionId === this._draftSessionId ? this._images : this._imageDrafts.get(sessionId) ?? []).length >= MAX_PROMPT_IMAGES) throw new Error("画像は最大4枚まで添付できます。");
+        if (!/^image\/(png|jpeg|webp|gif)$/.test(file.type)) throw new Error("PNG / JPEG / WebP / GIF の画像を選んでください。");
+        if (file.size > MAX_IMAGE_BYTES) throw new Error("画像は1枚5MBまでです。");
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result));
+          reader.onerror = () => reject(new Error("画像を読み込めませんでした。"));
+          reader.readAsDataURL(file);
+        });
+        const current = sessionId === this._draftSessionId ? this._images : this._imageDrafts.get(sessionId) ?? [];
+        const next = [...current, { name: file.name.slice(0, 255), dataUrl }];
+        if (sessionId === this._draftSessionId) this._images = next;
+        this._imageDrafts.set(sessionId, next);
+      }
+    } catch (error) {
+      this._imageError = error instanceof Error ? error.message : String(error);
+    } finally { this._readingImages = false; }
+  }
 
   @state() private _dictationStatus = "";
   @state() private _dictationStatusKind: "idle" | "active" | "error" = "idle";
@@ -35,6 +83,9 @@ export class LiltComposer extends LitElement {
   switchDraft(sessionId: string | null, migrate = false) {
     if (sessionId === this._draftSessionId) return;
     const text = this.getDraftText();
+    this._imageDrafts.set(this._draftSessionId, this._images);
+    this._images = migrate ? this._images : (this._imageDrafts.get(sessionId) ?? []);
+    this._imageError = "";
     this._saveDraft();
     if (migrate) localStorage.removeItem(this._draftKey());
     this._draftSessionId = sessionId;
@@ -94,6 +145,13 @@ export class LiltComposer extends LitElement {
       width: min(700px, calc(100% - 8px));
       box-shadow: 0 1px 0 rgba(17, 24, 39, 0.03);
     }
+    .attachments { display: flex; gap: 10px; flex-wrap: wrap; }
+    .attachment { position: relative; margin: 4px; }
+    .attachment img { width: 80px; height: 80px; object-fit: cover; border-radius: 10px; border: 1px solid var(--line, #ddd); }
+    .attachment button { position: absolute; right: -6px; top: -6px; width: 24px; height: 24px; padding: 0; }
+    .image-error { color: #b91c1c; font-size: 13px; }
+    .btn-attach { background: transparent; color: var(--text, #1f2328); border-color: var(--line, #ddd); padding: 8px 12px; font-size: 18px; }
+    button:focus-visible { outline: 2px solid #2563eb; outline-offset: 3px; }
     textarea {
       width: 100%;
       min-height: 56px;
@@ -213,8 +271,19 @@ export class LiltComposer extends LitElement {
     return html`
       <div class="composer-wrap">
         <div class="composer">
+          ${this._images.length ? html`<div class="attachments" aria-label="添付画像">
+            ${this._images.map((image, index) => html`<figure class="attachment">
+              <img src=${image.dataUrl} alt=${image.name} />
+              <button aria-label=${`画像 ${index + 1} を削除`} title="添付を削除" @click=${() => { this._images = this._images.filter((_, i) => i !== index); this._imageError = ""; }}>×</button>
+            </figure>`)}
+          </div>` : null}
+          ${this._imageError ? html`<div class="image-error" role="alert">${this._imageError}</div>` : null}
+          <input type="file" hidden multiple accept="image/png,image/jpeg,image/webp,image/gif"
+            @change=${(event: Event) => { const input = event.target as HTMLInputElement; void this._addImages(Array.from(input.files ?? [])); input.value = ""; }} />
           <textarea
-            placeholder=${this.isSending ? "処理中の Agent に追加の指示を送信..." : "Type a message..."}
+            aria-label="メッセージ"
+            @paste=${this._onPaste}
+            placeholder=${this.isSending ? "処理中の Agent に追加の指示を送信..." : "メッセージを入力、画像を貼り付け…"}
             .disabled=${this.disabled}
             @input=${this._saveDraft}
             @compositionstart=${this._onCompositionStart}
@@ -230,6 +299,8 @@ export class LiltComposer extends LitElement {
               </span>
             </div>
             <div class="btn-group">
+              <button class="btn-attach" title="画像を添付" aria-label="画像を添付" ?disabled=${this.disabled || this._readingImages}
+                @click=${() => this.renderRoot.querySelector<HTMLInputElement>('input[type="file"]')?.click()}>＋</button>
               <button
                 class="btn-dictation"
                 title="長押しで音声入力"
@@ -251,7 +322,7 @@ export class LiltComposer extends LitElement {
               ${this.isSending
                 ? html`<button class="btn-abort" @click=${this._onAbort}>中断</button>`
                 : null}
-              <button .disabled=${this.disabled} @click=${this._onSend}>${this.isSending ? "追加指示を送信" : "送信"}</button>
+              <button .disabled=${this.disabled || this._readingImages} @click=${this._onSend}>${this.isSending ? "追加指示を送信" : "送信"}</button>
             </div>
           </div>
         </div>
@@ -340,15 +411,18 @@ export class LiltComposer extends LitElement {
   }
 
   private _onSend() {
-    if (this.disabled) return;
+    if (this.disabled || this._readingImages) return;
     void this._cancelRecording();
     const text = this._textarea.value.trim();
-    if (!text) return;
+    if (!text && !this._images.length) return;
+    const images = this._images;
+    this._images = [];
+    this._imageDrafts.delete(this._draftSessionId);
     this._lastSentText = text;
     this._textarea.value = "";
     this._saveDraft();
     this.dispatchEvent(new CustomEvent("send-message", {
-      detail: { text },
+      detail: { text, images },
       bubbles: true,
       composed: true
     }));

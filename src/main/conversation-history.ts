@@ -1,3 +1,4 @@
+import { IMAGE_DATA_URL, type PromptImage } from "../shared/prompt-images";
 import path from "node:path";
 import type { HistoryPageRequest, HistoryPageInfo } from "../shared/conversation-history-window";
 
@@ -8,6 +9,7 @@ import { resolvePackagedCodexBinary } from "./app-paths";
 import { readRolloutTimestamps } from "./conversation-rollout-timestamps";
 
 type ConversationMessage = {
+  images?: PromptImage[];
   id: string;
   createdAt: number;
   role: "user" | "assistant" | "system" | "error";
@@ -74,7 +76,7 @@ function extractUserMessageText(item: Record<string, unknown>): string {
       if (typeof (entry as { text?: unknown }).text === "string") {
         return (entry as { text: string }).text;
       }
-      if (typeof (entry as { url?: unknown }).url === "string") {
+      if ((entry as { type?: string }).type !== "image" && typeof (entry as { url?: unknown }).url === "string") {
         return (entry as { url: string }).url;
       }
       return "";
@@ -117,8 +119,11 @@ function parseMessagesFromTurns(
       switch (record.type) {
         case "userMessage": {
           const text = stripSchedulerPromptGuidance(extractUserMessageText(record));
-          if (text) {
-            messages.push({ id, createdAt: createdAtFor("user", text), role: "user", text });
+          const images: PromptImage[] = Array.isArray(record.content) ? record.content.flatMap((entry, index) =>
+            entry?.type === "image" && typeof entry.url === "string" && IMAGE_DATA_URL.test(entry.url)
+              ? [{ name: `画像 ${index + 1}`, dataUrl: entry.url }] : []) : [];
+          if (text || images.length) {
+            messages.push({ id, createdAt: createdAtFor("user", text), role: "user", text, ...(images.length ? { images } : {}) });
           }
           break;
         }

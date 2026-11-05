@@ -957,7 +957,9 @@ test("App Server の追加指示は expectedTurnId と同じ接続を使い、�
   try {
     const thread = await createCodexThreadFromAppServer({ apiKey: null, cwd: process.cwd() });
     await assert.rejects(thread.steer("early"), /実行中のターン/);
-    const run = await thread.runStreamed("first");
+    const run = await thread.runStreamed("first", { images: [{ name: "clip.png", dataUrl: "data:image/png;base64,aGVsbG8=" }] });
+    assert.deepEqual(requests.find((r) => r.method === "turn/start").params.input,
+      [{ type: "text", text: "first" }, { type: "image", url: "data:image/png;base64,aGVsbG8=" }]);
     await thread.steer("change direction");
     assert.deepEqual(requests.find((request) => request.method === "turn/steer"), {
       method: "turn/steer", params: {
@@ -965,6 +967,10 @@ test("App Server の追加指示は expectedTurnId と同じ接続を使い、�
         input: [{ type: "text", text: "change direction" }]
       }
     });
+    const image = { name: "clip.png", dataUrl: "data:image/png;base64,aGVsbG8=" };
+    await thread.steer("", [image]);
+    assert.deepEqual(requests.filter((r) => r.method === "turn/steer").at(-1).params.input,
+      [{ type: "image", url: image.dataUrl }]);
     await assert.rejects(thread.steer("reject"), /no longer active/);
     for await (const _event of run.events) {}
     await assert.rejects(thread.steer("late"), /実行中のターン/);
