@@ -14,7 +14,7 @@ export type AppUpdateSnapshot = {
   currentVersion: string;
   targetVersion?: string;
   progress?: number;
-  source?: "startup" | "manual";
+  source?: "startup" | "manual" | "poll";
   message?: string;
   revision: number;
 };

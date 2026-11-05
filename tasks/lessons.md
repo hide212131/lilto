@@ -1,5 +1,18 @@
 # Lessons
 
+## 2026-11-05 Expose manual update checks in the app menu
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| メニューから手動で更新を確認できる入口を全対象OSで用意する。 | Windowsのヘルプとトレイには入口があったが、macOSのアプリメニューにはなかった。 | 自動更新確認を追加するときは、各OSの通常のメニューから手動確認できるかも確認する。既存の更新ダイアログへ接続し、標準の編集・ウインドウ操作を維持する。 |
+
+## 2026-11-05 Poll for app updates without repeated interruptions
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| 起動後も6時間ごとに最新版を確認し、同意後に更新する。 | 起動時だけの確認では常駐中のリリースを検出できない。短い周期や同じ版の再通知は通信負荷と操作の妨げになる。 | 常駐アプリの更新確認は低頻度・単一タイマーにし、失敗時は間隔を延ばす。同じ版の自動通知は一度にし、ダウンロードと再起動は明示的な操作後に行う。 |
+
+
 ## 2026-11-04 Load all sidebar history pages
 
 | Change | Mistake/Context | Rule to repeat |

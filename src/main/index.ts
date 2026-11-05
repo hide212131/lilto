@@ -76,7 +76,7 @@ function createWindow(): void {
   void mainWindow.loadFile(resolveRendererIndexPath({ appRoot }));
 
   mainWindow.webContents.on("did-finish-load", () => {
-    if (process.platform === "win32" && app.isPackaged) void appUpdateService?.check("startup");
+    appUpdateService?.startPolling();
   });
 
   mainWindow.on("close", (event) => {
@@ -203,7 +203,30 @@ if (hasSingleInstanceLock) {
       void appUpdateService?.check("manual");
     };
     notificationService.setupTray(() => mainWindow, openUpdate);
-    if (process.platform === "win32") {
+    if (process.platform === "darwin") {
+      Menu.setApplicationMenu(Menu.buildFromTemplate([
+        {
+          label: "Lilt-o",
+          submenu: [
+            { role: "about" },
+            { label: "更新を確認…", click: openUpdate },
+            { type: "separator" },
+            { role: "services" },
+            { type: "separator" },
+            { role: "hide" },
+            { role: "hideOthers" },
+            { role: "unhide" },
+            { type: "separator" },
+            { role: "quit" }
+          ]
+        },
+        { role: "fileMenu" },
+        { role: "editMenu" },
+        { role: "viewMenu" },
+        { role: "windowMenu" },
+        { role: "help", submenu: [] }
+      ]));
+    } else if (process.platform === "win32") {
       Menu.setApplicationMenu(Menu.buildFromTemplate([
         { label: "ファイル", submenu: [{ role: "quit", label: "終了" }] },
         { role: "editMenu" },
@@ -227,6 +250,7 @@ if (hasSingleInstanceLock) {
 app.on("before-quit", () => {
   isQuitting = true;
   unregisterAppShortcut();
+  appUpdateService?.stopPolling();
   heartbeat.stop();
   schedulerBridge?.stop();
   schedulerBridge = null;
