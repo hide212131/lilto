@@ -1,3 +1,4 @@
+import type { PromptImage } from "../shared/prompt-images";
 export type CodexConfig = Record<string, unknown>;
 
 export type SessionThreadOptions = {
@@ -23,8 +24,8 @@ export type RuntimeModel = {
 
 export type Thread = {
   id: string | null;
-  steer?(input: string): Promise<void>;
-  runStreamed(input: string, options?: { signal?: AbortSignal }): Promise<{ events: AsyncGenerator<ThreadEvent> }>;
+  steer?(input: string, images?: PromptImage[]): Promise<void>;
+  runStreamed(input: string, options?: { signal?: AbortSignal; images?: PromptImage[] }): Promise<{ events: AsyncGenerator<ThreadEvent> }>;
 };
 
 export type ThreadEvent =

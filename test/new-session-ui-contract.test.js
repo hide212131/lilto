@@ -29,10 +29,10 @@ test("lilt-app は送信開始時の session に assistant 応答を書き戻す
 
 test("lilt-app が user 送信前と retry 巻き戻し直後に session snapshot を保存する", () => {
   const content = fs.readFileSync("src/renderer/app.ts", "utf8");
-  assert.match(content, /this\._addMessage\("user", text\);/);
+  assert.match(content, /this\._addMessage\("user", text, undefined, images\);/);
   assert.match(content, /conversationId = await this\._ensureConversation\(title\);/);
-  assert.match(content, /this\._saveCurrentSession\(\);\s*await this\._doSend\(text\);/s);
-  assert.match(content, /this\.messages = this\.messages\.slice\(0, idx \+ 1\);\s*this\._saveCurrentSession\(\);\s*await this\._doSend\(text\);/s);
+  assert.match(content, /this\._saveCurrentSession\(\);\s*await this\._doSend\(text, images\);/s);
+  assert.match(content, /this\.messages = this\.messages\.slice\(0, idx \+ 1\);\s*this\._saveCurrentSession\(\);\s*await this\._doSend\(text, this\.messages\[idx\]\?\.images\);/s);
 });
 
 test("message 型と session 正規化が message createdAt を扱う", () => {

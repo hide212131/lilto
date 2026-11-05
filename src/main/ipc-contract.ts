@@ -1,5 +1,7 @@
+import { validPromptImages, type PromptImage } from "../shared/prompt-images";
 export type PromptPayload = {
   text: string;
+  images?: PromptImage[];
   conversationId?: string | null;
   backendSessionId?: string | null;
   silent?: boolean;
@@ -43,8 +45,12 @@ export function validatePrompt(payload: unknown): PromptValidationResult {
     return { ok: false, code: "INVALID_REQUEST", message: "freshContext の形式が不正です" };
   }
 
+  const images = (payload as PromptPayload).images;
+  if (images !== undefined && !validPromptImages(images)) {
+    return { ok: false, code: "INVALID_REQUEST", message: "画像は PNG/JPEG/WebP/GIF、1枚5MBまで、最大4枚です" };
+  }
   const text = (payload as Record<string, string>).text;
-  if (!text.trim()) {
+  if (!text.trim() && !images?.length) {
     return { ok: false, code: "EMPTY_PROMPT", message: "text が空です" };
   }
 

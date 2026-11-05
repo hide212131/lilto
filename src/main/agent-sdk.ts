@@ -1,3 +1,4 @@
+import { buildPromptInput, type PromptImage } from "../shared/prompt-images";
 import http from "node:http";
 import path from "node:path";
 import { createLogger, type Logger } from "./logger";
@@ -346,14 +347,14 @@ export async function createCodexThreadFromAppServer(options: {
     additionalDirectories: options.additionalDirectories
   });
 
-  let steerActiveTurn: ((input: string) => Promise<void>) | null = null;
+  let steerActiveTurn: ((input: string, images?: PromptImage[]) => Promise<void>) | null = null;
   return {
     id: options.threadId ?? null,
-    async steer(input: string) {
+    async steer(input: string, images?: PromptImage[]) {
       if (!steerActiveTurn) throw new Error("追加指示を受け付ける実行中のターンがありません。再送信してください。");
-      await steerActiveTurn(input);
+      await steerActiveTurn(input, images);
     },
-    async runStreamed(input: string, runOptions?: { signal?: AbortSignal }) {
+    async runStreamed(input: string, runOptions?: { signal?: AbortSignal; images?: PromptImage[] }) {
       const client = new CodexAppServerClient({
         codexHomeDir: options.codexHomeDir ?? path.join(options.homeDir ?? process.env.HOME ?? process.cwd(), ".codex"),
         codexCommand: packagedCodex?.command,
@@ -425,7 +426,7 @@ export async function createCodexThreadFromAppServer(options: {
 
       const turnResult = await client.request<{ turn?: { id?: string | null } }>("turn/start", {
         threadId: activeThreadId,
-        input: [{ type: "text", text: input }],
+        input: buildPromptInput(input, runOptions?.images),
         cwd: options.cwd ?? process.cwd(),
         approvalPolicy: "never",
         sandboxPolicy,
@@ -433,14 +434,14 @@ export async function createCodexThreadFromAppServer(options: {
         ...(mergeCodexConfig(mcpConfig, options.config) ? { config: mergeCodexConfig(mcpConfig, options.config) } : {})
       });
       activeTurnId = typeof turnResult?.turn?.id === "string" ? turnResult.turn.id : null;
-      const steer = async (text: string) => {
+      const steer = async (text: string, images?: PromptImage[]) => {
         if (closed || runOptions?.signal?.aborted || !activeTurnId) {
           throw new Error("ターンが終了したため追加指示を送信できません。再送信してください。");
         }
         await client.request("turn/steer", {
           threadId: activeThreadId,
           expectedTurnId: activeTurnId,
-          input: [{ type: "text", text }]
+          input: buildPromptInput(text, images)
         });
       };
       steerActiveTurn = steer;
@@ -578,7 +579,7 @@ export class AgentRuntime {
     signal: AbortSignal;
   }>();
 
-  async steerPrompt(text: string, conversationId: string): Promise<AgentResult> {
+  async steerPrompt(text: string, conversationId: string, images?: PromptImage[]): Promise<AgentResult> {
     const run = this.activeConversationRuns.get(conversationId);
     if (!run) {
       return { ok: false, error: { code: "NO_ACTIVE_TURN", message: "実行が終了したか、追加指示を受け付けられません。再送信してください。", details: null, retryable: true } };
@@ -588,7 +589,7 @@ export class AgentRuntime {
       if (!thread?.steer || run.signal.aborted || this.activeConversationRuns.get(conversationId) !== run) {
         return { ok: false, error: { code: "NO_ACTIVE_TURN", message: "追加指示を送信できませんでした。再送信してください。", details: null, retryable: true } };
       }
-      await thread.steer(text);
+      await thread.steer(text, images);
       return { ok: true, text: "" };
     } catch (error) {
       return { ok: false, error: { code: "STEER_FAILED", message: error instanceof Error ? error.message : String(error), details: null, retryable: true } };
@@ -748,6 +749,7 @@ export class AgentRuntime {
     providerSettings: ProviderSettings,
     abortController: AbortController,
     hooks?: {
+      images?: PromptImage[];
       requestId: string;
       conversationId?: string;
       freshContext?: boolean;
@@ -780,7 +782,7 @@ export class AgentRuntime {
       }
 
       const prompt = hooks?.mode === "heartbeat" ? text : augmentPromptForScheduler(text);
-      const streamed = await session.thread.runStreamed(prompt, { signal: abortController.signal });
+      const streamed = await session.thread.runStreamed(prompt, { signal: abortController.signal, images: hooks?.images });
       activeRun.resolve(session.thread);
       const state = {
         requestId: hooks?.requestId ?? "request",
@@ -828,6 +830,7 @@ export class AgentRuntime {
     text: string,
     providerSettings: ProviderSettings,
     hooks?: {
+      images?: PromptImage[];
       requestId: string;
       conversationId?: string;
       backendSessionId?: string;
