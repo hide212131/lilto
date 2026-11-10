@@ -34,3 +34,7 @@ Bridge は `127.0.0.1` のみで listen し、`POST /command`・`application/jso
 
 ### Requirement: 副作用の扱い
 副作用があり得る操作は自動再試行してはならず（SHALL NOT）、タイムアウト時は `effect` を `possible` または `applied` として返さなければならない（SHALL）。
+
+#### Scenario: クリックのタイムアウト
+- **WHEN** click など副作用があり得る操作がタイムアウトする
+- **THEN** 操作を自動再試行せず、結果の `effect` を `possible` または `applied` として返し、成否を未確定のまま断定しない
