@@ -56,6 +56,10 @@ export class LiltSettingsModal extends LitElement {
       intervalMinutes: 30,
       showDesktopNotifications: true
     },
+    browserSettings: {
+      enabled: true,
+      autoOpenOnToolUse: true
+    },
     updatedAt: Date.now()
   };
 
@@ -85,6 +89,10 @@ export class LiltSettingsModal extends LitElement {
   @state() private _globalShortcut = "";
   @state() private _chatSaveStatus = "";
   @state() private _showToolExecutionDetails = false;
+  @state() private _browserEnabled = true;
+  @state() private _browserAutoOpen = true;
+  @state() private _browserSaving = false;
+  @state() private _browserSaveStatus = "";
   @state() private _heartbeatEnabled = false;
   @state() private _heartbeatFilePath = "";
   @state() private _heartbeatIntervalMinutes = 30;
@@ -96,7 +104,7 @@ export class LiltSettingsModal extends LitElement {
   @state() private _shortcutError = "";
 
   // Tab state
-  @state() private _activeTab: "providers" | "chat" | "instructions" | "heartbeat" | "skills" | "plugins" | "schedules" = "providers";
+  @state() private _activeTab: "providers" | "chat" | "instructions" | "browser" | "heartbeat" | "skills" | "plugins" | "schedules" = "providers";
   @state() private _agentsFilePath = "";
   @state() private _agentsFileExists = false;
   @state() private _agentsFileStatus = "";
@@ -167,6 +175,8 @@ export class LiltSettingsModal extends LitElement {
       this._enterToSend = cs?.enterToSend ?? false;
       this._globalShortcut = cs?.globalShortcut ?? "";
       this._showToolExecutionDetails = cs?.showToolExecutionDetails ?? false;
+      this._browserEnabled = this.providerSettings.browserSettings?.enabled ?? true;
+      this._browserAutoOpen = this.providerSettings.browserSettings?.autoOpenOnToolUse ?? true;
       this._heartbeatEnabled = this.providerSettings.heartbeatSettings?.enabled ?? false;
       this._heartbeatFilePath = this.providerSettings.heartbeatSettings?.filePath ?? "";
       this._heartbeatIntervalMinutes = this.providerSettings.heartbeatSettings?.intervalMinutes ?? 30;
@@ -698,6 +708,10 @@ export class LiltSettingsModal extends LitElement {
                 @click=${() => this._switchTab("instructions")}
               >Instructions</div>
               <div
+                class="settings-menu-item ${this._activeTab === "browser" ? "active" : ""}"
+                @click=${() => this._switchTab("browser")}
+              >ブラウザ</div>
+              <div
                 class="settings-menu-item ${this._activeTab === "heartbeat" ? "active" : ""}"
                 @click=${() => this._switchTab("heartbeat")}
               >Heartbeat</div>
@@ -721,6 +735,8 @@ export class LiltSettingsModal extends LitElement {
                   ? this._renderChatSection()
                   : this._activeTab === "instructions"
                     ? this._renderInstructionsSection()
+                  : this._activeTab === "browser"
+                    ? this._renderBrowserSection()
                   : this._activeTab === "heartbeat"
                     ? this._renderHeartbeatSection()
                   : this._activeTab === "plugins"
@@ -1327,6 +1343,69 @@ export class LiltSettingsModal extends LitElement {
     `;
   }
 
+  private _renderBrowserSection() {
+    const current = this.providerSettings.browserSettings?.enabled ?? true;
+    const willStopRuns = this._browserEnabled !== current;
+    return html`
+      <h3>ブラウザ</h3>
+      <p>AI のブラウザ操作を右側のパネルに表示します。自動表示を無効にした場合は、操作前にパネルを開いてください。認証は外部ブラウザを使う場合があります。</p>
+
+      <section class="provider-section active">
+        <h4>基本設定</h4>
+        <div class="input-grid">
+          <label>
+            <input
+              id="browser-enabled"
+              type="checkbox"
+              .checked=${this._browserEnabled}
+              ?disabled=${this._browserSaving}
+              @change=${(e: InputEvent) => { this._browserEnabled = (e.target as HTMLInputElement).checked; }}
+            />
+            内蔵ブラウザと AI のブラウザ連携を有効にする
+          </label>
+          <label>
+            <input
+              id="browser-auto-open"
+              type="checkbox"
+              .checked=${this._browserAutoOpen}
+              ?disabled=${!this._browserEnabled || this._browserSaving}
+              @change=${(e: InputEvent) => { this._browserAutoOpen = (e.target as HTMLInputElement).checked; }}
+            />
+            AI がブラウザを使うときにパネルを自動で開く
+          </label>
+        </div>
+        <div class="provider-actions">
+          <button id="browser-save" ?disabled=${this._browserSaving} @click=${this._saveBrowserSettings}>ブラウザ設定を保存</button>
+          <span class="status" role="status" aria-live="polite">${this._browserSaveStatus}</span>
+        </div>
+        ${willStopRuns ? html`<p class="status" id="browser-stop-notice">有効／無効を切り替えて保存すると、実行中の AI 処理は停止します。</p>` : ""}
+      </section>
+    `;
+  }
+
+  private async _saveBrowserSettings() {
+    if (this._browserSaving) return;
+    this._browserSaving = true;
+    this._browserSaveStatus = "保存中…（実行中の AI 処理を停止して反映しています）";
+    try {
+      const next: ProviderSettings = {
+        ...this.providerSettings,
+        browserSettings: { enabled: this._browserEnabled, autoOpenOnToolUse: this._browserAutoOpen }
+      };
+      const result = await window.lilto.saveProviderSettings(next);
+      if (result.ok) {
+        this._browserSaveStatus = "ブラウザ設定を保存しました。";
+        this._emitProviderSettingsChanged(result.state, { preserveWindowsSandboxStatus: true });
+        return;
+      }
+      this._browserSaveStatus = `${result.error.code}: ${result.error.message}`;
+    } catch (error) {
+      this._browserSaveStatus = `保存に失敗しました: ${error instanceof Error ? error.message : String(error)}`;
+    } finally {
+      this._browserSaving = false;
+    }
+  }
+
   private _renderHeartbeatSection() {
     const status = this._heartbeatStatus;
     const statusMessage = status?.message ?? "状態を取得していません。";
@@ -1402,7 +1481,7 @@ export class LiltSettingsModal extends LitElement {
     `;
   }
 
-  private _switchTab(tab: "providers" | "chat" | "heartbeat" | "skills" | "plugins" | "schedules") {
+  private _switchTab(tab: "providers" | "chat" | "instructions" | "browser" | "heartbeat" | "skills" | "plugins" | "schedules") {
     this._activeTab = tab;
     if (tab === "skills" && this._skills.length === 0 && !this._skillsLoading) {
       void this._loadSkills();

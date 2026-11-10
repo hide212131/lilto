@@ -3,6 +3,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const yaml = require("js-yaml");
 const { verifyWindowsIcon } = require("./verify-windows-icon");
+const { collectBrowserMcpAssets } = require("./browser-mcp-assets");
 
 const rootDir = path.resolve(__dirname, "..");
 const releaseDir = path.join(rootDir, "release");
@@ -68,11 +69,21 @@ const hasCodexBinary = codexTarget && artifactPaths.some((file) => {
   );
 });
 
+// The lilto_browser MCP child runs under plain Node from app.asar.unpacked: its entry and every
+// relative dependency must be unpacked, and it must not need any non-builtin module.
+const browserMcpAssets = collectBrowserMcpAssets(rootDir);
+const normalizedArtifacts = artifactPaths.map((file) => file.replace(/\\/g, "/").toLowerCase());
+const hasBrowserMcpAssets = browserMcpAssets.files.every((asset) =>
+  normalizedArtifacts.some((file) => file.endsWith(`/app.asar.unpacked/${asset}`))
+);
+assert(browserMcpAssets.external.every((spec) => spec.startsWith("node:")), `browser MCP requires non-builtin modules: ${browserMcpAssets.external.join(", ")}`);
+
 if (process.platform === "darwin") {
   assert(hasMacInstaller, "macOS installer (.dmg) was not generated");
   assert(hasSchedulerHelper, "scheduler helper was not bundled into the macOS app");
   assert(hasSpeechHelper, "speech helper was not bundled into the macOS app");
   assert(hasCodexBinary, "Codex CLI binary was not unpacked into the macOS app");
+  assert(hasBrowserMcpAssets, "browser MCP server and its dependencies were not unpacked into the macOS app");
 }
 
 if (process.platform === "win32") {
@@ -106,6 +117,7 @@ if (process.platform === "win32") {
   assert(hasSchedulerHelper, "scheduler helper was not bundled into the Windows app");
   assert(hasSpeechHelper, "speech helper was not bundled into the Windows app");
   assert(hasCodexBinary, "Codex CLI binary was not unpacked into the Windows app");
+  assert(hasBrowserMcpAssets, "browser MCP server and its dependencies were not unpacked into the Windows app");
 }
 
 console.log(JSON.stringify({ artifactCount: files.length, artifacts: artifactPaths }, null, 2));

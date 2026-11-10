@@ -1,4 +1,5 @@
 import type { PromptImage } from "../shared/prompt-images";
+import type { BrowserMcpLaunch } from "./agent-sdk-config";
 export type CodexConfig = Record<string, unknown>;
 
 export type SessionThreadOptions = {
@@ -22,10 +23,15 @@ export type RuntimeModel = {
   baseUrl?: string;
 };
 
+/** Run-scoped browser capability. Built per run so cached threads never hold a token. */
+export type BrowserRunOptions = { launch: BrowserMcpLaunch; developerInstructions: string };
+
+export type RunStreamedOptions = { signal?: AbortSignal; images?: PromptImage[]; browserRun?: BrowserRunOptions };
+
 export type Thread = {
   id: string | null;
   steer?(input: string, images?: PromptImage[]): Promise<void>;
-  runStreamed(input: string, options?: { signal?: AbortSignal; images?: PromptImage[] }): Promise<{ events: AsyncGenerator<ThreadEvent> }>;
+  runStreamed(input: string, options?: RunStreamedOptions): Promise<{ events: AsyncGenerator<ThreadEvent> }>;
 };
 
 export type ThreadEvent =

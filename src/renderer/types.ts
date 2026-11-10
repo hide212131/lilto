@@ -5,6 +5,7 @@ import type { HeartbeatAssistantStatus } from "../shared/heartbeat-assistant.js"
 import type { ActiveProvider, OAuthProviderId, ProviderSettings } from "../shared/provider-settings.js";
 import type { SchedulerNotificationEvent, SchedulerScheduleSummary } from "../shared/scheduler.js";
 import type { AppUpdateSnapshot } from "../shared/app-update.js";
+import type { BrowserIpcResult, BrowserPanelState, BrowserPresentation, BrowserViewportUpdate } from "../shared/browser.js";
 
 export type SkillSource = "bundled" | "user";
 
@@ -273,6 +274,19 @@ declare global {
       >;
       finishNativeDictation: () => Promise<AudioTranscriptionResult>;
       cancelNativeDictation: () => Promise<{ ok: true }>;
+      browser: {
+        getState: () => Promise<BrowserIpcResult>;
+        setPresentation: (presentation: BrowserPresentation) => Promise<BrowserIpcResult>;
+        updateViewport: (update: BrowserViewportUpdate) => Promise<BrowserIpcResult>;
+        navigate: (url: string) => Promise<BrowserIpcResult>;
+        back: () => Promise<BrowserIpcResult>;
+        forward: () => Promise<BrowserIpcResult>;
+        reload: () => Promise<BrowserIpcResult>;
+        openExternal: () => Promise<BrowserIpcResult>;
+        takeControl: () => Promise<BrowserIpcResult>;
+        allowAgentControl: () => Promise<BrowserIpcResult>;
+        onStateChanged: (listener: (state: BrowserPanelState) => void) => () => void;
+      };
       getPlatform: () => string;
       getAppUpdateState: () => Promise<AppUpdateSnapshot>;
       checkAppUpdate: () => Promise<void>;

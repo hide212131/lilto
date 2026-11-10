@@ -11,7 +11,8 @@ export function registerSkillsAndPluginIpcHandlers({
   workspaceDir,
   homeDir,
   codexHomeDir,
-  pluginService
+  pluginService,
+  applySkillPolicy
 }: {
   agentRuntime: AgentRuntime;
   bundledSkillsDir: string;
@@ -20,8 +21,11 @@ export function registerSkillsAndPluginIpcHandlers({
   homeDir: string;
   codexHomeDir: string;
   pluginService: PluginService;
+  applySkillPolicy?: () => void;
 }): void {
   const refreshAgentSkills = () => {
+    // Skills changed on disk: re-apply the managed agent-browser policy before the next run.
+    applySkillPolicy?.();
     const latestSkills = listSkillsWithSource({ bundledSkillsDir, userSkillsDir });
     agentRuntime.refreshSkills(latestSkills);
   };

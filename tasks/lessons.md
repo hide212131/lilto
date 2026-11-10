@@ -694,3 +694,13 @@
 | Change | Mistake/Context | Rule to repeat |
 |---|---|---|
 | Windows リリース版のタスクバーが Electron アイコンになる設定を修正。 | 未署名配布のために `signAndEditExecutable=false` を渡し、署名と一緒に EXE のアイコン・メタデータ編集も停止していた。インストーラーや BrowserWindow のアイコン設定だけでは検出できなかった。 | 署名の無効化には証明書探索・資格情報の設定を使い、EXE のリソース編集を止めない。Windows 配布検証ではインストーラーの存在だけでなく、`win-unpacked/Lilt-o.exe` 内の全サイズのアイコンを生成元 ICO と照合する。 |
+
+## 2026-11-10 Embedded browser resume session
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| Resumed the embedded-browser work after an interrupted session. | `tasks.md` had T04–T14 and 16.1 ticked although none of the corresponding source files existed; trusting the checkboxes would have reported unfinished work as done. | When resuming, reconcile every ticked task against real files and a passing test before continuing; reset unverified ticks and only re-tick with evidence. |
+| Verified the browser controller with fakes first, then with a real `WebContentsView`. | Fake-based tests were green while real runs exposed ordering bugs (relayout after an occlusion-clearing measurement; lease-wide `AbortSignal` making a run unusable after a non-user lease expiry). | Keep the real-Electron script (`scripts/verify-embedded-browser.js`, run under `xvfb-run -a electron --no-sandbox`) in the loop after every controller change, not only at the end. |
+| Probed the bundled Codex App Server for MCP/skill behaviour. | Codex 0.163 re-syncs `CODEX_HOME/skills/.system` and deleted the app-placed `agent-browser`; only a same-named user-dir skill stayed visible. `mcpServer/tool/call` lets MCP be exercised without a model. | Test skill/MCP policy against the real binary with an isolated `CODEX_HOME`; treat `.system` as Codex-owned. |
+| Environment notes. | `npm run prebuild` fails as root because Electron refuses to run without `--no-sandbox`; `assert.deepEqual` across `vm` contexts fails on prototype identity. | In this VM run `tsc` + `scripts/run-unit-tests.js` directly; normalise vm results through JSON before comparing. |
+| Fixed the PR CI failures: Electron UI regression timed out waiting for `lilt-browser-panel`, and one renderer contract test failed only on Windows. | The panel was actually rendered (verified locally with a real Electron + CDP): Playwright keeps "pending navigation" bookkeeping for the host page after Electron cancels its navigation in `will-navigate`, and host-page locators stall until the CDP connection is reset. The Windows failure was a line-anchored regex over a CRLF checkout. | In E2E, reconnect CDP and re-find pages before asserting on host-page locators after an intercepted navigation. Source-reading contract tests must normalize CRLF in their read helper before applying line-anchored regexes. |

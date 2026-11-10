@@ -5,11 +5,14 @@ import type { AudioTranscriptionResult } from "./shared/audio-transcription";
 import type { HeartbeatAssistantStatus } from "./shared/heartbeat-assistant";
 import type { SchedulerNotificationEvent, SchedulerScheduleSummary } from "./shared/scheduler";
 import type { AppUpdateSnapshot } from "./shared/app-update";
+import type { BrowserIpcResult, BrowserPanelState, BrowserPresentation, BrowserViewportUpdate } from "./shared/browser";
 
 const AGENT_LOOP_EVENT_CHANNEL = "agent:loopEvent";
 const SCHEDULER_NOTIFICATION_CHANNEL = "scheduler:notification";
 const APP_UPDATE_STATE_CHANNEL = "app-update:state";
 const APP_UPDATE_OPEN_CHANNEL = "app-update:open";
+// Sandboxed preload cannot require local modules; keep in sync with BROWSER_IPC (tested).
+const BROWSER_STATE_CHANGED_CHANNEL = "browser:stateChanged";
 
 contextBridge.exposeInMainWorld("lilto", {
   submitPrompt: async (
@@ -76,6 +79,23 @@ contextBridge.exposeInMainWorld("lilto", {
   startNativeDictation: async () => ipcRenderer.invoke("audio:startNativeDictation"),
   finishNativeDictation: async (): Promise<AudioTranscriptionResult> => ipcRenderer.invoke("audio:finishNativeDictation"),
   cancelNativeDictation: async () => ipcRenderer.invoke("audio:cancelNativeDictation"),
+  browser: {
+    getState: (): Promise<BrowserIpcResult> => ipcRenderer.invoke("browser:getState"),
+    setPresentation: (presentation: BrowserPresentation): Promise<BrowserIpcResult> => ipcRenderer.invoke("browser:setPresentation", presentation),
+    updateViewport: (update: BrowserViewportUpdate): Promise<BrowserIpcResult> => ipcRenderer.invoke("browser:updateViewport", update),
+    navigate: (url: string): Promise<BrowserIpcResult> => ipcRenderer.invoke("browser:navigate", { url }),
+    back: (): Promise<BrowserIpcResult> => ipcRenderer.invoke("browser:back"),
+    forward: (): Promise<BrowserIpcResult> => ipcRenderer.invoke("browser:forward"),
+    reload: (): Promise<BrowserIpcResult> => ipcRenderer.invoke("browser:reload"),
+    openExternal: (): Promise<BrowserIpcResult> => ipcRenderer.invoke("browser:openExternal"),
+    takeControl: (): Promise<BrowserIpcResult> => ipcRenderer.invoke("browser:takeControl"),
+    allowAgentControl: (): Promise<BrowserIpcResult> => ipcRenderer.invoke("browser:allowAgentControl"),
+    onStateChanged: (listener: (state: BrowserPanelState) => void) => {
+      const wrapped = (_event: unknown, state: BrowserPanelState) => listener(state);
+      ipcRenderer.on(BROWSER_STATE_CHANGED_CHANNEL, wrapped);
+      return () => ipcRenderer.removeListener(BROWSER_STATE_CHANGED_CHANNEL, wrapped);
+    }
+  },
   getPlatform: () => process.platform,
   getAppUpdateState: (): Promise<AppUpdateSnapshot> => ipcRenderer.invoke("app-update:get-state"),
   checkAppUpdate: (): Promise<void> => ipcRenderer.invoke("app-update:check"),

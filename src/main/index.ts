@@ -18,6 +18,9 @@ import { APP_UPDATE_OPEN_CHANNEL, APP_UPDATE_STATE_CHANNEL } from "../shared/app
 import { AppUpdateService } from "./app-update-service";
 import { registerAppUpdateIpcHandlers } from "./ipc/app-update";
 import { installLinkNavigation } from "./link-navigation";
+import { attachControllerToWindow } from "./embedded-browser-electron";
+import type { BrowserBridgeServer } from "./browser-bridge";
+import type { EmbeddedBrowserController } from "./embedded-browser";
 
 const config = readConfig();
 configureAppUserDataPath(app);
@@ -33,6 +36,8 @@ let isQuitting = false;
 let schedulerBridge: SchedulerBridgeServer | null = null;
 let heartbeatAssistant: HeartbeatAssistantService | null = null;
 let appUpdateService: AppUpdateService | null = null;
+let browserController: EmbeddedBrowserController | null = null;
+let browserBridge: BrowserBridgeServer | null = null;
 
 const notificationService = new NotificationService();
 
@@ -72,7 +77,10 @@ function createWindow(): void {
     title: config.appName
   });
 
-  installLinkNavigation(mainWindow);
+  if (browserController) {
+    installLinkNavigation(mainWindow, browserController);
+    attachControllerToWindow(browserController, mainWindow);
+  }
   void mainWindow.loadFile(resolveRendererIndexPath({ appRoot }));
 
   mainWindow.webContents.on("did-finish-load", () => {
@@ -151,6 +159,8 @@ if (hasSingleInstanceLock) {
     providerSettingsService = runtime.providerSettingsService;
     schedulerBridge = runtime.schedulerBridge;
     heartbeatAssistant = runtime.heartbeatAssistant;
+    browserController = runtime.browserController;
+    browserBridge = runtime.browserBridge;
     appUpdateService = new AppUpdateService({
       logger: createLogger("app-update"),
       currentVersion: app.getVersion(),
@@ -191,6 +201,10 @@ if (hasSingleInstanceLock) {
       workspaceDir: runtime.skillRuntime.workspaceDir,
       homeDir: runtime.skillRuntime.appDataDir,
       codexHomeDir: runtime.skillRuntime.codexHomeDir,
+      browserSettingsFlow: runtime.browserSettingsFlow,
+      browserController: runtime.browserController,
+      getMainWindow: () => mainWindow,
+      applySkillPolicy: runtime.applySkillPolicy,
       onSettingsSaved: (settings) => {
         registerAppShortcut(settings.chatSettings.globalShortcut, () => mainWindow);
         void heartbeatAssistant?.syncManagedSchedule(settings);
@@ -254,6 +268,10 @@ app.on("before-quit", () => {
   heartbeat.stop();
   schedulerBridge?.stop();
   schedulerBridge = null;
+  browserBridge?.stop();
+  browserBridge = null;
+  browserController?.dispose();
+  browserController = null;
   heartbeatAssistant = null;
   authService?.dispose();
   authService = null;

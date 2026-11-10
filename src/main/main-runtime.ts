@@ -15,6 +15,13 @@ import { SchedulerService, SchedulerUnavailableError } from "./scheduler";
 import { SchedulerBridgeServer } from "./scheduler-bridge";
 import { resolveCodexHomeDir, setupSkillRuntime, type SkillRuntimeSetup } from "./skill-runtime";
 import { WindowsSandboxSetupService } from "./windows-sandbox-setup";
+import { BrowserBridgeServer } from "./browser-bridge";
+import { createBrowserRunSupport } from "./browser-run-support";
+import { createBrowserSettingsFlow, type BrowserSettingsFlow } from "./browser-settings-flow";
+import { EmbeddedBrowserController } from "./embedded-browser";
+import { createElectronBrowserHost } from "./embedded-browser-electron";
+import { resolveBrowserMcpServerPath } from "./app-paths";
+import { syncManagedSkillVisibility } from "./skill-runtime";
 import { SpeechTranscriptionService } from "./speech-transcription";
 import type { SchedulerNotificationEvent } from "../shared/scheduler";
 
@@ -40,6 +47,11 @@ export type InitializedMainRuntime = {
   windowsSandboxSetupService: WindowsSandboxSetupService;
   speechTranscriptionService: SpeechTranscriptionService;
   skillRuntime: SkillRuntimeSetup;
+  browserController: EmbeddedBrowserController;
+  browserBridge: BrowserBridgeServer;
+  browserSettingsFlow: BrowserSettingsFlow;
+  /** Re-apply the managed skill policy (agent-browser hiding) for the current browser setting. */
+  applySkillPolicy: () => void;
 };
 
 function notifyForSchedulerEvent(
@@ -65,14 +77,16 @@ function notifyForSchedulerEvent(
 function initializeSkillRuntime(
   logger: Logger,
   userDataDir: string,
-  defaultWorkspaceDir: string
+  defaultWorkspaceDir: string,
+  browserEnabled: boolean
 ): SkillRuntimeSetup {
   try {
     const skillRuntime = setupSkillRuntime({
       appDataDir: userDataDir,
       projectName: path.basename(defaultWorkspaceDir),
       projectRoot: defaultWorkspaceDir,
-      workspaceTtlHours: Number(process.env.LILTO_WORKSPACE_TTL_HOURS || 24 * 7)
+      workspaceTtlHours: Number(process.env.LILTO_WORKSPACE_TTL_HOURS || 24 * 7),
+      browserEnabled
     });
     logger.info("skill_runtime_initialized", {
       appSkillsDir: skillRuntime.appSkillsDir,
@@ -114,7 +128,7 @@ export async function initializeMainRuntime({
     logger: createLogger("providers"),
     storagePath: path.join(userDataDir, "provider-settings.json")
   });
-  const skillRuntime = initializeSkillRuntime(logger, userDataDir, defaultWorkspaceDir);
+  const skillRuntime = initializeSkillRuntime(logger, userDataDir, defaultWorkspaceDir, providerSettingsService.getState().browserSettings.enabled);
 
   let heartbeatAssistant: HeartbeatAssistantService | null = null;
   const scheduler = new SchedulerService({
@@ -183,13 +197,42 @@ export async function initializeMainRuntime({
   });
   const speechTranscriptionService = new SpeechTranscriptionService();
 
+  const browserLogger = createLogger("browser");
+  const browserController = new EmbeddedBrowserController(
+    createElectronBrowserHost(mainWindow),
+    providerSettingsService.getState().browserSettings
+  );
+  const browserBridge = new BrowserBridgeServer(browserController, createLogger("browser-bridge"));
+  if (browserController.isEnabled()) {
+    await browserBridge.start().catch((error) => {
+      logger.error("browser_bridge_start_failed", { message: error instanceof Error ? error.message : String(error) });
+    });
+  }
+
   const agentRuntime = new AgentRuntime({
     logger: createLogger("agent"),
     authService,
     workspaceDir: skillRuntime.workspaceDir,
     codexHomeDir: skillRuntime.codexHomeDir,
     schedulerBridge,
+    browserSupport: createBrowserRunSupport({ controller: browserController, bridge: browserBridge, serverPath: () => resolveBrowserMcpServerPath() }),
     availableSkills: skillRuntime.availableSkills
+  });
+  const syncSkillPolicy = (browserEnabled: boolean) => {
+    syncManagedSkillVisibility({
+      codexHomeDir: skillRuntime.codexHomeDir,
+      workspaceDir: skillRuntime.workspaceDir,
+      browserEnabled,
+      bundledSkillsDir: skillRuntime.bundledSkillsDir,
+      userSkillsDir: skillRuntime.userSkillsDir
+    });
+  };
+  const browserSettingsFlow = createBrowserSettingsFlow({
+    controller: browserController,
+    bridge: browserBridge,
+    stopAllRuns: () => agentRuntime.stopAllRuns(),
+    syncSkillPolicy,
+    logger: browserLogger
   });
 
   heartbeatAssistant = new HeartbeatAssistantService({
@@ -221,6 +264,10 @@ export async function initializeMainRuntime({
     heartbeatAssistant,
     windowsSandboxSetupService,
     speechTranscriptionService,
-    skillRuntime
+    skillRuntime,
+    browserController,
+    browserBridge,
+    browserSettingsFlow,
+    applySkillPolicy: () => syncSkillPolicy(browserController.isEnabled())
   };
 }

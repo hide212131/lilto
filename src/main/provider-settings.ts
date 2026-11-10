@@ -3,8 +3,10 @@ import path from "node:path";
 import { createLogger, type Logger } from "./logger";
 import {
   type ActiveProvider,
+  type BrowserSettings,
   type ChatSettings,
   type CustomProviderSettings,
+  DEFAULT_BROWSER_SETTINGS,
   DEFAULT_CHAT_SETTINGS,
   DEFAULT_HEARTBEAT_SETTINGS,
   DEFAULT_WINDOWS_SANDBOX_SETTINGS,
@@ -19,6 +21,7 @@ import {
 
 export type {
   ActiveProvider,
+  BrowserSettings,
   ChatSettings,
   CustomProviderSettings,
   HeartbeatSettings,
@@ -68,6 +71,7 @@ function createDefaultSettings(): ProviderSettings {
     windowsSandbox: { ...DEFAULT_WINDOWS_SANDBOX_SETTINGS },
     chatSettings: { ...DEFAULT_CHAT_SETTINGS, globalShortcut: defaultGlobalShortcut() },
     heartbeatSettings: { ...DEFAULT_HEARTBEAT_SETTINGS },
+    browserSettings: { ...DEFAULT_BROWSER_SETTINGS },
     updatedAt: Date.now()
   };
 }
@@ -114,6 +118,17 @@ function normalizeHeartbeatSettings(value: unknown): HeartbeatSettings {
       typeof record.showDesktopNotifications === "boolean"
         ? record.showDesktopNotifications
         : DEFAULT_HEARTBEAT_SETTINGS.showDesktopNotifications
+  };
+}
+
+function normalizeBrowserSettings(value: unknown): BrowserSettings {
+  const record = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  return {
+    enabled: typeof record.enabled === "boolean" ? record.enabled : DEFAULT_BROWSER_SETTINGS.enabled,
+    autoOpenOnToolUse:
+      typeof record.autoOpenOnToolUse === "boolean"
+        ? record.autoOpenOnToolUse
+        : DEFAULT_BROWSER_SETTINGS.autoOpenOnToolUse
   };
 }
 
@@ -167,6 +182,7 @@ function normalizeSettings(value: unknown): ProviderSettings {
     windowsSandbox: normalizeWindowsSandboxSettings(record.windowsSandbox),
     chatSettings: normalizeChatSettings(record.chatSettings),
     heartbeatSettings: normalizeHeartbeatSettings(record.heartbeatSettings),
+    browserSettings: normalizeBrowserSettings(record.browserSettings),
     updatedAt: typeof record.updatedAt === "number" ? record.updatedAt : Date.now()
   };
 }
@@ -180,6 +196,7 @@ function isValidSavePayload(payload: unknown): payload is {
   windowsSandbox?: WindowsSandboxSettings;
   chatSettings?: ChatSettings;
   heartbeatSettings?: HeartbeatSettings;
+  browserSettings?: BrowserSettings;
 } {
   if (!payload || typeof payload !== "object") return false;
   const record = payload as Record<string, unknown>;
@@ -251,6 +268,14 @@ function isValidSavePayload(payload: unknown): payload is {
     }
   }
 
+  if (record.browserSettings !== undefined) {
+    if (!record.browserSettings || typeof record.browserSettings !== "object" || Array.isArray(record.browserSettings)) {
+      return false;
+    }
+    const browser = record.browserSettings as Record<string, unknown>;
+    if (typeof browser.enabled !== "boolean" || typeof browser.autoOpenOnToolUse !== "boolean") return false;
+  }
+
   return true;
 }
 
@@ -295,11 +320,13 @@ export class ProviderSettingsService {
       networkProxy: { ...this.state.networkProxy },
       windowsSandbox: { ...this.state.windowsSandbox },
       chatSettings: { ...this.state.chatSettings },
-      heartbeatSettings: { ...this.state.heartbeatSettings }
+      heartbeatSettings: { ...this.state.heartbeatSettings },
+      browserSettings: { ...this.state.browserSettings }
     };
   }
 
-  save(payload: unknown): ProviderSettingsSaveResult {
+  /** Validate and normalize a save payload without persisting or mutating state. */
+  preview(payload: unknown): ProviderSettingsSaveResult {
     if (!isValidSavePayload(payload)) {
       return {
         ok: false,
@@ -310,9 +337,19 @@ export class ProviderSettingsService {
       };
     }
 
-    const normalized = normalizeSettings(payload);
+    const normalized = normalizeSettings(
+      (payload as Record<string, unknown>).browserSettings === undefined
+        ? { ...(payload as Record<string, unknown>), browserSettings: this.state.browserSettings }
+        : payload
+    );
+    return { ok: true, state: normalized };
+  }
 
-    this.state = normalized;
+  save(payload: unknown): ProviderSettingsSaveResult {
+    const preview = this.preview(payload);
+    if (!preview.ok) return preview;
+
+    this.state = preview.state;
     this.state.updatedAt = Date.now();
     this.persist();
 

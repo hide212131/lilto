@@ -5,6 +5,7 @@ import type { ClaudeAuthService } from "../auth-service";
 import type { HeartbeatAssistantService } from "../heartbeat-assistant";
 import type { ModelCatalogService } from "../model-catalog";
 import type { ProviderSettings, ProviderSettingsService } from "../provider-settings";
+import type { BrowserSettingsFlow } from "../browser-settings-flow";
 import { broadcastAuthState } from "./utils";
 
 export function registerAuthAndProviderIpcHandlers({
@@ -13,7 +14,8 @@ export function registerAuthAndProviderIpcHandlers({
   providerSettingsService,
   heartbeatAssistant,
   modelCatalogService,
-  onSettingsSaved
+  onSettingsSaved,
+  browserSettingsFlow
 }: {
   agentRuntime: AgentRuntime;
   authService: ClaudeAuthService & { setApiKey(apiKey: string | null): void };
@@ -21,6 +23,7 @@ export function registerAuthAndProviderIpcHandlers({
   heartbeatAssistant: HeartbeatAssistantService;
   modelCatalogService: ModelCatalogService;
   onSettingsSaved?: (settings: ProviderSettings) => void;
+  browserSettingsFlow?: BrowserSettingsFlow;
 }): void {
   authService.subscribe(() => {
     broadcastAuthState(authService);
@@ -91,11 +94,33 @@ export function registerAuthAndProviderIpcHandlers({
     return await modelCatalogService.listOauthModels(oauthProvider, networkProxy);
   });
 
-  ipcMain.handle("providers:saveSettings", (_event, payload: unknown) => {
-    const result = providerSettingsService.save(payload);
+  ipcMain.handle("providers:saveSettings", async (_event, payload: unknown) => {
+    const preview = providerSettingsService.preview(payload);
+    if (!preview.ok) return preview;
+    const current = providerSettingsService.getState().browserSettings;
+    const next = preview.state.browserSettings;
+    const failure = (message: string) => ({ ok: false as const, error: { code: "BROWSER_SETTINGS_APPLY_FAILED", message } });
+
+    if (browserSettingsFlow) {
+      try {
+        await browserSettingsFlow.prepare(next, current);
+      } catch (error) {
+        await browserSettingsFlow.failSafe().catch(() => {});
+        return failure(`ブラウザ設定の反映に失敗しました: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
+    let result: ReturnType<ProviderSettingsService["save"]>;
+    try {
+      result = providerSettingsService.save(payload);
+    } catch (error) {
+      await browserSettingsFlow?.failSafe().catch(() => {});
+      return failure(`設定を保存できませんでした: ${error instanceof Error ? error.message : String(error)}`);
+    }
     if (result.ok) {
       authService.setApiKey(result.state.customProvider.apiKey || null);
       agentRuntime.refreshProviderSettings();
+      await browserSettingsFlow?.commit(result.state.browserSettings);
       if (onSettingsSaved) {
         onSettingsSaved(result.state);
       }

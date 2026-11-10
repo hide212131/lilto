@@ -2,6 +2,7 @@ import path from "node:path";
 import { ConversationHistoryService } from "./conversation-history";
 import { registerAgentConversationIpcHandlers } from "./ipc/agent-conversation";
 import { registerAuthAndProviderIpcHandlers } from "./ipc/auth-provider";
+import { registerBrowserIpcHandlers } from "./ipc/browser";
 import { registerSchedulerSystemIpcHandlers } from "./ipc/scheduler-system";
 import { registerSkillsAndPluginIpcHandlers } from "./ipc/skills-plugins";
 import type { RegisterAgentIpcHandlersOptions } from "./ipc/types";
@@ -22,7 +23,11 @@ export function registerAgentIpcHandlers({
   modelCatalogService,
   speechTranscriptionService,
   windowsSandboxSetupService,
-  onSettingsSaved
+  onSettingsSaved,
+  browserSettingsFlow,
+  browserController,
+  getMainWindow,
+  applySkillPolicy
 }: RegisterAgentIpcHandlersOptions): void {
   const agentsFilePath = path.join(workspaceDir, "AGENTS.md");
   const conversationHistory = new ConversationHistoryService({
@@ -44,8 +49,11 @@ export function registerAgentIpcHandlers({
     providerSettingsService,
     heartbeatAssistant,
     modelCatalogService,
-    onSettingsSaved
+    onSettingsSaved,
+    browserSettingsFlow
   });
+
+  if (browserController && getMainWindow) registerBrowserIpcHandlers(browserController, getMainWindow);
 
   registerSchedulerSystemIpcHandlers({
     scheduler,
@@ -62,6 +70,7 @@ export function registerAgentIpcHandlers({
     workspaceDir,
     homeDir,
     codexHomeDir,
-    pluginService
+    pluginService,
+    applySkillPolicy
   });
 }

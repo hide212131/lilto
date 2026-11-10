@@ -2,10 +2,11 @@ import { buildPromptInput, type PromptImage } from "../shared/prompt-images";
 import http from "node:http";
 import path from "node:path";
 import { createLogger, type Logger } from "./logger";
-import { buildCustomModel, buildOauthModel, buildSessionThreadOptions, isLocalOllamaUrl, mergeCodexConfig, augmentPromptForScheduler, SCHEDULER_FOLLOW_UP_PROMPT_PREFIX, AUXILIARY_THREAD_SERVICE_NAME } from "./agent-sdk-config";
+import { buildCustomModel, buildOauthModel, buildSessionThreadOptions, isLocalOllamaUrl, mergeCodexConfig, withBrowserMcpConfig, augmentPromptForScheduler, SCHEDULER_FOLLOW_UP_PROMPT_PREFIX, AUXILIARY_THREAD_SERVICE_NAME } from "./agent-sdk-config";
 import { standardizeExecutionError } from "./agent-sdk-errors";
 import { processThreadEvent, translateAppServerItem } from "./agent-sdk-event-processing";
-import type { AgentResult, CodexConfig, RuntimeModel, SessionThreadOptions, Thread, ThreadEvent, ThreadItem } from "./agent-sdk-types";
+import type { AgentResult, CodexConfig, RunStreamedOptions, RuntimeModel, SessionThreadOptions, Thread, ThreadEvent, ThreadItem } from "./agent-sdk-types";
+import type { BrowserRunSupport } from "./browser-run-support";
 import type { ClaudeAuthService } from "./auth-service";
 import type { ProviderSettings } from "./provider-settings";
 import { isCustomProviderReady } from "./provider-settings";
@@ -354,7 +355,7 @@ export async function createCodexThreadFromAppServer(options: {
       if (!steerActiveTurn) throw new Error("追加指示を受け付ける実行中のターンがありません。再送信してください。");
       await steerActiveTurn(input, images);
     },
-    async runStreamed(input: string, runOptions?: { signal?: AbortSignal; images?: PromptImage[] }) {
+    async runStreamed(input: string, runOptions?: RunStreamedOptions) {
       const client = new CodexAppServerClient({
         codexHomeDir: options.codexHomeDir ?? path.join(options.homeDir ?? process.env.HOME ?? process.cwd(), ".codex"),
         codexCommand: packagedCodex?.command,
@@ -399,13 +400,16 @@ export async function createCodexThreadFromAppServer(options: {
 
       await client.start();
 
+      // The browser MCP server (and its token) exists only for this run's client.
+      const runConfig = withBrowserMcpConfig(mergeCodexConfig(mcpConfig, options.config), runOptions?.browserRun?.launch);
       const threadParams: Record<string, unknown> = {
         model: options.model?.id,
         cwd: options.cwd ?? process.cwd(),
         approvalPolicy: "never",
         sandbox: options.sandboxMode === "workspace-write" ? "workspace-write" : "danger-full-access",
         serviceName: options.serviceName ?? "lilto",
-        ...(mergeCodexConfig(mcpConfig, options.config) ? { config: mergeCodexConfig(mcpConfig, options.config) } : {})
+        ...(runConfig ? { config: runConfig } : {}),
+        ...(runOptions?.browserRun ? { developerInstructions: runOptions.browserRun.developerInstructions } : {})
       };
 
       if (activeThreadId) {
@@ -431,7 +435,7 @@ export async function createCodexThreadFromAppServer(options: {
         approvalPolicy: "never",
         sandboxPolicy,
         ...(options.model?.id ? { model: options.model.id } : {}),
-        ...(mergeCodexConfig(mcpConfig, options.config) ? { config: mergeCodexConfig(mcpConfig, options.config) } : {})
+        ...(runConfig ? { config: runConfig } : {})
       });
       activeTurnId = typeof turnResult?.turn?.id === "string" ? turnResult.turn.id : null;
       const steer = async (text: string, images?: PromptImage[]) => {
@@ -569,6 +573,7 @@ export class AgentRuntime {
   private readonly codexHomeDir?: string;
   private readonly homeDir?: string;
   private readonly schedulerBridge?: SchedulerBridgeServer;
+  private readonly browserSupport?: BrowserRunSupport;
   private readonly platform: NodeJS.Platform;
   private readonly sessionCache = new Map<string, CodexSession>();
   private readonly conversationThreads = new Map<string, string>();
@@ -607,6 +612,7 @@ export class AgentRuntime {
     codexHomeDir,
     homeDir,
     schedulerBridge,
+    browserSupport,
     platform = process.platform,
     logger = createLogger("agent")
   }: {
@@ -632,6 +638,7 @@ export class AgentRuntime {
     homeDir?: string;
     availableSkills?: Array<{ name: string }>;
     schedulerBridge?: SchedulerBridgeServer;
+    browserSupport?: BrowserRunSupport;
     platform?: NodeJS.Platform;
     logger?: Logger;
   }) {
@@ -642,7 +649,22 @@ export class AgentRuntime {
     this.codexHomeDir = codexHomeDir;
     this.homeDir = homeDir;
     this.schedulerBridge = schedulerBridge;
+    this.browserSupport = browserSupport;
     this.platform = platform;
+  }
+
+  /**
+   * Stop every running turn and wait (bounded) for the App Server clients to wind down.
+   * Used when the browser setting flips so no stale tool/skill configuration survives.
+   */
+  async stopAllRuns(timeoutMs = 8000): Promise<void> {
+    this.browserSupport?.revokeAll();
+    for (const run of this.runningRequests.values()) run.controller.abort();
+    this.invalidateSession();
+    const deadline = Date.now() + timeoutMs;
+    while (this.runningRequests.size > 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
   }
 
   abort(conversationId: string): void {
@@ -765,6 +787,7 @@ export class AgentRuntime {
     if (hooks?.conversationId && hooks.mode !== "heartbeat" && !hooks.freshContext) {
       this.activeConversationRuns.set(hooks.conversationId, activeRun);
     }
+    let browserRunEnd: (() => void) | null = null;
     try {
       const session = await this.ensureSession({
         ...options,
@@ -782,7 +805,16 @@ export class AgentRuntime {
       }
 
       const prompt = hooks?.mode === "heartbeat" ? text : augmentPromptForScheduler(text);
-      const streamed = await session.thread.runStreamed(prompt, { signal: abortController.signal, images: hooks?.images });
+      // Regular conversations (and scheduler follow-ups attributed to one) only; never heartbeat/internal threads.
+      const browserLease = hooks?.mode !== "heartbeat" && hooks?.conversationId
+        ? this.browserSupport?.begin({ conversationId: hooks.conversationId, requestId: hooks.requestId }) ?? null
+        : null;
+      browserRunEnd = browserLease ? () => browserLease.end() : null;
+      const streamed = await session.thread.runStreamed(prompt, {
+        signal: abortController.signal,
+        images: hooks?.images,
+        ...(browserLease ? { browserRun: { launch: browserLease.launch, developerInstructions: browserLease.developerInstructions } } : {})
+      });
       activeRun.resolve(session.thread);
       const state = {
         requestId: hooks?.requestId ?? "request",
@@ -818,6 +850,7 @@ export class AgentRuntime {
       }
       throw error;
     } finally {
+      browserRunEnd?.();
       abortController.signal.removeEventListener("abort", cancelReady);
       activeRun.resolve(null);
       if (hooks?.conversationId && this.activeConversationRuns.get(hooks.conversationId) === activeRun) {
