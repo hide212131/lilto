@@ -1,5 +1,5 @@
 import type { PromptImage } from "../shared/prompt-images.js";
-import { LitElement, html, css } from "lit";
+import { LitElement, html, css, unsafeCSS } from "lit";
 import { customElement, property, query } from "lit/decorators.js";
 import {
   buildHeartbeatAssistantSessionTitle,
@@ -22,6 +22,17 @@ import "./components/message-list.js";
 import "./components/composer.js";
 import "./components/settings-modal.js";
 import "./components/chat-history.js";
+import "./components/browser-panel.js";
+import type { LiltBrowserPanel } from "./components/browser-panel.js";
+import { BrowserLayoutSync, clampPreferredWidth, loadPreferredPanelWidth, savePreferredPanelWidth } from "./browser-layout.js";
+import { resolvePanelLayout } from "../shared/browser-layout.js";
+import {
+  BROWSER_CHAT_MIN_WIDTH,
+  BROWSER_PANEL_KEY_STEP,
+  BROWSER_PANEL_MAX_WIDTH,
+  BROWSER_PANEL_MIN_WIDTH,
+  type BrowserPanelState
+} from "../shared/browser.js";
 import type { LiltMessageList } from "./components/message-list.js";
 import type { LiltComposer } from "./components/composer.js";
 import type { AgentLoopEvent, LoopState } from "../shared/agent-loop.js";
@@ -87,6 +98,10 @@ export class LiltApp extends LitElement {
       intervalMinutes: 30,
       showDesktopNotifications: true
     },
+    browserSettings: {
+      enabled: true,
+      autoOpenOnToolUse: true
+    },
     updatedAt: Date.now()
   };
   @property({ type: Array }) messages: Message[] = [];
@@ -102,9 +117,19 @@ export class LiltApp extends LitElement {
   @property() activeSessionId: string | null = null;
   @property({ type: Boolean }) sidebarActivityMode = false;
   @property({ attribute: false }) activityPreviews: Record<string, ActivityPreview> = {};
+  @property({ attribute: false }) browserState: BrowserPanelState | null = null;
+  @property({ type: Boolean }) browserOpen = false;
+  @property({ type: Number }) browserPreferredWidth = loadPreferredPanelWidth();
+  @property({ type: Number }) browserEffectiveWidth = 0;
+  @property({ type: Boolean }) browserTooNarrow = false;
+  @property({ type: Boolean }) private _browserResizing = false;
 
   @query(".body") private _body!: HTMLDivElement;
   @query("lilt-composer") private _composer!: LiltComposer;
+  @query("lilt-browser-panel") private _browserPanel?: LiltBrowserPanel;
+  private _browserLayout: BrowserLayoutSync | null = null;
+  private _unsubscribeBrowserListener: (() => void) | null = null;
+  private _bodyResizeObserver: ResizeObserver | null = null;
 
   private _unsubscribeAuthListener: (() => void) | null = null;
   private _unsubscribeLoopListener: (() => void) | null = null;
@@ -210,6 +235,19 @@ export class LiltApp extends LitElement {
     .body.resizing .sidebar-resizer::before {
       background: #d29a00;
     }
+    .main.with-browser { min-width: ${unsafeCSS(String(BROWSER_CHAT_MIN_WIDTH))}px; }
+    .browser-resizer {
+      flex: 0 0 6px;
+      align-self: stretch;
+      cursor: col-resize;
+      position: relative;
+      background: transparent;
+    }
+    .browser-resizer::before { content: ""; position: absolute; top: 0; bottom: 0; left: 2px; width: 1px; background: rgba(31, 35, 40, 0.12); }
+    .browser-resizer:hover::before, .browser-resizer:focus-visible::before, .body.resizing-browser .browser-resizer::before { background: #d29a00; width: 2px; left: 2px; }
+    .browser-resizer:focus-visible { outline: 2px solid #4169e1; outline-offset: -2px; }
+    lilt-browser-panel { flex: 0 0 auto; }
+    .browser-narrow-notice { padding: 6px 12px; font-size: 12px; background: #fff7e0; border-bottom: 1px solid #e8d9a8; }
     .main {
       flex: 1;
       min-height: 0;
@@ -250,6 +288,7 @@ export class LiltApp extends LitElement {
     });
     void this._loadSchedules();
     this._loadSidebarWidth();
+    void this._hydrateBrowser();
     void this._hydrate();
     this._unsubscribeAuthListener = window.lilto.onAuthStateChanged((state) => {
       this.authState = state;
@@ -270,7 +309,7 @@ export class LiltApp extends LitElement {
       void this._openConversation(conversationId);
     });
     this._unsubscribeAppUpdateListener = window.lilto.onAppUpdateState((state) => this._onAppUpdateState(state));
-    this._unsubscribeAppUpdateOpenListener = window.lilto.onAppUpdateOpen(() => { this.updateDialogOpen = true; });
+    this._unsubscribeAppUpdateOpenListener = window.lilto.onAppUpdateOpen(() => { void this._showUpdateDialog(); });
     void window.lilto.getAppUpdateState().then((state) => this._onAppUpdateState(state));
   }
 
@@ -284,6 +323,13 @@ export class LiltApp extends LitElement {
     this._unsubscribeOpenConversationListener?.();
     this._unsubscribeAppUpdateListener?.();
     this._unsubscribeAppUpdateOpenListener?.();
+    this._unsubscribeBrowserListener?.();
+    this._unsubscribeBrowserListener = null;
+    this._bodyResizeObserver?.disconnect();
+    this._bodyResizeObserver = null;
+    this._browserLayout?.detach();
+    this._browserLayout = null;
+    this._stopBrowserResize();
     this._unsubscribeAuthListener = null;
     this._unsubscribeLoopListener = null;
     this._unsubscribeSchedulerListener = null;
@@ -293,8 +339,29 @@ export class LiltApp extends LitElement {
     this._unsubscribeAppUpdateOpenListener = null;
   }
 
+  protected firstUpdated() {
+    this._browserLayout = new BrowserLayoutSync(
+      () => this._browserPanel?.viewportElement ?? null,
+      () => this._browserPresentation(),
+      (update) => { void window.lilto.browser.updateViewport(update); }
+    );
+    this._browserLayout.attach();
+    if (this.browserState) this._browserLayout.setSync(this.browserState.rendererEpoch, this.browserState.layoutRevision);
+    if (this._body) {
+      this._bodyResizeObserver = new ResizeObserver(() => this._recomputeBrowserLayout());
+      this._bodyResizeObserver.observe(this._body);
+    }
+  }
+
   protected updated(changedProperties: Map<PropertyKey, unknown>) {
     super.updated(changedProperties);
+    for (const key of ["settingsOpen", "updateDialogOpen", "browserOpen", "sidebarOpen", "sidebarWidth", "browserPreferredWidth", "browserEffectiveWidth", "browserState", "_browserResizing"]) {
+      if (changedProperties.has(key)) {
+        this._recomputeBrowserLayout();
+        this._browserLayout?.schedule();
+        break;
+      }
+    }
     const previousUpdateState = changedProperties.get("updateState") as AppUpdateSnapshot | undefined;
     const stateChanged = changedProperties.has("updateState") && previousUpdateState?.status !== this.updateState?.status;
     if (changedProperties.has("updateDialogOpen") || stateChanged) {
@@ -455,7 +522,8 @@ export class LiltApp extends LitElement {
   }
 
   private _clampSidebarWidth(width: number) {
-    const maxWidth = Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, window.innerWidth - 320));
+    const reserved = this.browserOpen ? this.browserEffectiveWidth + 6 : 0;
+    const maxWidth = Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, window.innerWidth - 320 - reserved));
     return Math.min(Math.max(width, MIN_SIDEBAR_WIDTH), maxWidth);
   }
 
@@ -593,12 +661,15 @@ export class LiltApp extends LitElement {
         statusText=${this._statusText()}
         .newSessionDisabled=${this._creatingConversation}
         .sidebarOpen=${this.sidebarOpen}
+        .browserEnabled=${this.browserState?.enabled ?? true}
+        .browserOpen=${this.browserOpen}
         @new-session=${this._onStartNewSession}
-        @open-settings=${() => { this.settingsOpen = true; }}
+        @open-settings=${() => { void this._showSettings(); }}
         @toggle-sidebar=${this._onToggleSidebar}
+        @toggle-browser=${() => { void this._setBrowserOpen(!this.browserOpen); }}
       ></lilt-top-bar>
 
-      <div class="body ${this._isResizingSidebar ? "resizing" : ""}">
+      <div class="body ${this._isResizingSidebar ? "resizing" : ""} ${this._isResizingBrowser ? "resizing-browser" : ""}">
         <lilt-chat-history
           ?hidden=${!this.sidebarOpen}
           style=${this.sidebarOpen ? `width: ${this.sidebarWidth}px; min-width: ${this.sidebarWidth}px;` : ""}
@@ -625,7 +696,8 @@ export class LiltApp extends LitElement {
           ></button>
         ` : ""}
 
-        <div class="main">
+        <div class="main ${this.browserOpen ? "with-browser" : ""}">
+          ${this.browserOpen && this.browserTooNarrow ? html`<div class="browser-narrow-notice" role="status">ウィンドウを広げてください（ブラウザを一時的に非表示にしています）</div>` : ""}
           <div class="stage">
             <lilt-message-list
               .messages=${this.messages}
@@ -647,6 +719,33 @@ export class LiltApp extends LitElement {
             ></lilt-composer>
           </div>
         </div>
+        ${this.browserOpen && !this.browserTooNarrow ? html`
+          <div
+            class="browser-resizer"
+            role="separator"
+            tabindex="0"
+            aria-orientation="vertical"
+            aria-label="ブラウザ幅を変更"
+            aria-valuenow=${this.browserEffectiveWidth}
+            aria-valuemin=${BROWSER_PANEL_MIN_WIDTH}
+            aria-valuemax=${BROWSER_PANEL_MAX_WIDTH}
+            @pointerdown=${this._onBrowserResizeStart}
+            @keydown=${this._onBrowserResizeKeydown}
+          ></div>
+          <lilt-browser-panel
+            style=${`width: ${this.browserEffectiveWidth}px;`}
+            .state=${this.browserState}
+            .ownerLabel=${this._browserOwnerLabel()}
+            @browser-navigate=${(e: CustomEvent<{ url: string }>) => { void window.lilto.browser.navigate(e.detail.url); }}
+            @browser-back=${() => { void window.lilto.browser.back(); }}
+            @browser-forward=${() => { void window.lilto.browser.forward(); }}
+            @browser-reload=${() => { void window.lilto.browser.reload(); }}
+            @browser-open-external=${() => { void window.lilto.browser.openExternal(); }}
+            @browser-take-control=${() => { void window.lilto.browser.takeControl(); }}
+            @browser-allow-agent=${() => { void window.lilto.browser.allowAgentControl(); }}
+            @browser-close=${() => { void this._setBrowserOpen(false); }}
+          ></lilt-browser-panel>
+        ` : ""}
       </div>
 
       <lilt-settings-modal
@@ -671,7 +770,7 @@ export class LiltApp extends LitElement {
     this.updateState = state;
     if (state.status === "available" && state.source !== "manual" && state.targetVersion !== this._notifiedUpdateVersion) {
       this._notifiedUpdateVersion = state.targetVersion;
-      this.updateDialogOpen = true;
+      void this._showUpdateDialog();
     }
   }
 
@@ -710,7 +809,7 @@ export class LiltApp extends LitElement {
     try {
       await window.lilto.installAppUpdate();
     } catch {
-      this.updateDialogOpen = true;
+      void this._showUpdateDialog();
     }
   }
 
@@ -732,6 +831,136 @@ export class LiltApp extends LitElement {
       event.preventDefault();
       controls[0].focus();
     }
+  }
+
+  /* ---------------------------------------------------------------- browser */
+
+  private _browserPresentation() {
+    return { open: this.browserOpen, occluded: this.settingsOpen || this.updateDialogOpen, resizing: this._browserResizing };
+  }
+
+  private async _hydrateBrowser() {
+    this._unsubscribeBrowserListener = window.lilto.browser.onStateChanged((state) => this._applyBrowserState(state));
+    const result = await window.lilto.browser.getState();
+    if (result.ok) this._applyBrowserState(result.state);
+  }
+
+  /** Main owns the page state; the renderer only renders it and drops stale revisions. */
+  private _browserIntentPending = false;
+
+  private _applyBrowserState(state: BrowserPanelState) {
+    const previous = this.browserState;
+    if (previous && state.rendererEpoch === previous.rendererEpoch && state.revision < previous.revision) return;
+    this.browserState = state;
+    if (!previous || previous.rendererEpoch !== state.rendererEpoch || previous.layoutRevision !== state.layoutRevision) {
+      this._browserLayout?.setSync(state.rendererEpoch, state.layoutRevision);
+    }
+    // While our own open/close request is in flight, Main's state may still describe the old intent.
+    if (this._browserIntentPending) return;
+    if (!state.enabled && this.browserOpen) {
+      this.browserOpen = false;
+    } else if (state.enabled && state.panelRequested && !this.browserOpen) {
+      // Auto-open requested by Main (agent tool use with auto-open ON).
+      this.browserOpen = true;
+    }
+  }
+
+  private async _setBrowserOpen(open: boolean) {
+    if (this.browserOpen === open) return;
+    this._browserIntentPending = true;
+    try {
+      this.browserOpen = open;
+      await this.updateComplete;
+      const result = await window.lilto.browser.setPresentation(this._browserPresentation());
+      this._browserIntentPending = false;
+      if (result.ok) this._applyBrowserState(result.state);
+    } finally {
+      this._browserIntentPending = false;
+    }
+    this._browserLayout?.schedule();
+  }
+
+  /** Hide the native page before a dialog is drawn over it; draw only after Main acknowledged. */
+  private async _hideBrowserForDialog() {
+    if (!this.browserOpen) return;
+    await window.lilto.browser.setPresentation({ open: true, occluded: true, resizing: false });
+  }
+
+  private async _showSettings() {
+    await this._hideBrowserForDialog();
+    this.settingsOpen = true;
+  }
+
+  private async _showUpdateDialog() {
+    await this._hideBrowserForDialog();
+    this.updateDialogOpen = true;
+  }
+
+  private _recomputeBrowserLayout() {
+    if (!this.browserOpen || !this._body) {
+      if (this.browserEffectiveWidth !== 0) this.browserEffectiveWidth = 0;
+      if (this.browserTooNarrow) this.browserTooNarrow = false;
+      return;
+    }
+    const layout = resolvePanelLayout({
+      bodyWidth: this._body.clientWidth,
+      sidebarOpen: this.sidebarOpen,
+      sidebarWidth: this.sidebarWidth,
+      handleWidth: 6,
+      preferredPanelWidth: this.browserPreferredWidth,
+      panelMin: BROWSER_PANEL_MIN_WIDTH,
+      panelMax: BROWSER_PANEL_MAX_WIDTH,
+      chatMin: BROWSER_CHAT_MIN_WIDTH
+    });
+    if (layout.closeSidebar && this.sidebarOpen) this.sidebarOpen = false;
+    if (layout.panelWidth !== this.browserEffectiveWidth) this.browserEffectiveWidth = layout.panelWidth;
+    if (layout.tooNarrow !== this.browserTooNarrow) this.browserTooNarrow = layout.tooNarrow;
+  }
+
+  private _isResizingBrowser = false;
+  private _onBrowserResize = (event: PointerEvent) => {
+    if (!this._isResizingBrowser) return;
+    const bodyRight = this._body.getBoundingClientRect().right;
+    this.browserPreferredWidth = clampPreferredWidth(bodyRight - event.clientX);
+  };
+  private _stopBrowserResize = () => {
+    if (!this._isResizingBrowser) return;
+    this._isResizingBrowser = false;
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+    window.removeEventListener("pointermove", this._onBrowserResize);
+    window.removeEventListener("pointerup", this._stopBrowserResize);
+    savePreferredPanelWidth(this.browserPreferredWidth);
+    this._browserResizing = false;
+    void window.lilto.browser.setPresentation(this._browserPresentation());
+  };
+
+  private _onBrowserResizeStart(event: PointerEvent) {
+    if (!this.browserOpen) return;
+    event.preventDefault();
+    this._isResizingBrowser = true;
+    // Hide the native page while dragging so it cannot capture the pointer.
+    this._browserResizing = true;
+    void window.lilto.browser.setPresentation({ open: true, occluded: this.settingsOpen || this.updateDialogOpen, resizing: true });
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("pointermove", this._onBrowserResize);
+    window.addEventListener("pointerup", this._stopBrowserResize);
+  }
+
+  private _onBrowserResizeKeydown(event: KeyboardEvent) {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const delta = event.key === "ArrowLeft" ? BROWSER_PANEL_KEY_STEP : -BROWSER_PANEL_KEY_STEP;
+    this.browserPreferredWidth = clampPreferredWidth(this.browserEffectiveWidth + delta);
+    savePreferredPanelWidth(this.browserPreferredWidth);
+  }
+
+  private _browserOwnerLabel(): string {
+    const state = this.browserState;
+    const id = state?.owner?.kind === "agent" ? state.owner.conversationId : state?.lastOwnerConversationId ?? null;
+    if (!id) return "";
+    return this.sessions.find((session) => session.id === id)?.title ?? "";
   }
 
   private _onToggleSidebar() {
@@ -983,7 +1212,7 @@ export class LiltApp extends LitElement {
           error.code === "WINDOWS_SANDBOX_SETUP_FAILED" ||
           error.code === "WINDOWS_SANDBOX_UNSUPPORTED_MODE"
         ) {
-          if (this._currentSessionId === conversationId) this.settingsOpen = true;
+          if (this._currentSessionId === conversationId) void this._showSettings();
         }
       }
     } catch (err) {
@@ -1046,7 +1275,7 @@ export class LiltApp extends LitElement {
             ? "Codex ChatGPT 認証が必要です。Settings から認証を開始してください。"
             : "API key を設定して保存してから送信してください。"
         );
-        this.settingsOpen = true;
+        void this._showSettings();
       }
       return;
     }

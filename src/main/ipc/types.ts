@@ -8,6 +8,9 @@ import type { ProviderSettings, ProviderSettingsService } from "../provider-sett
 import type { SchedulerClient } from "../scheduler";
 import type { SpeechTranscriptionService } from "../speech-transcription";
 import type { WindowsSandboxSetupService } from "../windows-sandbox-setup";
+import type { BrowserWindow } from "electron";
+import type { BrowserSettingsFlow } from "../browser-settings-flow";
+import type { EmbeddedBrowserController } from "../embedded-browser";
 
 export type RegisterAgentIpcHandlersOptions = {
   agentRuntime: AgentRuntime;
@@ -26,4 +29,9 @@ export type RegisterAgentIpcHandlersOptions = {
   speechTranscriptionService: SpeechTranscriptionService;
   windowsSandboxSetupService: WindowsSandboxSetupService;
   onSettingsSaved?: (settings: ProviderSettings) => void;
+  browserSettingsFlow?: BrowserSettingsFlow;
+  browserController?: EmbeddedBrowserController;
+  getMainWindow?: () => BrowserWindow | null;
+  /** Re-apply the managed skill policy after skills were installed/updated/removed. */
+  applySkillPolicy?: () => void;
 };

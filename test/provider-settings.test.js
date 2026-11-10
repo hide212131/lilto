@@ -395,3 +395,48 @@ test("ProviderSettingsService は windowsSandbox 未設定データを off / pri
   assert.equal(state.windowsSandbox.mode, "off");
   assert.equal(state.windowsSandbox.privateDesktop, true);
 });
+
+test("browserSettings: 旧設定は既定値で補完され、コピーが返る", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "lilto-provider-browser-"));
+  const storagePath = path.join(tempDir, "providers.json");
+  fs.writeFileSync(storagePath, JSON.stringify({ activeProvider: "oauth", customProvider: {} }));
+  const service = new ProviderSettingsService({ storagePath, logger: { info() {}, error() {} } });
+  const state = service.getState();
+  assert.deepEqual(state.browserSettings, { enabled: true, autoOpenOnToolUse: true });
+  state.browserSettings.enabled = false;
+  assert.equal(service.getState().browserSettings.enabled, true);
+});
+
+test("browserSettings: ON/OFF 保存・再読込・省略保存で現在値を維持・不正値拒否", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "lilto-provider-browser-"));
+  const storagePath = path.join(tempDir, "providers.json");
+  const options = { storagePath, logger: { info() {}, error() {} } };
+  const service = new ProviderSettingsService(options);
+  const base = { activeProvider: "oauth", customProvider: { name: "", baseUrl: "", apiKey: "", modelId: "" } };
+
+  const off = service.save({ ...base, browserSettings: { enabled: false, autoOpenOnToolUse: false } });
+  assert.equal(off.ok, true);
+  assert.deepEqual(new ProviderSettingsService(options).getState().browserSettings, { enabled: false, autoOpenOnToolUse: false });
+
+  // browserSettings を省略した保存は現在値を維持する（既定値に戻さない）
+  const omitted = service.save(base);
+  assert.equal(omitted.ok, true);
+  assert.deepEqual(omitted.state.browserSettings, { enabled: false, autoOpenOnToolUse: false });
+
+  for (const bad of [null, [], "x", {}, { enabled: true }, { enabled: "yes", autoOpenOnToolUse: true }, { enabled: true, autoOpenOnToolUse: 1 }]) {
+    const result = service.save({ ...base, browserSettings: bad });
+    assert.equal(result.ok, false, JSON.stringify(bad));
+  }
+  assert.deepEqual(service.getState().browserSettings, { enabled: false, autoOpenOnToolUse: false });
+
+  const on = service.save({ ...base, browserSettings: { enabled: true, autoOpenOnToolUse: true } });
+  assert.deepEqual(on.state.browserSettings, { enabled: true, autoOpenOnToolUse: true });
+});
+
+test("browserSettings: 保存ファイル内の不正値は項目ごとに既定値へ戻る", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "lilto-provider-browser-"));
+  const storagePath = path.join(tempDir, "providers.json");
+  fs.writeFileSync(storagePath, JSON.stringify({ browserSettings: { enabled: "no", autoOpenOnToolUse: false } }));
+  const service = new ProviderSettingsService({ storagePath, logger: { info() {}, error() {} } });
+  assert.deepEqual(service.getState().browserSettings, { enabled: true, autoOpenOnToolUse: false });
+});

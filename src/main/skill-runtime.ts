@@ -14,6 +14,8 @@ export {
   resolveCodexHomeDir,
   resolveCodexUserSkillsDir,
   setupSkillRuntime,
+  syncManagedSkillVisibility,
+  collectAgentBrowserSkillPaths,
   uninstallUserSkill,
   type SkillRuntimeSetup
 } from "./skill-runtime-policy";

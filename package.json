@@ -17,6 +17,8 @@
     "dist:win": "npm run build:native && npm run build && set CSC_IDENTITY_AUTO_DISCOVERY=false&& set CSC_LINK=&& set WIN_CSC_LINK=&& electron-builder --win nsis --publish never",
     "verify:dist": "node scripts/verify-dist-artifacts.js",
     "verify:release": "node scripts/verify-release-artifacts.js",
+    "verify:embedded-browser": "npm run build && electron scripts/verify-embedded-browser.js",
+    "verify:app-server-mcp": "npm run build && electron scripts/verify-app-server-mcp.js",
     "live-ui:manual": "node scripts/live-ui-manual-verification.js",
     "test:unit": "npm run build:unit && node scripts/run-unit-tests.js",
     "test": "npm run build && node scripts/run-unit-tests.js",
@@ -31,6 +33,9 @@
     "asar": true,
     "asarUnpack": [
       "dist/main/cron-mcp-server.js",
+      "dist/main/browser-mcp-server.js",
+      "dist/main/browser-tool-contract.js",
+      "dist/shared/browser.js",
       "node_modules/@openai/codex-*/vendor/**/*"
     ],
     "directories": {

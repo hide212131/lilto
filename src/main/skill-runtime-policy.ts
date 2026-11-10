@@ -222,12 +222,33 @@ function renderManagedSkillsConfig(disabledSkillPaths: string[]): string {
   return `${MANAGED_SKILLS_CONFIG_START}\n${body}\n${MANAGED_SKILLS_CONFIG_END}\n`;
 }
 
-function syncManagedSkillVisibility(options: {
+/** Paths of the `agent-browser` skill (bundled copy and any same-named user skill). */
+export function collectAgentBrowserSkillPaths(options: { bundledSkillsDir: string; userSkillsDir: string }): string[] {
+  const found = new Set<string>();
+  for (const dir of [options.bundledSkillsDir, options.userSkillsDir]) {
+    const candidate = path.join(dir, "agent-browser", "SKILL.md");
+    if (fs.existsSync(candidate)) found.add(candidate);
+  }
+  for (const skill of discoverRuntimeSkills(options)) {
+    if (skill.name === "agent-browser" && skill.filePath) found.add(skill.filePath);
+  }
+  return [...found];
+}
+
+/**
+ * Rewrites the Lilto-managed `[[skills.config]]` block. While the embedded browser is ON the
+ * bundled/user `agent-browser` skill is hidden so the model prefers `lilto_browser`.
+ * Content outside the managed block is never touched; paths the user already disabled
+ * themselves are not duplicated and stay disabled after OFF.
+ */
+export function syncManagedSkillVisibility(options: {
   codexHomeDir: string;
   workspaceDir: string;
+  browserEnabled?: boolean;
+  bundledSkillsDir?: string;
+  userSkillsDir?: string;
 }): string[] {
   const configPath = path.join(options.codexHomeDir, "config.toml");
-  const managedBlock = renderManagedSkillsConfig(collectRepoSkillPaths(options.workspaceDir));
   let existing = "";
   try {
     if (fs.existsSync(configPath)) {
@@ -242,6 +263,14 @@ function syncManagedSkillVisibility(options: {
     "g"
   );
   const withoutManagedBlock = existing.replace(managedPattern, "").replace(/\n{3,}/g, "\n\n").trim();
+
+  const disabled = new Set(collectRepoSkillPaths(options.workspaceDir));
+  if (options.browserEnabled && options.bundledSkillsDir && options.userSkillsDir) {
+    for (const skillPath of collectAgentBrowserSkillPaths({ bundledSkillsDir: options.bundledSkillsDir, userSkillsDir: options.userSkillsDir })) {
+      if (!withoutManagedBlock.includes(`path = ${JSON.stringify(skillPath)}`)) disabled.add(skillPath);
+    }
+  }
+  const managedBlock = renderManagedSkillsConfig([...disabled]);
   const nextContent = [withoutManagedBlock, managedBlock.trim()].filter(Boolean).join("\n\n").trim();
   const finalContent = nextContent ? `${nextContent}\n` : "";
 
@@ -261,6 +290,8 @@ export function setupSkillRuntime(options: {
   homeDir?: string;
   settingsPaths?: string[];
   projectRoot?: string;
+  /** Embedded browser ON hides the bundled agent-browser skill (defaults to the app default: ON). */
+  browserEnabled?: boolean;
 }): SkillRuntimeSetup {
   const appDataDir = path.resolve(options.appDataDir);
   const homeDir = options.homeDir ? path.resolve(options.homeDir) : undefined;
@@ -281,7 +312,10 @@ export function setupSkillRuntime(options: {
 
   const updatedSettings = syncManagedSkillVisibility({
     codexHomeDir,
-    workspaceDir
+    workspaceDir,
+    browserEnabled: options.browserEnabled ?? true,
+    bundledSkillsDir,
+    userSkillsDir
   });
   const availableSkills = discoverRuntimeSkills({ userSkillsDir, bundledSkillsDir });
 

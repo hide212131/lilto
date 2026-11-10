@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><title>fixture-form</title>
+<style>body{margin:0;padding:8px;font:14px sans-serif}.row{margin:6px 0}#coverwrap{position:relative;display:inline-block}#cover{position:absolute;inset:0;background:rgba(255,0,0,.2)}</style></head>
+<body>
+<h1>問い合わせ</h1>
+<div class="row"><label for="email">メールアドレス</label> <input id="email" type="text"></div>
+<div class="row"><label for="msg">お問い合わせ内容</label> <textarea id="msg"></textarea></div>
+<div class="row"><label for="ctl">制御入力</label> <input id="ctl" type="text"> <span id="mirror"></span></div>
+<div class="row"><input id="pw" type="password" aria-label="パスワード" value="s3cret-value"><input id="hid" type="hidden" value="hidden-value"></div>
+<div class="row"><div id="ce" contenteditable="true" aria-label="メモ" style="border:1px solid #999;min-height:24px;width:200px"></div></div>
+<div class="row"><input id="agree" type="checkbox"><label for="agree">同意する</label></div>
+<div class="row"><select id="sel" aria-label="色"><option value="r">赤</option><option value="b">青</option></select></div>
+<div class="row"><button id="send">送信</button> <span id="out"></span></div>
+<div class="row"><span id="coverwrap"><button id="covered">隠れたボタン</button><div id="cover"></div></span></div>
+<div class="row"><button id="hiddenbtn" style="display:none">見えないボタン</button><button id="disabledbtn" disabled>無効ボタン</button></div>
+<div class="row"><a id="lnk" href="/next">次へ</a> <button id="spa">SPA遷移</button> <button id="pop">ポップアップ</button> <a id="dl" href="/download">ダウンロード</a></div>
+<div class="row"><input id="file" type="file" aria-label="ファイル"></div>
+<div id="host"></div>
+<iframe title="埋め込み" src="about:blank" width="100" height="30"></iframe>
+<div class="row"><button id="mutate">置換</button><button id="rename">改名</button><button id="later">後で表示</button></div>
+<div style="height:2400px">長いページ</div>
+<script>
+window.__events = [];
+for (const type of ["mousedown", "mouseup", "click", "keydown"]) {
+  addEventListener(type, (e) => window.__events.push({ type, trusted: e.isTrusted, target: e.target && e.target.id }), true);
+}
+const state = { value: "" };
+document.getElementById("ctl").addEventListener("input", (e) => { state.value = e.target.value; document.getElementById("mirror").textContent = "state:" + state.value; });
+document.getElementById("send").addEventListener("click", () => { document.getElementById("out").textContent = "sent:" + document.getElementById("email").value; });
+document.getElementById("covered").addEventListener("click", () => { window.__coveredClicked = true; });
+document.getElementById("spa").addEventListener("click", () => history.pushState({}, "", "/form#spa"));
+document.getElementById("pop").addEventListener("click", () => window.open("/popup", "_blank"));
+document.getElementById("mutate").addEventListener("click", () => { const el = document.getElementById("agree"); el.replaceWith(el.cloneNode(true)); });
+document.getElementById("rename").addEventListener("click", () => { document.getElementById("send").textContent = "別の操作"; });
+document.getElementById("later").addEventListener("click", () => setTimeout(() => { const p = document.createElement("p"); p.id = "late"; p.textContent = "遅れて出現"; document.body.appendChild(p); }, 400));
+const root = document.getElementById("host").attachShadow({ mode: "open" });
+root.innerHTML = '<button id="sbtn">Shadowボタン</button>';
+root.getElementById("sbtn").addEventListener("click", () => { window.__shadowClicked = true; });
+</script></body></html>

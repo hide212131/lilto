@@ -20,7 +20,9 @@ async function waitForElectronPage(browser, timeoutMs) {
     for (const context of browser.contexts()) {
       for (const page of context.pages()) {
         const url = page.url();
-        if (!url || url.startsWith("devtools://")) {
+        // The host app is a file: page. An open embedded-browser view is a separate CDP target
+        // (http/https): never mistake it for the host.
+        if (!url || url.startsWith("devtools://") || /^https?:/.test(url)) {
           continue;
         }
 
@@ -38,6 +40,11 @@ async function waitForElectronPage(browser, timeoutMs) {
   }
 
   throw new Error(`Timed out waiting for Electron page within ${timeoutMs}ms`);
+}
+
+/** Explicit target selection: the embedded browser page(s), identified by URL predicate. */
+function findEmbeddedBrowserPage(browser, predicate = (url) => /^https?:/.test(url)) {
+  return browser.contexts().flatMap((context) => context.pages()).find((candidate) => predicate(candidate.url()));
 }
 
 async function waitForAppReady(page, timeoutMs = 15000) {
@@ -80,6 +87,7 @@ async function collectMessages(page) {
 module.exports = {
   collectMessages,
   connectToElectronApp,
+  findEmbeddedBrowserPage,
   resolveNamedLocator,
   waitForAppReady
 };

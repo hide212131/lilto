@@ -16,6 +16,9 @@ async function verifyLinkNavigation(browser, page, port, screenshotPath) {
   const input = resolveNamedLocator(page, "composerInput");
   const draft = await input.inputValue();
   await input.fill("リンクから戻った後も残る下書き");
+  // The toolbar is a Lit component in the host page (no longer a separate view); Playwright pierces open shadow roots.
+  const panel = () => page.locator("lilt-browser-panel");
+  const toolbarButton = (name) => panel().getByRole("button", { name, exact: true });
   const addLink = async (target) => {
     await page.evaluate(({ url, target }) => {
       document.querySelector("#navigation-fixture")?.remove();
@@ -35,43 +38,50 @@ async function verifyLinkNavigation(browser, page, port, screenshotPath) {
       if (match) { match.setDefaultTimeout(10000); return match; }
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    throw new Error("Link view did not appear");
+    throw new Error("Embedded browser page did not appear");
   };
   try {
     await addLink("");
     let content = await findPage((candidate) => candidate.url() === url);
-    let toolbar = await findPage((candidate) => candidate.url().startsWith("data:text/html"));
+    await panel().waitFor();
     await content.getByRole("heading", { name: "First page" }).waitFor();
     assert.equal(await content.evaluate(() => typeof window.lilto), "undefined");
+    // The native page must sit exactly over the panel's viewport placeholder (never over chat or toolbar).
+    const placeholder = await panel().locator(".viewport").boundingBox();
+    const size = await content.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+    assert.ok(Math.abs(size.width - placeholder.width) <= 2 && Math.abs(size.height - placeholder.height) <= 2, `page ${JSON.stringify(size)} vs viewport ${JSON.stringify(placeholder)}`);
     await content.getByRole("link", { name: "Next page" }).click();
     await content.getByRole("heading", { name: "Second page" }).waitFor();
-    await toolbar.getByRole("button", { name: "← 戻る", exact: true }).click({ noWaitAfter: true });
+    await toolbarButton("戻る").click({ noWaitAfter: true });
     await content.getByRole("heading", { name: "First page" }).waitFor();
     if (screenshotPath) {
-      // CDP captures each WebContents separately; keep both views as visual evidence.
-      await toolbar.screenshot({ path: screenshotPath.replace(/\.png$/, "-toolbar.png") });
+      // CDP captures each WebContents separately: host (panel chrome) and page are both kept as evidence.
+      await page.screenshot({ path: screenshotPath.replace(/\.png$/, "-host.png") });
       await content.screenshot({ path: screenshotPath });
     }
     // Electron cancels the host navigation in will-navigate. Reconnect CDP to
-    // discard Playwright's pending navigation bookkeeping for host and toolbar.
+    // discard Playwright's pending navigation bookkeeping for the host page.
     await browser.close();
     browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
     page = browser.contexts().flatMap((context) => context.pages()).find((candidate) => candidate.url() === originalUrl);
-    toolbar = await findPage((candidate) => candidate.url().startsWith("data:text/html"));
-    await toolbar.getByRole("button", { name: "← 戻る", exact: true }).click({ noWaitAfter: true });
     assert.equal(await resolveNamedLocator(page, "composerInput").inputValue(), "リンクから戻った後も残る下書き");
     assert.equal(page.url(), originalUrl);
-    // target=_blank must have the same return path, rather than an unmanaged window.
+    // target=_blank must land in the same panel, not an unmanaged window.
+    const pagesBefore = browser.contexts().flatMap((context) => context.pages()).length;
     await addLink("_blank");
     content = await findPage((candidate) => candidate.url() === url);
-    toolbar = await findPage((candidate) => candidate.url().startsWith("data:text/html"));
     await content.getByRole("heading", { name: "First page" }).waitFor();
+    assert.equal(browser.contexts().flatMap((context) => context.pages()).filter((candidate) => candidate.url() === url).length, 1);
+    assert.ok(browser.contexts().flatMap((context) => context.pages()).length <= pagesBefore + 1, "no extra windows for _blank");
     await content.getByRole("link", { name: "Offline page" }).click({ noWaitAfter: true });
-    await toolbar.getByRole("button", { name: "チャットに戻る", exact: true }).waitFor();
-    await toolbar.getByRole("button", { name: "チャットに戻る", exact: true }).click({ noWaitAfter: true });
+    await panel().getByText("読み込みに失敗しました").waitFor();
+    // Failure keeps the toolbar usable: back to the previous page, then close the panel to return to chat.
+    await toolbarButton("戻る").waitFor();
+    await toolbarButton("ブラウザを閉じる").click({ noWaitAfter: true });
+    await panel().waitFor({ state: "detached" });
     assert.equal(await resolveNamedLocator(page, "composerInput").inputValue(), "リンクから戻った後も残る下書き");
     assert.equal(page.url(), originalUrl);
-    console.log("✓ Link navigation: isolated content, multi-page back, return to chat, popup, offline recovery, preserved draft");
+    console.log("✓ Link navigation: isolated content in right panel, aligned viewport, multi-page back, popup, offline recovery, close, preserved draft");
     return { browser, page };
   } catch (error) {
     await browser.close().catch(() => {});

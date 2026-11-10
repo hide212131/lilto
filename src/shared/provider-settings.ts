@@ -35,6 +35,16 @@ export type HeartbeatSettings = {
   showDesktopNotifications: boolean;
 };
 
+export type BrowserSettings = {
+  enabled: boolean;
+  autoOpenOnToolUse: boolean;
+};
+
+export const DEFAULT_BROWSER_SETTINGS: BrowserSettings = {
+  enabled: true,
+  autoOpenOnToolUse: true
+};
+
 export const DEFAULT_CHAT_SETTINGS: ChatSettings = {
   enterToSend: false,
   globalShortcut: "CommandOrControl+L",
@@ -57,6 +67,7 @@ export type ProviderSettings = {
   windowsSandbox: WindowsSandboxSettings;
   chatSettings: ChatSettings;
   heartbeatSettings: HeartbeatSettings;
+  browserSettings: BrowserSettings;
   updatedAt: number;
 };
 

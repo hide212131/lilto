@@ -1,0 +1,98 @@
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const { BROWSER_TOOLS, listBrowserTools, validateToolArguments, isBrowserToolName } = require("../dist/main/browser-tool-contract.js");
+const { parseBrowsableUrl } = require("../dist/shared/browser.js");
+
+const L = "lease-1";
+const REF = { leaseId: L, snapshotId: "s1", ref: "b1-d1-n1" };
+
+const valid = {
+  browser_status: [{}],
+  browser_acquire: [{ url: "https://example.com" }, { url: "https://example.com", timeoutMs: 100 }, { url: "https://e.com", timeoutMs: 30000 }],
+  browser_release: [{ leaseId: L }],
+  browser_navigate: [{ leaseId: L, url: "https://example.com", waitUntil: "load" }],
+  browser_back: [{ leaseId: L, timeoutMs: 5000 }],
+  browser_forward: [{ leaseId: L }],
+  browser_reload: [{ leaseId: L }],
+  browser_snapshot: [{ leaseId: L }, { leaseId: L, maxNodes: 1 }, { leaseId: L, maxNodes: 2000 }],
+  browser_click: [REF, { ...REF, button: "right", clickCount: 2 }],
+  browser_fill: [{ ...REF, text: "" }, { ...REF, text: "あ".repeat(16384) }],
+  browser_select: [{ ...REF, values: ["a"] }, { ...REF, values: Array(100).fill("x".repeat(1024)) }],
+  browser_press: [{ ...REF, key: "Enter" }, { ...REF, key: "Tab", modifiers: ["Shift"] }, { ...REF, key: "Space", modifiers: [] }, { ...REF, key: "Enter", modifiers: ["Control"] }],
+  browser_scroll: [{ leaseId: L, deltaY: -4000 }, { leaseId: L, deltaY: 4000, deltaX: 4000 }, { leaseId: L, snapshotId: "s", ref: "r", deltaY: 1 }],
+  browser_get_text: [{ leaseId: L }, { leaseId: L, maxChars: 32768 }, { leaseId: L, snapshotId: "s", ref: "r" }],
+  browser_screenshot: [{ leaseId: L }],
+  browser_wait: [
+    { leaseId: L, condition: { kind: "text", text: "ok", present: true } },
+    { leaseId: L, condition: { kind: "url", url: "https://example.com/" } },
+    { leaseId: L, condition: { kind: "ref", snapshotId: "s", ref: "r", state: "hidden" } },
+    { leaseId: L, condition: { kind: "load", state: "load" } }
+  ]
+};
+
+const invalid = {
+  browser_status: [{ extra: 1 }, "x"],
+  browser_acquire: [{}, { url: "" }, { url: "x".repeat(8193) }, { url: "https://a.b", timeoutMs: 99 }, { url: "https://a.b", timeoutMs: 30001 }, { url: "https://a.b", timeoutMs: 1.5 }, { url: "https://a.b", extra: true }],
+  browser_release: [{}, { leaseId: "" }, { leaseId: "x".repeat(129) }],
+  browser_navigate: [{ leaseId: L }, { leaseId: L, url: "u", waitUntil: "idle" }],
+  browser_back: [{ leaseId: L, timeoutMs: 0 }],
+  browser_forward: [{}],
+  browser_reload: [{ leaseId: 1 }],
+  browser_snapshot: [{ leaseId: L, maxNodes: 0 }, { leaseId: L, maxNodes: 2001 }],
+  browser_click: [{ leaseId: L, ref: "r" }, { ...REF, button: "middle" }, { ...REF, clickCount: 3 }, { ...REF, selector: "a" }],
+  browser_fill: [{ ...REF }, { ...REF, text: "x".repeat(16385) }, { ...REF, text: 1 }],
+  browser_select: [{ ...REF, values: [] }, { ...REF, values: Array(101).fill("a") }, { ...REF, values: ["x".repeat(1025)] }],
+  browser_press: [
+    { ...REF, key: "F5" }, { ...REF, key: "a" }, { ...REF, key: "Enter", modifiers: ["Shift", "Shift"] },
+    { ...REF, key: "Enter", modifiers: ["Shift", "Control", "Alt", "Meta", "Shift"] }, { ...REF, key: "Enter", modifiers: ["Super"] },
+    { ...REF, key: "Tab", modifiers: ["Alt"] }, { ...REF, key: "Delete", modifiers: ["Shift"] }
+  ],
+  browser_scroll: [{ leaseId: L }, { leaseId: L, deltaY: 4001 }, { leaseId: L, deltaY: 1, snapshotId: "s" }, { leaseId: L, deltaY: 1, ref: "r" }, { leaseId: L, deltaY: 0.5 }],
+  browser_get_text: [{ leaseId: L, maxChars: 0 }, { leaseId: L, maxChars: 32769 }, { leaseId: L, ref: "r" }],
+  browser_screenshot: [{}],
+  browser_wait: [
+    { leaseId: L }, { leaseId: L, condition: { kind: "sleep" } }, { leaseId: L, condition: { kind: "text", text: "", present: true } },
+    { leaseId: L, condition: { kind: "text", text: "x".repeat(2049), present: true } }, { leaseId: L, condition: { kind: "text", text: "a" } },
+    { leaseId: L, condition: { kind: "ref", snapshotId: "s", ref: "r", state: "gone" } }, { leaseId: L, condition: { kind: "load", state: "networkidle" } },
+    { leaseId: L, condition: { kind: "url", url: "u", extra: 1 } }
+  ]
+};
+
+test("全 tool が固定集合で、入出力スキーマと description を持つ", () => {
+  assert.deepEqual(BROWSER_TOOLS.map((t) => t.name), Object.keys(valid));
+  for (const tool of listBrowserTools()) {
+    assert.equal(tool.inputSchema.additionalProperties, false);
+    assert.ok(tool.description.length > 10);
+    assert.equal(tool.outputSchema.oneOf.length, 2);
+  }
+  assert.equal(isBrowserToolName("browser_evaluate"), false);
+  assert.equal(isBrowserToolName("browser_click"), true);
+});
+
+for (const [name, cases] of Object.entries(valid)) {
+  test(`${name}: 正例と上限値を受理する`, () => {
+    for (const args of cases) assert.equal(validateToolArguments(name, args).ok, true, JSON.stringify(args).slice(0, 80));
+  });
+}
+for (const [name, cases] of Object.entries(invalid)) {
+  test(`${name}: 不正例を拒否する`, () => {
+    for (const args of cases) assert.equal(validateToolArguments(name, args).ok, false, JSON.stringify(args).slice(0, 80));
+  });
+}
+
+test("任意 selector・evaluate・座標・外部で開くは公開されない", () => {
+  const names = BROWSER_TOOLS.map((t) => t.name).join(" ");
+  assert.doesNotMatch(names, /evaluate|open_external|coordinate|selector/);
+  for (const tool of BROWSER_TOOLS) {
+    const props = Object.keys(tool.input.properties ?? {});
+    for (const forbidden of ["selector", "x", "y", "script", "path", "expression"]) assert.ok(!props.includes(forbidden), `${tool.name}.${forbidden}`);
+  }
+});
+
+test("parseBrowsableUrl は http(s) のみ・認証情報なし・長さ上限", () => {
+  assert.ok(parseBrowsableUrl("https://example.com/a?b=1"));
+  assert.ok(parseBrowsableUrl("http://localhost:3000"));
+  for (const bad of ["file:///etc/passwd", "javascript:alert(1)", "data:text/html,x", "blob:https://a/b", "about:blank", "https://u:p@example.com", "example.com", "", null, "https://a.b/" + "x".repeat(8200)]) {
+    assert.equal(parseBrowsableUrl(bad), null, String(bad).slice(0, 40));
+  }
+});

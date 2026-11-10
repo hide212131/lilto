@@ -45,18 +45,28 @@ const EXPECTED_HANDLE_CHANNELS = [
   "app-update:get-state",
   "app-update:check",
   "app-update:download",
-  "app-update:install"
+  "app-update:install",
+  "browser:getState",
+  "browser:setPresentation",
+  "browser:updateViewport",
+  "browser:navigate",
+  "browser:back",
+  "browser:forward",
+  "browser:reload",
+  "browser:openExternal",
+  "browser:takeControl",
+  "browser:allowAgentControl"
 ].sort();
 
 function extractMatches(content, pattern) {
   return [...content.matchAll(pattern)].map((match) => match[1]).sort();
 }
 
-test("main ipc と preload invoke は同じ 38 チャネルを公開する", () => {
+test("main ipc と preload invoke は同じ 48 チャネルを公開する", () => {
   const mainChannels = extractMatches(ipcContent, /ipcMain\.handle\("([^"]+)"/g);
   const preloadChannels = [...new Set(extractMatches(preloadContent, /ipcRenderer\.invoke\("([^"]+)"/g))].sort();
 
-  assert.equal(mainChannels.length, 38);
+  assert.equal(mainChannels.length, 48);
   assert.deepEqual(mainChannels, EXPECTED_HANDLE_CHANNELS);
   assert.deepEqual(preloadChannels, EXPECTED_HANDLE_CHANNELS);
 });
@@ -150,4 +160,14 @@ test("app・skills・plugins IPC の payload 契約を固定する", () => {
   assert.match(ipcContent, /message: "pluginId は必須です"/);
   assert.match(ipcContent, /refreshAgentSkills\(\)/);
   assert.match(ipcContent, /refreshAgentPlugins\(\)/);
+});
+
+test("browser IPC は固定メソッドだけを公開し、URL を受け取る入口は navigate のみ", () => {
+  const browserIpc = fs.readFileSync("src/main/ipc/browser.ts", "utf8");
+  const handled = extractMatches(browserIpc, /ipcMain\.handle\("(browser:[^"]+)"/g);
+  assert.equal(handled.length, 10);
+  assert.match(browserIpc, /fromHost\(event, getWindow\)/);
+  assert.match(browserIpc, /event\.senderFrame === window\.webContents\.mainFrame/);
+  assert.match(browserIpc, /ipcMain\.handle\("browser:openExternal", guard\(\(\) => controller\.openCurrentExternally\(\)\)\)/);
+  assert.match(preloadContent, /navigate: \(url: string\): Promise<BrowserIpcResult> => ipcRenderer\.invoke\("browser:navigate", \{ url \}\)/);
 });

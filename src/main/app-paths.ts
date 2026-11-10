@@ -135,6 +135,21 @@ export function resolveCronMcpServerPath(options: AppPathOptions = {}): string {
   return path.join(appRoot, "dist", "main", "cron-mcp-server.js");
 }
 
+/** Entry script of the lilto_browser stdio MCP server (prefers the asar-unpacked copy). */
+export function resolveBrowserMcpServerPath(options: AppPathOptions = {}): string {
+  const appRoot = resolveAppRoot(options);
+  const asarUnpackedRoot = appRoot.endsWith(".asar") ? appRoot.replace(/\.asar$/, ".asar.unpacked") : null;
+  const packagedCandidate = asarUnpackedRoot
+    ? path.join(asarUnpackedRoot, "dist", "main", "browser-mcp-server.js")
+    : null;
+
+  if (packagedCandidate && fs.existsSync(packagedCandidate)) {
+    return packagedCandidate;
+  }
+
+  return path.join(appRoot, "dist", "main", "browser-mcp-server.js");
+}
+
 export function resolveMascotPngPath(options: AppPathOptions = {}): string | null {
   const projectRoot = resolveProjectRoot(options.projectRoot);
   const candidates = [

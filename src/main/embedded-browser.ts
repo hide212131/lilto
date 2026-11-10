@@ -1,0 +1,1009 @@
+import { EventEmitter } from "node:events";
+
+import {
+  BROWSER_IPC,
+  BROWSER_LIMITS,
+  BrowserError,
+  parseBrowsableUrl,
+  type BrowserPanelState,
+  type BrowserPresentation,
+  type BrowserResult,
+  type BrowserSnapshot,
+  type BrowserToolState,
+  type BrowserViewportUpdate
+} from "../shared/browser";
+import { computeViewBounds, ExpectedInputLedger, ViewportGate, type IntRect } from "./browser-bounds";
+import { BrowserOwnership, SerialQueue, type Epochs } from "./browser-ownership";
+import { BROWSER_PAGE_WORLD_ID, buildRuntimeCall, type BrowserRuntimeMethod } from "./browser-page-runtime";
+
+/** Minimal surface of Electron objects the controller touches (so tests can fake them). */
+export type WebContentsLike = EventEmitter & {
+  loadURL(url: string): Promise<void>;
+  getURL(): string;
+  getTitle(): string;
+  isLoading(): boolean;
+  isDestroyed(): boolean;
+  close(): void;
+  reload(): void;
+  focus(): void;
+  navigationHistory: { canGoBack(): boolean; canGoForward(): boolean; goBack(): void; goForward(): void };
+  executeJavaScriptInIsolatedWorld(worldId: number, scripts: Array<{ code: string }>): Promise<unknown>;
+  sendInputEvent(event: Record<string, unknown>): void;
+  insertText(text: string): Promise<void>;
+  capturePage(): Promise<ImageLike>;
+  setWindowOpenHandler(handler: (details: { url: string }) => { action: "deny" }): void;
+};
+
+export type ImageLike = {
+  getSize(): { width: number; height: number };
+  resize(options: { width: number; height: number }): ImageLike;
+  toPNG(): Buffer;
+};
+
+export type ViewLike = {
+  webContents: WebContentsLike;
+  setBounds(bounds: IntRect): void;
+  setVisible(visible: boolean): void;
+};
+
+export interface BrowserHost {
+  createView(): ViewLike;
+  attachView(view: ViewLike): void;
+  detachView(view: ViewLike): void;
+  getContentSize(): { width: number; height: number };
+  getZoomFactor(): number;
+  isWindowVisible(): boolean;
+  isWindowFocused(): boolean;
+  sendToRenderer(channel: string, payload: unknown): void;
+  openExternal(url: string): void;
+  clearSessionData(): Promise<void>;
+  focusHost(): void;
+}
+
+export type BrowserRunHandle = { runId: string; conversationId: string; signal: AbortSignal };
+type Ctx = { check: () => void; signal: AbortSignal; effect: "none" | "possible" | "applied"; deadline: number };
+type Waiter = { resolve: () => void; reject: (error: unknown) => void };
+
+const POLL_MS = 100;
+const AUTO_OPEN_WAIT_MS = 3000;
+const KEY_CODES: Record<string, { keyCode: string; char?: string }> = {
+  Enter: { keyCode: "Enter", char: "\r" }, Tab: { keyCode: "Tab" }, Escape: { keyCode: "Escape" }, Backspace: { keyCode: "Backspace" },
+  Delete: { keyCode: "Delete" }, ArrowUp: { keyCode: "Up" }, ArrowDown: { keyCode: "Down" }, ArrowLeft: { keyCode: "Left" },
+  ArrowRight: { keyCode: "Right" }, Home: { keyCode: "Home" }, End: { keyCode: "End" }, PageUp: { keyCode: "PageUp" },
+  PageDown: { keyCode: "PageDown" }, Space: { keyCode: "Space", char: " " }
+};
+
+export class EmbeddedBrowserController {
+  readonly ownership = new BrowserOwnership();
+  private readonly queue = new SerialQueue();
+  private readonly ledger = new ExpectedInputLedger();
+  private readonly gate = new ViewportGate("", 0);
+  private readonly waiters = new Set<Waiter>();
+  private readonly listeners = new Set<(state: BrowserPanelState) => void>();
+  private view: ViewLike | null = null;
+  private viewConversationId: string | null = null;
+  private revision = 0;
+  private layoutRevision = 0;
+  private needsRelayout = true;
+  private rendererEpoch = "";
+  private epochCounter = 0;
+  private enabled: boolean;
+  private autoOpen: boolean;
+  private presentation: BrowserPresentation = { open: false, occluded: false, resizing: false };
+  private panelRequested = false;
+  private lastBounds: IntRect | null = null;
+  private visibleNow = false;
+  private error: string | null = null;
+  private snapshotCounter = 0;
+  private latestSnapshot: { id: string; ownershipEpoch: number; documentEpoch: number; at: number } | null = null;
+  private lastHttpStatus: number | null = null;
+  private disposed = false;
+  private policyRevision = 1;
+
+  constructor(private readonly host: BrowserHost, settings: { enabled: boolean; autoOpenOnToolUse: boolean }, private readonly now: () => number = Date.now) {
+    this.enabled = settings.enabled;
+    this.autoOpen = settings.autoOpenOnToolUse;
+    this.ownership.setIssuing(settings.enabled);
+    this.ownership.onChange = () => {
+      this.latestSnapshot = null;
+      this.publish();
+    };
+  }
+
+  /* ---------------------------------------------------------------- state */
+
+  onState(listener: (state: BrowserPanelState) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  getState(): BrowserPanelState {
+    const wc = this.liveContents();
+    return {
+      revision: this.revision,
+      enabled: this.enabled,
+      autoOpenOnToolUse: this.autoOpen,
+      panelRequested: this.panelRequested,
+      panelVisible: this.visibleNow,
+      url: wc?.getURL() ?? "",
+      title: wc?.getTitle() ?? "",
+      loading: wc?.isLoading() ?? false,
+      canGoBack: wc?.navigationHistory.canGoBack() ?? false,
+      canGoForward: wc?.navigationHistory.canGoForward() ?? false,
+      owner: this.ownership.ownerView(),
+      lastOwnerConversationId: this.ownership.getLastOwnerConversationId(),
+      error: this.error,
+      layoutRevision: this.layoutRevision,
+      rendererEpoch: this.rendererEpoch
+    };
+  }
+
+  private toolState(): BrowserToolState {
+    const wc = this.liveContents();
+    return {
+      url: wc?.getURL() ?? "",
+      title: wc?.getTitle() ?? "",
+      documentEpoch: this.ownership.epochs.documentEpoch,
+      panelVisible: this.visibleNow,
+      loading: wc?.isLoading() ?? false
+    };
+  }
+
+  private publish(): void {
+    if (this.disposed) return;
+    this.revision += 1;
+    const state = this.getState();
+    this.host.sendToRenderer(BROWSER_IPC.stateChanged, state);
+    for (const listener of this.listeners) listener(state);
+    if (this.visibleNow || !this.panelRequested) this.flushWaiters();
+  }
+
+  private flushWaiters(): void {
+    for (const waiter of [...this.waiters]) waiter.resolve();
+  }
+
+  private liveContents(): WebContentsLike | null {
+    const wc = this.view?.webContents;
+    return wc && !wc.isDestroyed() ? wc : null;
+  }
+
+  /* ------------------------------------------------------- renderer side */
+
+  /** A host renderer (re)loaded: new epoch, hide the view and ask for a fresh layout. */
+  beginRendererEpoch(): string {
+    this.epochCounter += 1;
+    this.rendererEpoch = `r${this.epochCounter}-${this.now().toString(36)}`;
+    this.presentation = { open: false, occluded: false, resizing: false };
+    this.panelRequested = false;
+    this.lastBounds = null;
+    this.requestRelayout();
+    return this.rendererEpoch;
+  }
+
+  /** Hide the view and demand a measurement newer than the current layoutRevision. */
+  requestRelayout(): void {
+    this.layoutRevision += 1;
+    this.needsRelayout = true;
+    this.gate.reset(this.rendererEpoch, this.layoutRevision);
+    this.ownership.bumpInteraction();
+    this.applyView();
+    this.publish();
+  }
+
+  setPresentation(next: BrowserPresentation): void {
+    this.adoptPresentation(next);
+    this.applyView();
+    this.publish();
+  }
+
+  /**
+   * Single place where a renderer-reported presentation is adopted, whether it arrives as an
+   * explicit presentation message or inside a viewport measurement (they can race).
+   */
+  private adoptPresentation(next: BrowserPresentation, options: { measured?: boolean } = {}): void {
+    const prev = this.presentation;
+    this.presentation = { open: next.open === true, occluded: next.occluded === true, resizing: next.resizing === true };
+    const blockedChanged = prev.occluded !== this.presentation.occluded || prev.resizing !== this.presentation.resizing;
+    if (blockedChanged) {
+      // Cancel in-flight operations; they resume only after a fresh measurement.
+      this.ownership.bumpInteraction();
+      this.view?.setVisible(false);
+      this.visibleNow = false;
+      // A viewport message already carries a fresh measurement; only a bare presentation change needs one.
+      if (!this.presentation.occluded && !this.presentation.resizing && !options.measured) {
+        this.layoutRevision += 1;
+        this.needsRelayout = true;
+        this.gate.setLayoutRevision(this.layoutRevision);
+      }
+    }
+    if (prev.open && !this.presentation.open) {
+      // The user closed the panel: end the lease for good and never auto-reopen on our own.
+      this.panelRequested = false;
+      this.ownership.expireLease({ interrupted: true });
+    } else if (this.presentation.open) {
+      this.panelRequested = true;
+    }
+  }
+
+  updateViewport(update: BrowserViewportUpdate): boolean {
+    if (!this.gate.accept(update)) return false;
+    this.adoptPresentation({ open: update.panelOpen, occluded: update.occluded, resizing: update.resizing }, { measured: true });
+    // Only a measurement taken against the current layoutRevision satisfies a pending relayout.
+    if (update.layoutRevision >= this.layoutRevision) this.needsRelayout = false;
+    const content = this.host.getContentSize();
+    const zoom = this.host.getZoomFactor();
+    const clamped = {
+      x: update.viewport.x,
+      y: update.viewport.y,
+      width: Math.min(update.viewport.width, update.hostViewport.width),
+      height: Math.min(update.viewport.height, update.hostViewport.height)
+    };
+    this.lastBounds = computeViewBounds(clamped, zoom, content);
+    this.applyView();
+    this.publish();
+    return true;
+  }
+
+  private applyView(): void {
+    const view = this.view;
+    if (!view || view.webContents.isDestroyed()) {
+      this.visibleNow = false;
+      return;
+    }
+    const show = this.enabled && this.panelRequested && !this.presentation.occluded && !this.presentation.resizing &&
+      !this.needsRelayout && this.host.isWindowVisible() && this.lastBounds !== null;
+    if (show && this.lastBounds) {
+      view.setBounds(this.lastBounds);
+      view.setVisible(true);
+    } else {
+      view.setVisible(false);
+    }
+    this.visibleNow = show;
+  }
+
+  /* ------------------------------------------------------- window events */
+
+  onWindowGeometryChanged(): void {
+    this.requestRelayout();
+  }
+
+  onWindowHidden(): void {
+    this.ownership.expireLease({ interrupted: false });
+    this.view?.setVisible(false);
+    this.visibleNow = false;
+    this.publish();
+  }
+
+  onWindowShown(): void {
+    this.requestRelayout();
+  }
+
+  /* --------------------------------------------------------- user actions */
+
+  async navigateByUser(rawUrl: string): Promise<void> {
+    if (!this.enabled) {
+      const url = parseBrowsableUrl(rawUrl);
+      if (url) this.host.openExternal(url.toString());
+      return;
+    }
+    const url = parseBrowsableUrl(rawUrl);
+    if (!url) {
+      this.error = "http(s) の URL を入力してください";
+      this.publish();
+      return;
+    }
+    this.error = null;
+    this.userTookOver();
+    this.panelRequested = true;
+    this.ensureView(null);
+    this.applyView();
+    this.publish();
+    await this.loadInView(url.toString());
+  }
+
+  /** Link clicked in the chat (or `_blank`): same path as typing an address. */
+  openLinkFromHost(rawUrl: string): void {
+    if (!parseBrowsableUrl(rawUrl)) return;
+    void this.navigateByUser(rawUrl).catch(() => {});
+  }
+
+  async goBack(): Promise<void> {
+    this.userTookOver();
+    const wc = this.liveContents();
+    if (wc?.navigationHistory.canGoBack()) wc.navigationHistory.goBack();
+    this.publish();
+  }
+
+  async goForward(): Promise<void> {
+    this.userTookOver();
+    const wc = this.liveContents();
+    if (wc?.navigationHistory.canGoForward()) wc.navigationHistory.goForward();
+    this.publish();
+  }
+
+  async reloadByUser(): Promise<void> {
+    this.userTookOver();
+    this.liveContents()?.reload();
+    this.publish();
+  }
+
+  openCurrentExternally(): void {
+    const url = parseBrowsableUrl(this.liveContents()?.getURL());
+    if (url) this.host.openExternal(url.toString());
+  }
+
+  takeControl(): void {
+    this.ownership.takeControl();
+  }
+
+  allowAgentControl(): void {
+    this.ownership.allowAgentControl();
+  }
+
+  private userTookOver(): void {
+    this.ownership.expireLease({ interrupted: true });
+    this.latestSnapshot = null;
+  }
+
+  /* -------------------------------------------------------------- settings */
+
+  async applySettings(next: { enabled: boolean; autoOpenOnToolUse: boolean }): Promise<void> {
+    const wasEnabled = this.enabled;
+    this.autoOpen = next.autoOpenOnToolUse;
+    if (wasEnabled !== next.enabled) this.policyRevision += 1;
+    if (wasEnabled && !next.enabled) {
+      this.ownership.setIssuing(false);
+      this.ownership.revokeAllRuns();
+      this.enabled = false;
+      this.closeView();
+      this.panelRequested = false;
+      this.error = null;
+      await this.host.clearSessionData();
+    } else if (!wasEnabled && next.enabled) {
+      this.enabled = true;
+      this.ownership.setIssuing(true);
+    }
+    this.publish();
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  getPolicyRevision(): number {
+    return this.policyRevision;
+  }
+
+  issueRun(input: { conversationId: string; requestId: string; policyRevision: number }) {
+    return this.ownership.issueRun(input);
+  }
+
+  dispose(): void {
+    this.ownership.revokeAllRuns();
+    this.closeView();
+    this.flushWaiters();
+    this.disposed = true;
+  }
+
+  /* ------------------------------------------------------------------ view */
+
+  private ensureView(forConversationId: string | null): ViewLike {
+    if (this.view && !this.view.webContents.isDestroyed() && (forConversationId === null || this.viewConversationId === forConversationId)) {
+      return this.view;
+    }
+    if (this.view) this.closeView();
+    const view = this.host.createView();
+    this.view = view;
+    this.viewConversationId = forConversationId;
+    this.ownership.bumpView();
+    this.latestSnapshot = null;
+    this.wireView(view);
+    this.host.attachView(view);
+    view.setVisible(false);
+    // An already-open, already-measured panel must show the replacement view immediately.
+    this.applyView();
+    this.publish();
+    return view;
+  }
+
+  private closeView(): void {
+    const view = this.view;
+    if (!view) return;
+    this.view = null;
+    this.viewConversationId = null;
+    this.visibleNow = false;
+    this.ownership.bumpView();
+    this.latestSnapshot = null;
+    try {
+      this.host.detachView(view);
+    } catch {
+      /* window may already be gone */
+    }
+    if (!view.webContents.isDestroyed()) view.webContents.close();
+  }
+
+  private wireView(view: ViewLike): void {
+    const wc = view.webContents;
+    const isMain = (details: unknown) => !details || (details as { isMainFrame?: boolean }).isMainFrame !== false;
+    const block = (event: { preventDefault(): void }, target: string) => {
+      if (!parseBrowsableUrl(target)) event.preventDefault();
+    };
+    wc.on("will-navigate", (...args: unknown[]) => block(args[0] as { preventDefault(): void }, String(args[1] ?? (args[0] as { url?: string }).url ?? "")));
+    wc.on("will-redirect", (...args: unknown[]) => block(args[0] as { preventDefault(): void }, String(args[1] ?? (args[0] as { url?: string }).url ?? "")));
+    wc.on("will-frame-navigate", (...args: unknown[]) => {
+      const details = args[0] as { preventDefault(): void; url?: string; isMainFrame?: boolean };
+      if (details.isMainFrame !== false) block(details, String(details.url ?? ""));
+    });
+    wc.setWindowOpenHandler(({ url }) => {
+      // Popups never get a window; http(s) targets load in this same surface.
+      if (parseBrowsableUrl(url)) void this.loadInView(url).catch(() => {});
+      return { action: "deny" };
+    });
+    const documentChanged = () => {
+      this.ownership.bumpDocument();
+      this.latestSnapshot = null;
+      this.publish();
+    };
+    wc.on("did-start-navigation", (...args: unknown[]) => {
+      const details = args[0] as { isMainFrame?: boolean; isSameDocument?: boolean } | undefined;
+      if (isMain(details) && !details?.isSameDocument) documentChanged();
+    });
+    wc.on("did-navigate-in-page", (...args: unknown[]) => {
+      if (args[2] !== false) documentChanged();
+    });
+    wc.on("did-navigate", (...args: unknown[]) => {
+      this.lastHttpStatus = typeof args[2] === "number" && args[2] > 0 ? args[2] : null;
+      this.error = null;
+      this.publish();
+    });
+    for (const name of ["page-title-updated", "did-start-loading", "did-stop-loading"]) wc.on(name, () => this.publish());
+    wc.on("did-fail-load", (...args: unknown[]) => {
+      const errorCode = Number(args[1]);
+      const isMainFrame = args[4] !== false;
+      if (errorCode === -3 || !isMainFrame) return;
+      this.error = `読み込みに失敗しました（${String(args[2] ?? errorCode)}）`;
+      this.publish();
+    });
+    wc.on("render-process-gone", () => {
+      this.error = "ページが停止しました";
+      this.ownership.expireLease({ interrupted: false });
+      this.ownership.bumpView();
+      this.visibleNow = false;
+      this.publish();
+    });
+    wc.on("before-input-event", (...args: unknown[]) => {
+      const event = args[0] as { preventDefault(): void };
+      const input = args[1] as { type?: string; x?: number; y?: number };
+      this.handleRawInput(event, `key:${input?.type ?? ""}`, {});
+    });
+    wc.on("before-mouse-event", (...args: unknown[]) => {
+      const event = args[0] as { preventDefault(): void };
+      const mouse = args[1] as { type?: string; x?: number; y?: number };
+      this.handleRawInput(event, `mouse:${mouse?.type ?? ""}`, { x: mouse?.x, y: mouse?.y });
+    });
+  }
+
+  /** Input that reaches the page while an agent holds the lease and Main did not plan it. */
+  private handleRawInput(event: { preventDefault(): void }, kind: string, detail: { x?: number; y?: number }): void {
+    if (this.ownership.getOwner().kind !== "agent") return;
+    const interrupting = kind === "key:keyDown" || kind === "key:rawKeyDown" || kind === "key:char" || kind === "mouse:mouseDown";
+    if (!interrupting) {
+      this.ledger.consume(kind, detail);
+      return;
+    }
+    if (this.ledger.consume(kind, detail)) return;
+    event.preventDefault();
+    this.ledger.clear();
+    this.ownership.takeControl();
+    this.error = "手動操作に切り替えました。AI の操作を再開するには「AI に操作を許可」を押してください";
+    this.publish();
+  }
+
+  /* --------------------------------------------------------- loading core */
+
+  private async loadInView(url: string, options: { waitUntil?: "domcontentloaded" | "load"; timeoutMs?: number; signal?: AbortSignal; check?: () => void } = {}): Promise<{ finalUrl: string; httpStatus: number | null }> {
+    const wc = this.liveContents();
+    if (!wc) throw new BrowserError("BROWSER_UNAVAILABLE", "The browser view is not available");
+    if (!parseBrowsableUrl(url)) throw new BrowserError("NAVIGATION_BLOCKED", "Only http(s) URLs without credentials are allowed");
+    const waitUntil = options.waitUntil ?? "load";
+    const timeoutMs = options.timeoutMs ?? BROWSER_LIMITS.timeoutDefaultMs;
+    this.lastHttpStatus = null;
+    return await new Promise((resolve, reject) => {
+      let settled = false;
+      const cleanup = () => {
+        clearTimeout(timer);
+        wc.removeListener("dom-ready", onDomReady);
+        wc.removeListener("did-fail-load", onFail);
+        options.signal?.removeEventListener("abort", onAbort);
+      };
+      const finish = (error: unknown | null) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        if (error) reject(error);
+        else resolve({ finalUrl: wc.isDestroyed() ? url : wc.getURL(), httpStatus: this.lastHttpStatus });
+      };
+      const onDomReady = () => {
+        if (waitUntil === "domcontentloaded") finish(null);
+      };
+      const onFail = (...args: unknown[]) => {
+        if (Number(args[1]) === -3 || args[4] === false) return;
+        finish(new BrowserError("NAVIGATION_FAILED", `Navigation failed (${String(args[2] ?? args[1])})`, { effect: "possible" }));
+      };
+      const onAbort = () => finish(new BrowserError("CANCELLED", "The operation was cancelled"));
+      const timer = setTimeout(() => finish(new BrowserError("TIMEOUT", "Navigation timed out", { effect: "possible" })), timeoutMs);
+      wc.on("dom-ready", onDomReady);
+      wc.on("did-fail-load", onFail);
+      if (options.signal?.aborted) return onAbort();
+      options.signal?.addEventListener("abort", onAbort, { once: true });
+      wc.loadURL(url).then(
+        () => finish(null),
+        (error: unknown) => {
+          // ERR_ABORTED (-3) happens for redirects/superseded loads; real failures arrive via did-fail-load.
+          const message = error instanceof Error ? error.message : String(error);
+          if (/ERR_ABORTED|\(-3\)/.test(message)) return;
+          finish(new BrowserError("NAVIGATION_FAILED", `Navigation failed: ${message.slice(0, 200)}`, { effect: "possible" }));
+        }
+      );
+    });
+  }
+
+  /* ------------------------------------------------------------ tool core */
+
+  private presentableError(): BrowserError | null {
+    if (!this.enabled) return new BrowserError("BROWSER_DISABLED", "The embedded browser is disabled in settings");
+    if (this.disposed || !this.host.isWindowVisible()) return new BrowserError("BROWSER_UNAVAILABLE", "The Lilto window is hidden or minimized");
+    if (this.presentation.occluded || this.presentation.resizing) return new BrowserError("PANEL_OCCLUDED", "A dialog or resize is covering the browser panel", { retryable: true });
+    return null;
+  }
+
+  /** Make sure the panel is shown (auto-open) before touching the page. */
+  private async ensurePresentable(signal: AbortSignal, timeoutMs: number): Promise<void> {
+    const blocked = this.presentableError();
+    if (blocked) throw blocked;
+    if (this.visibleNow) return;
+    if (!this.panelRequested) {
+      if (!this.autoOpen) throw new BrowserError("PANEL_CLOSED", "The browser panel is closed. Ask the user to open it.");
+      this.panelRequested = true;
+      this.publish();
+    }
+    await new Promise<void>((resolve, reject) => {
+      const waiter: Waiter = { resolve: () => done(null), reject: (error) => done(error) };
+      const timer = setTimeout(() => done(new BrowserError("PANEL_CLOSED", "The browser panel could not be shown", { retryable: true })), Math.min(timeoutMs, AUTO_OPEN_WAIT_MS));
+      const onAbort = () => done(new BrowserError("CANCELLED", "The operation was cancelled"));
+      const done = (error: unknown | null) => {
+        if (!this.waiters.delete(waiter)) return;
+        clearTimeout(timer);
+        signal.removeEventListener("abort", onAbort);
+        if (error) reject(error);
+        else {
+          const blockedNow = this.presentableError();
+          if (blockedNow) reject(blockedNow);
+          else if (!this.visibleNow) reject(new BrowserError("PANEL_CLOSED", "The browser panel was closed"));
+          else resolve();
+        }
+      };
+      this.waiters.add(waiter);
+      signal.addEventListener("abort", onAbort, { once: true });
+      if (signal.aborted) onAbort();
+      else if (this.visibleNow) done(null);
+    });
+  }
+
+  private async run<T>(
+    run: BrowserRunHandle,
+    leaseId: string,
+    options: { timeoutMs?: number; needsFocus?: boolean; snapshotId?: string },
+    body: (ctx: Ctx) => Promise<T>
+  ): Promise<BrowserResult<T>> {
+    const timeoutMs = options.timeoutMs ?? BROWSER_LIMITS.timeoutDefaultMs;
+    let effect: Ctx["effect"] = "none";
+    try {
+      if (!this.enabled) throw new BrowserError("BROWSER_DISABLED", "The embedded browser is disabled in settings");
+      this.ownership.assertLease(run.runId, leaseId);
+      await this.ensurePresentable(run.signal, timeoutMs);
+      const before: Epochs = this.ownership.snapshotEpochs();
+      let expired = false;
+      const signal = AbortSignal.any([run.signal, this.ownership.leaseSignal(run.runId, leaseId)]);
+      const ctx: Ctx = {
+        signal,
+        get effect() { return effect; },
+        set effect(value) { effect = value; },
+        deadline: this.now() + timeoutMs,
+        check: () => {
+          if (signal.aborted || !this.ownership.isRunActive(run.runId)) throw new BrowserError("CANCELLED", "The operation was cancelled", { effect });
+          if (expired) throw new BrowserError("TIMEOUT", "The operation timed out", { retryable: false, effect });
+          this.ownership.assertLease(run.runId, leaseId);
+          if (!this.ownership.unchanged(before, ["viewEpoch", "ownershipEpoch"])) throw new BrowserError("LEASE_EXPIRED", "The browser changed during the operation", { effect });
+          if (this.ownership.epochs.interactionEpoch !== before.interactionEpoch) {
+            throw new BrowserError(this.presentation.occluded || this.presentation.resizing ? "PANEL_OCCLUDED" : "CANCELLED", "The operation was interrupted", { effect });
+          }
+          if (!this.enabled) throw new BrowserError("BROWSER_DISABLED", "The embedded browser is disabled in settings", { effect });
+          if (!this.liveContents()) throw new BrowserError("PAGE_CRASHED", "The page is not available", { effect });
+        }
+      };
+      if (options.snapshotId !== undefined) this.assertSnapshot(options.snapshotId);
+      if (options.needsFocus && !this.host.isWindowFocused()) throw new BrowserError("WINDOW_NOT_FOCUSED", "Lilto is not the focused window; ask the user to bring it to the front", { retryable: true });
+      let timer: NodeJS.Timeout | undefined;
+      const timeout = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          expired = true;
+          reject(new BrowserError("TIMEOUT", "The operation timed out", { effect }));
+        }, timeoutMs);
+      });
+      try {
+        const result = await Promise.race([this.queue.enqueue(() => body(ctx), ctx.check), timeout]);
+        return { ok: true, state: this.toolState(), result };
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    } catch (error) {
+      return this.failure(error, effect);
+    }
+  }
+
+  private failure(error: unknown, effect: Ctx["effect"] = "none"): BrowserResult<never> {
+    if (error instanceof BrowserError) {
+      const payload = error.toJSON();
+      if (payload.effect === "none" && effect !== "none") payload.effect = effect;
+      return { ok: false, error: payload };
+    }
+    return { ok: false, error: { code: "INTERNAL_ERROR", message: error instanceof Error ? error.message.slice(0, 300) : "Unexpected error", retryable: false, effect } };
+  }
+
+  private assertSnapshot(snapshotId: string): void {
+    const latest = this.latestSnapshot;
+    if (!latest || latest.id !== snapshotId || latest.ownershipEpoch !== this.ownership.epochs.ownershipEpoch || latest.documentEpoch !== this.ownership.epochs.documentEpoch || this.now() - latest.at > BROWSER_LIMITS.snapshotTtlMs) {
+      throw new BrowserError("STALE_REF", "The snapshot is outdated; call browser_snapshot again");
+    }
+  }
+
+  private async page<T = Record<string, unknown>>(method: BrowserRuntimeMethod, args: unknown): Promise<T & { ok: boolean; code?: string; message?: string }> {
+    const wc = this.liveContents();
+    if (!wc) throw new BrowserError("PAGE_CRASHED", "The page is not available");
+    const result = (await wc.executeJavaScriptInIsolatedWorld(BROWSER_PAGE_WORLD_ID, [{ code: buildRuntimeCall(method, args) }])) as T & { ok: boolean; code?: string; message?: string };
+    if (!result || typeof result !== "object") throw new BrowserError("INTERNAL_ERROR", "The page runtime returned no result");
+    return result;
+  }
+
+  private unwrap<T extends { ok: boolean; code?: string; message?: string }>(result: T, effect: Ctx["effect"] = "none"): T {
+    if (!result.ok) {
+      const code = (result.code ?? "INTERNAL_ERROR") as BrowserError["code"];
+      throw new BrowserError(code, result.message ?? "Page operation failed", { effect });
+    }
+    return result;
+  }
+
+  /* ------------------------------------------------------------ tool API */
+
+  status(): BrowserResult<Record<string, unknown>> {
+    const wc = this.liveContents();
+    const blocked = this.presentableError();
+    return {
+      ok: true,
+      state: this.toolState(),
+      result: {
+        enabled: this.enabled,
+        available: this.enabled && this.host.isWindowVisible() && !this.disposed,
+        owner: this.ownership.ownerView(),
+        panelOpen: this.panelRequested,
+        panelVisible: this.visibleNow,
+        canGoBack: wc?.navigationHistory.canGoBack() ?? false,
+        canGoForward: wc?.navigationHistory.canGoForward() ?? false,
+        blockedReason: blocked && blocked.code !== "PANEL_OCCLUDED" ? blocked.code : this.presentation.occluded ? "PANEL_OCCLUDED" : null
+      }
+    };
+  }
+
+  async acquire(run: BrowserRunHandle, args: { url: string; timeoutMs?: number }): Promise<BrowserResult<{ leaseId: string }>> {
+    const timeoutMs = args.timeoutMs ?? BROWSER_LIMITS.timeoutDefaultMs;
+    let leaseId: string | null = null;
+    try {
+      if (!this.enabled) throw new BrowserError("BROWSER_DISABLED", "The embedded browser is disabled in settings");
+      const url = parseBrowsableUrl(args.url);
+      if (!url) throw new BrowserError("NAVIGATION_BLOCKED", "Only http(s) URLs without credentials are allowed");
+      const early = this.presentableError();
+      if (early) throw early;
+      const acquired = this.ownership.acquire(run.runId);
+      leaseId = acquired.leaseId;
+      if (acquired.reused) {
+        const current = this.liveContents()?.getURL();
+        if (current && current !== url.toString()) {
+          throw new BrowserError("NAVIGATION_BLOCKED", "This run already holds the browser; use browser_navigate to change the URL");
+        }
+        return { ok: true, state: this.toolState(), result: { leaseId } };
+      }
+      this.ensureView(run.conversationId);
+      this.error = null;
+      const lease = leaseId;
+      const result = await this.run(run, lease, { timeoutMs }, async (ctx) => {
+        ctx.check();
+        await this.loadInView(url.toString(), { waitUntil: "load", timeoutMs, signal: ctx.signal });
+        ctx.check();
+        return { leaseId: lease };
+      });
+      if (!result.ok) {
+        // The agent never receives the lease on failure; do not leave it orphaned.
+        if (this.ownership.getOwner().kind === "agent") this.ownership.expireLease({ interrupted: false });
+        return result;
+      }
+      return result;
+    } catch (error) {
+      if (leaseId && this.ownership.getOwner().kind === "agent") this.ownership.expireLease({ interrupted: false });
+      return this.failure(error);
+    }
+  }
+
+  async release(run: BrowserRunHandle, args: { leaseId: string }): Promise<BrowserResult<{ released: true }>> {
+    try {
+      this.ownership.release(run.runId, args.leaseId);
+      return { ok: true, state: this.toolState(), result: { released: true } };
+    } catch (error) {
+      return this.failure(error);
+    }
+  }
+
+  navigate(run: BrowserRunHandle, args: { leaseId: string; url: string; waitUntil?: "domcontentloaded" | "load"; timeoutMs?: number }) {
+    const parsed = parseBrowsableUrl(args.url);
+    if (!parsed) return Promise.resolve(this.failure(new BrowserError("NAVIGATION_BLOCKED", "Only http(s) URLs without credentials are allowed")));
+    return this.run(run, args.leaseId, { timeoutMs: args.timeoutMs }, async (ctx) => {
+      ctx.check();
+      ctx.effect = "possible";
+      const out = await this.loadInView(parsed.toString(), { waitUntil: args.waitUntil, timeoutMs: args.timeoutMs, signal: ctx.signal });
+      ctx.check();
+      return out;
+    });
+  }
+
+  private history(run: BrowserRunHandle, args: { leaseId: string; timeoutMs?: number }, direction: "back" | "forward") {
+    return this.run(run, args.leaseId, { timeoutMs: args.timeoutMs }, async (ctx) => {
+      const wc = this.liveContents();
+      if (!wc) throw new BrowserError("PAGE_CRASHED", "The page is not available");
+      const can = direction === "back" ? wc.navigationHistory.canGoBack() : wc.navigationHistory.canGoForward();
+      if (!can) return { navigated: false };
+      ctx.check();
+      ctx.effect = "possible";
+      const settled = this.waitForStop(wc, args.timeoutMs ?? BROWSER_LIMITS.timeoutDefaultMs, ctx.signal);
+      if (direction === "back") wc.navigationHistory.goBack();
+      else wc.navigationHistory.goForward();
+      await settled;
+      ctx.check();
+      return { navigated: true };
+    });
+  }
+
+  back(run: BrowserRunHandle, args: { leaseId: string; timeoutMs?: number }) {
+    return this.history(run, args, "back");
+  }
+
+  forward(run: BrowserRunHandle, args: { leaseId: string; timeoutMs?: number }) {
+    return this.history(run, args, "forward");
+  }
+
+  reload(run: BrowserRunHandle, args: { leaseId: string; timeoutMs?: number }) {
+    return this.run(run, args.leaseId, { timeoutMs: args.timeoutMs }, async (ctx) => {
+      const wc = this.liveContents();
+      if (!wc) throw new BrowserError("PAGE_CRASHED", "The page is not available");
+      ctx.check();
+      ctx.effect = "possible";
+      const settled = this.waitForStop(wc, args.timeoutMs ?? BROWSER_LIMITS.timeoutDefaultMs, ctx.signal);
+      wc.reload();
+      await settled;
+      ctx.check();
+      return { reloaded: true as const };
+    });
+  }
+
+  private waitForStop(wc: WebContentsLike, timeoutMs: number, signal: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const done = (error: unknown | null) => {
+        clearTimeout(timer);
+        wc.removeListener("did-stop-loading", onStop);
+        wc.removeListener("did-fail-load", onFail);
+        signal.removeEventListener("abort", onAbort);
+        if (error) reject(error);
+        else resolve();
+      };
+      const onStop = () => done(null);
+      const onFail = (...args: unknown[]) => {
+        if (Number(args[1]) !== -3 && args[4] !== false) done(new BrowserError("NAVIGATION_FAILED", "Navigation failed", { effect: "possible" }));
+      };
+      const onAbort = () => done(new BrowserError("CANCELLED", "The operation was cancelled"));
+      const timer = setTimeout(() => done(new BrowserError("TIMEOUT", "Navigation timed out", { effect: "possible" })), timeoutMs);
+      wc.on("did-stop-loading", onStop);
+      wc.on("did-fail-load", onFail);
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+  }
+
+  snapshot(run: BrowserRunHandle, args: { leaseId: string; maxNodes?: number }): Promise<BrowserResult<BrowserSnapshot>> {
+    return this.run(run, args.leaseId, {}, async (ctx) => {
+      ctx.check();
+      const epochs = this.ownership.epochs;
+      this.snapshotCounter += 1;
+      const snapshotId = `s${this.snapshotCounter}-${epochs.viewEpoch}-${epochs.ownershipEpoch}-${epochs.documentEpoch}`;
+      const raw = await this.page<{ snapshot: BrowserSnapshot }>("snapshot", {
+        snapshotId,
+        ownershipEpoch: epochs.ownershipEpoch,
+        documentEpoch: epochs.documentEpoch,
+        maxNodes: args.maxNodes ?? BROWSER_LIMITS.snapshotDefaultNodes
+      });
+      ctx.check();
+      this.unwrap(raw);
+      this.latestSnapshot = { id: snapshotId, ownershipEpoch: epochs.ownershipEpoch, documentEpoch: epochs.documentEpoch, at: this.now() };
+      return raw.snapshot;
+    });
+  }
+
+  /* ---------------------------------------------------------------- input */
+
+  private modifiersOf(list: string[] | undefined): string[] {
+    return (list ?? []).map((name) => name.toLowerCase());
+  }
+
+  click(run: BrowserRunHandle, args: { leaseId: string; snapshotId: string; ref: string; button?: "left" | "right"; clickCount?: 1 | 2; timeoutMs?: number }) {
+    return this.run(run, args.leaseId, { timeoutMs: args.timeoutMs, needsFocus: true, snapshotId: args.snapshotId }, async (ctx) => {
+      ctx.check();
+      const target = this.unwrap(await this.page<{ x: number; y: number }>("prepareClick", { snapshotId: args.snapshotId, ref: args.ref }));
+      ctx.check();
+      if (!this.host.isWindowFocused()) throw new BrowserError("WINDOW_NOT_FOCUSED", "Lilto is not the focused window", { retryable: true });
+      const wc = this.liveContents()!;
+      const button = args.button ?? "left";
+      const count = args.clickCount ?? 1;
+      const at = { x: Math.round(target.x), y: Math.round(target.y) };
+      ctx.effect = "possible";
+      this.ledger.expect("mouse:mouseMove", at);
+      wc.sendInputEvent({ type: "mouseMove", ...at });
+      for (let i = 1; i <= count; i += 1) {
+        this.ledger.expect("mouse:mouseDown", at);
+        this.ledger.expect("mouse:mouseUp", at);
+        wc.sendInputEvent({ type: "mouseDown", ...at, button, clickCount: i });
+        wc.sendInputEvent({ type: "mouseUp", ...at, button, clickCount: i });
+      }
+      return { dispatched: true as const };
+    });
+  }
+
+  fill(run: BrowserRunHandle, args: { leaseId: string; snapshotId: string; ref: string; text: string; timeoutMs?: number }) {
+    return this.run(run, args.leaseId, { timeoutMs: args.timeoutMs, needsFocus: true, snapshotId: args.snapshotId }, async (ctx) => {
+      ctx.check();
+      const prepared = this.unwrap(await this.page<{ empty: boolean }>("prepareFill", { snapshotId: args.snapshotId, ref: args.ref }));
+      ctx.check();
+      if (!this.host.isWindowFocused()) throw new BrowserError("WINDOW_NOT_FOCUSED", "Lilto is not the focused window", { retryable: true });
+      const wc = this.liveContents()!;
+      ctx.effect = "possible";
+      if (args.text.length > 0) {
+        await wc.insertText(args.text);
+      } else if (!prepared.empty) {
+        this.ledger.expect("key:keyDown");
+        this.ledger.expect("key:keyUp");
+        wc.sendInputEvent({ type: "keyDown", keyCode: "Delete" });
+        wc.sendInputEvent({ type: "keyUp", keyCode: "Delete" });
+      }
+      ctx.check();
+      const verified = this.unwrap(await this.page<{ matches: boolean; focused: boolean }>("verifyFill", { snapshotId: args.snapshotId, ref: args.ref, text: args.text }), "possible");
+      if (!verified.matches) throw new BrowserError("INTERNAL_ERROR", "The field value did not match after typing; take a snapshot and check", { effect: "applied" });
+      return { filled: true as const };
+    });
+  }
+
+  select(run: BrowserRunHandle, args: { leaseId: string; snapshotId: string; ref: string; values: string[]; timeoutMs?: number }) {
+    return this.run(run, args.leaseId, { timeoutMs: args.timeoutMs, snapshotId: args.snapshotId }, async (ctx) => {
+      ctx.check();
+      ctx.effect = "possible";
+      const out = this.unwrap(await this.page<{ selectedValues: string[] }>("selectOptions", { snapshotId: args.snapshotId, ref: args.ref, values: args.values }), "possible");
+      return { selectedValues: out.selectedValues };
+    });
+  }
+
+  press(run: BrowserRunHandle, args: { leaseId: string; snapshotId: string; ref: string; key: string; modifiers?: string[]; timeoutMs?: number }) {
+    const key = KEY_CODES[args.key];
+    if (!key) return Promise.resolve(this.failure(new BrowserError("INTERNAL_ERROR", "Unsupported key")));
+    return this.run(run, args.leaseId, { timeoutMs: args.timeoutMs, needsFocus: true, snapshotId: args.snapshotId }, async (ctx) => {
+      ctx.check();
+      this.unwrap(await this.page("prepareFocus", { snapshotId: args.snapshotId, ref: args.ref }));
+      ctx.check();
+      if (!this.host.isWindowFocused()) throw new BrowserError("WINDOW_NOT_FOCUSED", "Lilto is not the focused window", { retryable: true });
+      const wc = this.liveContents()!;
+      const modifiers = this.modifiersOf(args.modifiers);
+      ctx.effect = "possible";
+      this.ledger.expect("key:keyDown");
+      this.ledger.expect("key:keyUp");
+      wc.sendInputEvent({ type: "keyDown", keyCode: key.keyCode, modifiers });
+      if (key.char && modifiers.length === 0) {
+        this.ledger.expect("key:char");
+        wc.sendInputEvent({ type: "char", keyCode: key.char, modifiers });
+      }
+      wc.sendInputEvent({ type: "keyUp", keyCode: key.keyCode, modifiers });
+      return { dispatched: true as const };
+    });
+  }
+
+  scroll(run: BrowserRunHandle, args: { leaseId: string; snapshotId?: string; ref?: string; deltaX?: number; deltaY: number }) {
+    return this.run(run, args.leaseId, { snapshotId: args.snapshotId }, async (ctx) => {
+      ctx.check();
+      ctx.effect = "applied";
+      const out = this.unwrap(await this.page<{ scrollX: number; scrollY: number }>("scroll", { snapshotId: args.snapshotId, ref: args.ref, deltaX: args.deltaX ?? 0, deltaY: args.deltaY }), "applied");
+      return { scrollX: out.scrollX, scrollY: out.scrollY };
+    });
+  }
+
+  getText(run: BrowserRunHandle, args: { leaseId: string; snapshotId?: string; ref?: string; maxChars?: number }) {
+    return this.run(run, args.leaseId, { snapshotId: args.snapshotId }, async (ctx) => {
+      ctx.check();
+      const out = this.unwrap(await this.page<{ text: string; truncated: boolean }>("getText", { snapshotId: args.snapshotId, ref: args.ref, maxChars: args.maxChars ?? BROWSER_LIMITS.textDefaultChars }));
+      return { text: out.text, truncated: out.truncated };
+    });
+  }
+
+  screenshot(run: BrowserRunHandle, args: { leaseId: string }) {
+    return this.run(run, args.leaseId, {}, async (ctx) => {
+      ctx.check();
+      const wc = this.liveContents();
+      if (!wc) throw new BrowserError("PAGE_CRASHED", "The page is not available");
+      let image = await wc.capturePage();
+      ctx.check();
+      const { width, height } = image.getSize();
+      const edge = Math.max(width, height);
+      let outWidth = width;
+      let outHeight = height;
+      if (edge > BROWSER_LIMITS.screenshotMaxEdge) {
+        const scale = BROWSER_LIMITS.screenshotMaxEdge / edge;
+        outWidth = Math.max(1, Math.round(width * scale));
+        outHeight = Math.max(1, Math.round(height * scale));
+        image = image.resize({ width: outWidth, height: outHeight });
+      }
+      const png = image.toPNG();
+      if (png.byteLength > BROWSER_LIMITS.screenshotMaxBytes) throw new BrowserError("RESULT_TOO_LARGE", "The screenshot exceeds 1 MiB; scroll to a smaller region or use browser_get_text");
+      const viewport = this.unwrap(await this.page<{ width: number; height: number }>("viewport", {}));
+      return { mimeType: "image/png" as const, width: outWidth, height: outHeight, viewportWidth: viewport.width, viewportHeight: viewport.height, imageBase64: png.toString("base64") };
+    });
+  }
+
+  wait(run: BrowserRunHandle, args: {
+    leaseId: string;
+    timeoutMs?: number;
+    condition:
+      | { kind: "text"; text: string; present: boolean }
+      | { kind: "url"; url: string }
+      | { kind: "ref"; snapshotId: string; ref: string; state: "visible" | "hidden" | "enabled" }
+      | { kind: "load"; state: "domcontentloaded" | "load" };
+  }) {
+    const condition = args.condition;
+    return this.run(run, args.leaseId, { timeoutMs: args.timeoutMs, snapshotId: condition.kind === "ref" ? condition.snapshotId : undefined }, async (ctx) => {
+      const started = this.now();
+      for (;;) {
+        ctx.check();
+        if (await this.conditionMet(condition)) return { matched: true as const, elapsedMs: this.now() - started };
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, POLL_MS);
+          ctx.signal.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
+        });
+      }
+    });
+  }
+
+  private async conditionMet(condition: Parameters<EmbeddedBrowserController["wait"]>[1]["condition"]): Promise<boolean> {
+    const wc = this.liveContents();
+    if (!wc) throw new BrowserError("PAGE_CRASHED", "The page is not available");
+    switch (condition.kind) {
+      case "url":
+        return wc.getURL() === condition.url;
+      case "load": {
+        if (wc.isLoading()) return false;
+        const state = this.unwrap(await this.page<{ readyState: string }>("viewport", {}));
+        return condition.state === "load" ? state.readyState === "complete" : state.readyState !== "loading";
+      }
+      case "text": {
+        if (wc.isLoading()) return false;
+        const out = this.unwrap(await this.page<{ present: boolean }>("hasText", { text: condition.text }));
+        return out.present === condition.present;
+      }
+      case "ref": {
+        this.assertSnapshot(condition.snapshotId);
+        const out = this.unwrap(await this.page<{ matched: boolean }>("checkRef", { snapshotId: condition.snapshotId, ref: condition.ref, state: condition.state }));
+        return out.matched;
+      }
+    }
+  }
+}
