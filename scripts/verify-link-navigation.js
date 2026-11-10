@@ -43,13 +43,24 @@ async function verifyLinkNavigation(browser, page, port, screenshotPath) {
   try {
     await addLink("");
     let content = await findPage((candidate) => candidate.url() === url);
-    await panel().waitFor();
     await content.getByRole("heading", { name: "First page" }).waitFor();
     assert.equal(await content.evaluate(() => typeof window.lilto), "undefined");
+    // Electron cancels the host navigation in will-navigate, and Playwright keeps
+    // "pending navigation" bookkeeping for the host page: host-page locators
+    // (panel visibility, bounding boxes) stall until it is discarded. Reconnect
+    // CDP first, re-find both pages, and only then assert on the host page.
+    await browser.close();
+    browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+    page = browser.contexts().flatMap((context) => context.pages()).find((candidate) => candidate.url() === originalUrl);
+    page.setDefaultTimeout(10000);
+    content = await findPage((candidate) => candidate.url() === url);
+    await panel().waitFor();
     // The native page must sit exactly over the panel's viewport placeholder (never over chat or toolbar).
     const placeholder = await panel().locator(".viewport").boundingBox();
     const size = await content.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
     assert.ok(Math.abs(size.width - placeholder.width) <= 2 && Math.abs(size.height - placeholder.height) <= 2, `page ${JSON.stringify(size)} vs viewport ${JSON.stringify(placeholder)}`);
+    assert.equal(await resolveNamedLocator(page, "composerInput").inputValue(), "リンクから戻った後も残る下書き");
+    assert.equal(page.url(), originalUrl);
     await content.getByRole("link", { name: "Next page" }).click();
     await content.getByRole("heading", { name: "Second page" }).waitFor();
     await toolbarButton("戻る").click({ noWaitAfter: true });
@@ -59,13 +70,6 @@ async function verifyLinkNavigation(browser, page, port, screenshotPath) {
       await page.screenshot({ path: screenshotPath.replace(/\.png$/, "-host.png") });
       await content.screenshot({ path: screenshotPath });
     }
-    // Electron cancels the host navigation in will-navigate. Reconnect CDP to
-    // discard Playwright's pending navigation bookkeeping for the host page.
-    await browser.close();
-    browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
-    page = browser.contexts().flatMap((context) => context.pages()).find((candidate) => candidate.url() === originalUrl);
-    assert.equal(await resolveNamedLocator(page, "composerInput").inputValue(), "リンクから戻った後も残る下書き");
-    assert.equal(page.url(), originalUrl);
     // target=_blank must land in the same panel, not an unmanaged window.
     const pagesBefore = browser.contexts().flatMap((context) => context.pages()).length;
     await addLink("_blank");

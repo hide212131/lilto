@@ -7,7 +7,9 @@ const esbuild = require("esbuild");
 const { BROWSER_IPC } = require("../dist/shared/browser.js");
 
 const root = path.resolve(__dirname, "..");
-const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
+// Normalize CRLF: Windows checkouts (autocrlf) would otherwise break the
+// line-anchored regex assertions below even though the source is identical.
+const read = (file) => fs.readFileSync(path.join(root, file), "utf8").replace(/\r\n/g, "\n");
 
 test("preload exposes only fixed browser methods and its inlined channel names match BROWSER_IPC", () => {
   const preload = read("src/preload.ts");
