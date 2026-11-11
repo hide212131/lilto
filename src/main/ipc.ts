@@ -40,7 +40,8 @@ export function registerAgentIpcHandlers({
     providerSettingsService,
     notificationService,
     pluginService,
-    conversationHistory
+    conversationHistory,
+    scheduler
   });
 
   registerAuthAndProviderIpcHandlers({

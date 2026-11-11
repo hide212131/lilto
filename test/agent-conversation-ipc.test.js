@@ -9,11 +9,12 @@ function deferred() {
   return { promise, resolve };
 }
 
-function setup({ conversationHistory = {}, listPlugins = async () => ({ ok: false }), submitPrompt = async () => ({ ok: true, text: "done" }) } = {}) {
+function setup({ conversationHistory = {}, scheduler = { listSchedules: async () => [] }, running = () => false, listPlugins = async () => ({ ok: false }), submitPrompt = async () => ({ ok: true, text: "done" }) } = {}) {
   const handlers = new Map();
   const events = [];
   const aborted = [];
   const steered = [];
+  const forgotten = [];
   const exported = {};
   const dependencies = {
     "node:crypto": require("node:crypto"),
@@ -21,6 +22,7 @@ function setup({ conversationHistory = {}, listPlugins = async () => ({ ok: fals
     "../ipc-contract": require("../dist/main/ipc-contract"),
     "../logger": { createLogger: () => ({ error() {} }) },
     "../plugin-mentions": { normalizePluginMentionsForPrompt: (text) => text },
+    "../../shared/heartbeat-assistant": require("../dist/shared/heartbeat-assistant"),
     "./utils": { broadcastLoopEvent: (e) => events.push(e) }
   };
   vm.runInNewContext(fs.readFileSync("dist/main/ipc/agent-conversation.js", "utf8"), {
@@ -30,11 +32,11 @@ function setup({ conversationHistory = {}, listPlugins = async () => ({ ok: fals
     }
   });
   exported.registerAgentConversationIpcHandlers({
-    agentRuntime: { submitPrompt, abort: (id) => aborted.push(id), steerPrompt: async (text, id) => { steered.push([text, id]); return { ok: true }; } },
+    agentRuntime: { submitPrompt, isConversationRunning: running, forgetConversation: (id) => forgotten.push(id), abort: (id) => aborted.push(id), steerPrompt: async (text, id) => { steered.push([text, id]); return { ok: true }; } },
     providerSettingsService: { getState: () => ({}) }, notificationService: {},
-    pluginService: { listPlugins }, conversationHistory
+    pluginService: { listPlugins }, conversationHistory, scheduler
   });
-  return { invoke: (name, payload) => handlers.get(name)(null, payload), events, aborted, steered };
+  return { invoke: (name, payload) => handlers.get(name)(null, payload), events, aborted, steered, forgotten };
 }
 
 test("IPC はプラグイン準備中の会話も予約し、別会話は待たずに実行する", async () => {
@@ -122,3 +124,110 @@ test("IPC forwards image-only input through normal submission", async () => {
   assert.equal(received.text, "");
   assert.deepEqual(received.images, images);
 });
+
+function removalFixture(overrides = {}) {
+  const calls = [];
+  const conversationHistory = {
+    archiveConversation: async (id) => { calls.push(["archive", id]); },
+    deleteConversation: async (id) => { calls.push(["delete", id]); },
+    ...overrides.conversationHistory
+  };
+  return { calls, ipc: setup({ conversationHistory, ...overrides.setup }) };
+}
+
+for (const [channel, kind, failCode] of [["conversations:archive", "archive", "CONVERSATION_ARCHIVE_FAILED"], ["conversations:delete", "delete", "CONVERSATION_DELETE_FAILED"]]) {
+  test(`${channel}: 成功時は thread を呼び、対象キャッシュを破棄する`, async () => {
+    const { calls, ipc } = removalFixture();
+    assert.deepEqual(JSON.parse(JSON.stringify(await ipc.invoke(channel, { conversationId: "t1" }))), { ok: true });
+    assert.deepEqual(calls, [[kind, "t1"]]);
+    assert.deepEqual([...ipc.forgotten], ["t1"]);
+  });
+
+  test(`${channel}: payload 不正は INVALID_REQUEST で backend を呼ばない`, async () => {
+    const { calls, ipc } = removalFixture();
+    for (const payload of [null, undefined, "x", {}, { conversationId: 1 }, { conversationId: "   " }]) {
+      assert.equal((await ipc.invoke(channel, payload)).error.code, "INVALID_REQUEST");
+    }
+    assert.deepEqual(calls, []);
+  });
+
+  test(`${channel}: heartbeat ID は CONVERSATION_UNSUPPORTED`, async () => {
+    const { calls, ipc } = removalFixture();
+    for (const id of ["heartbeat-assistant", "heartbeat-assistant:2026-11-12"]) {
+      assert.equal((await ipc.invoke(channel, { conversationId: id })).error.code, "CONVERSATION_UNSUPPORTED");
+    }
+    assert.deepEqual(calls, []);
+  });
+
+  test(`${channel}: 実行中は CONVERSATION_BUSY`, async () => {
+    const { calls, ipc } = removalFixture({ setup: { running: (id) => id === "t1" } });
+    assert.equal((await ipc.invoke(channel, { conversationId: "t1" })).error.code, "CONVERSATION_BUSY");
+    assert.deepEqual(calls, []);
+  });
+
+  test(`${channel}: プラグイン準備中の会話は CONVERSATION_BUSY`, async () => {
+    const plugins = deferred();
+    const { calls, ipc } = removalFixture({ setup: { listPlugins: () => plugins.promise } });
+    const run = ipc.invoke("agent:submitPrompt", { text: "@plugin A", conversationId: "t1" });
+    assert.equal((await ipc.invoke(channel, { conversationId: "t1" })).error.code, "CONVERSATION_BUSY");
+    assert.deepEqual(calls, []);
+    plugins.resolve({ ok: false });
+    await run;
+  });
+
+  test(`${channel}: スケジュール参照ありは CONVERSATION_HAS_SCHEDULES`, async () => {
+    for (const kindOfSchedule of ["cron", "one_shot"]) {
+      const { calls, ipc } = removalFixture({ setup: { scheduler: { listSchedules: async () => [{ id: "s", kind: kindOfSchedule, sessionId: "t1" }] } } });
+      assert.equal((await ipc.invoke(channel, { conversationId: "t1" })).error.code, "CONVERSATION_HAS_SCHEDULES");
+      assert.deepEqual(calls, []);
+    }
+  });
+
+  test(`${channel}: 別会話のスケジュールは妨げない`, async () => {
+    const { calls, ipc } = removalFixture({ setup: { scheduler: { listSchedules: async () => [{ id: "s", kind: "cron", sessionId: "other" }] } } });
+    assert.equal((await ipc.invoke(channel, { conversationId: "t1" })).ok, true);
+    assert.deepEqual(calls, [[kind, "t1"]]);
+  });
+
+  test(`${channel}: スケジュール確認失敗は拒否する`, async () => {
+    const { calls, ipc } = removalFixture({ setup: { scheduler: { listSchedules: async () => { throw new Error("daemon down"); } } } });
+    const result = await ipc.invoke(channel, { conversationId: "t1" });
+    assert.equal(result.error.code, "CONVERSATION_SCHEDULE_CHECK_FAILED");
+    assert.match(result.error.message, /daemon down/);
+    assert.deepEqual(calls, []);
+  });
+
+  test(`${channel}: App Server の失敗は操作別コードで元の理由を保持し、キャッシュを破棄しない`, async () => {
+    const { ipc } = removalFixture({ conversationHistory: { archiveConversation: async () => { throw new Error("boom"); }, deleteConversation: async () => { throw new Error("boom"); } } });
+    const result = await ipc.invoke(channel, { conversationId: "t1" });
+    // The handler runs in a vm realm, so `instanceof Error` is false and the message is stringified.
+    assert.equal(result.ok, false);
+    assert.equal(result.error.code, failCode);
+    assert.match(result.error.message, /boom/);
+    assert.deepEqual([...ipc.forgotten], []);
+  });
+
+  test(`${channel}: 同一 ID の重複要求は先行処理だけ実行し、別 ID は並行できる`, async () => {
+    const gate = deferred();
+    const { calls, ipc } = removalFixture({ conversationHistory: {
+      archiveConversation: async (id) => { calls.push(["archive", id]); await gate.promise; },
+      deleteConversation: async (id) => { calls.push(["delete", id]); await gate.promise; }
+    } });
+    const first = ipc.invoke(channel, { conversationId: "t1" });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal((await ipc.invoke(channel, { conversationId: "t1" })).error.code, "CONVERSATION_BUSY");
+    const other = ipc.invoke(channel, { conversationId: "t2" });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(calls, [[kind, "t1"], [kind, "t2"]]);
+    gate.resolve();
+    assert.equal((await first).ok, true);
+    assert.equal((await other).ok, true);
+  });
+
+  test(`${channel}: 除去済み ID への遅延操作は CONVERSATION_UNAVAILABLE`, async () => {
+    const { calls, ipc } = removalFixture();
+    await ipc.invoke(channel, { conversationId: "t1" });
+    assert.equal((await ipc.invoke(channel, { conversationId: "t1" })).error.code, "CONVERSATION_UNAVAILABLE");
+    assert.equal(calls.length, 1);
+  });
+}

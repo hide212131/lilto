@@ -1090,3 +1090,23 @@ test("別会話の準備失敗は進行中の応答・追加指示・busy 状態
   assert.equal((await good).text, "still working");
   assert.equal(runtime.isBusy, false);
 });
+
+test("isConversationRunning は帰属先の会話（renderer ID／backend ID）を判定し、forgetConversation は対象キャッシュだけを落とす", () => {
+  const runtime = new AgentRuntime({ authService: createAuthService() });
+  runtime.runningRequests.set(Symbol(), { conversationId: "ui-1", controller: new AbortController() });
+  runtime.runningRequests.set(Symbol(), { controller: new AbortController() });
+  runtime.conversationThreads.set("ui-1", "thread-1");
+  assert.equal(runtime.isConversationRunning("ui-1"), true);
+  assert.equal(runtime.isConversationRunning("thread-1"), true);
+  assert.equal(runtime.isConversationRunning("other"), false);
+
+  const signature = (conversationId) => JSON.stringify({ conversationId, apiKey: "" });
+  runtime.sessionCache.set(signature("ui-1"), {});
+  runtime.sessionCache.set(signature("thread-1"), {});
+  runtime.sessionCache.set(signature("keep"), {});
+  runtime.conversationThreads.set("keep", "thread-keep");
+  runtime.forgetConversation("thread-1");
+  assert.equal(runtime.conversationThreads.has("ui-1"), false);
+  assert.equal(runtime.conversationThreads.get("keep"), "thread-keep");
+  assert.deepEqual([...runtime.sessionCache.keys()], [signature("keep")]);
+});

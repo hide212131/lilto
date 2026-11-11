@@ -17,6 +17,7 @@ import {
 } from "../shared/scheduler-follow-up.js";
 import type { SchedulerNotificationEvent, SchedulerScheduleSummary } from "../shared/scheduler.js";
 import type { AppUpdateSnapshot } from "../shared/app-update.js";
+import { SessionActionRunner, type SessionActionKind } from "./session-actions.js";
 import "./components/top-bar.js";
 import "./components/message-list.js";
 import "./components/composer.js";
@@ -35,6 +36,7 @@ import {
 } from "../shared/browser.js";
 import type { LiltMessageList } from "./components/message-list.js";
 import type { LiltComposer } from "./components/composer.js";
+import type { LiltChatHistory } from "./components/chat-history.js";
 import type { AgentLoopEvent, LoopState } from "../shared/agent-loop.js";
 import { createInitialLoopState, reduceLoopState } from "../shared/agent-loop.js";
 import { ConversationHistoryWindow, type HistoryDirection } from "../shared/conversation-history-window.js";
@@ -117,6 +119,8 @@ export class LiltApp extends LitElement {
   @property({ type: Array }) schedules: SchedulerScheduleSummary[] = [];
   @property() activeSessionId: string | null = null;
   @property({ type: Boolean }) sidebarActivityMode = false;
+  @property({ attribute: false }) private _busySessionIds: string[] = [];
+  @property() private _sessionActionError = "";
   @property({ attribute: false }) activityPreviews: Record<string, ActivityPreview> = {};
   @property({ attribute: false }) browserState: BrowserPanelState | null = null;
   @property({ type: Boolean }) browserOpen = false;
@@ -127,6 +131,7 @@ export class LiltApp extends LitElement {
 
   @query(".body") private _body!: HTMLDivElement;
   @query("lilt-composer") private _composer!: LiltComposer;
+  @query("lilt-chat-history") private _chatHistory?: LiltChatHistory;
   @query("lilt-browser-panel") private _browserPanel?: LiltBrowserPanel;
   private _browserLayout: BrowserLayoutSync | null = null;
   private _unsubscribeBrowserListener: (() => void) | null = null;
@@ -142,6 +147,21 @@ export class LiltApp extends LitElement {
   private _conversationRuns = new Map<string, ConversationRun>();
   private _conversationLoopStates = new Map<string, LoopState>();
   private _completedForegroundRequests = new Map<string, CompletedForegroundResponse | null>();
+  private _sessionActions = new SessionActionRunner({
+    findSession: (id) => this.sessions.find((session) => session.id === id),
+    isRunning: (id) => this._conversationRuns.has(id),
+    getSchedules: () => this.schedules,
+    refreshSchedules: () => this._loadSchedules(),
+    confirm: (message) => globalThis.confirm(message),
+    invoke: (kind, backendId) => kind === "archive"
+      ? window.lilto.archiveConversation(backendId)
+      : window.lilto.deleteConversation(backendId),
+    onSuccess: (session) => this._afterSessionRemoved(session.id),
+    onFailure: (message) => { this._sessionActionError = message; },
+    clearFailure: () => { this._sessionActionError = ""; },
+    onBusyChange: (ids) => { this._busySessionIds = ids; },
+    onCancelled: (id) => this._chatHistory?.focusMenuButton(id)
+  });
   private _messageSeq = 0;
   private _navigationVersion = 0;
   @query("lilt-message-list") private _messageList!: LiltMessageList;
@@ -403,7 +423,11 @@ export class LiltApp extends LitElement {
       };
     });
     const localOnlySessions = this.sessions.filter((session) => isHeartbeatAssistantSessionId(session.id));
-    this.sessions = this._sortSessions([...backendSessions, ...localOnlySessions]);
+    // Never revive a conversation that was archived/deleted while this list request was in flight.
+    this.sessions = this._sortSessions([
+      ...backendSessions.filter((session) => !this._sessionActions.isRemoved(session.id)),
+      ...localOnlySessions
+    ]);
   }
 
   private _saveSessions() {
@@ -678,6 +702,8 @@ export class LiltApp extends LitElement {
           .schedules=${this.schedules}
           .activeSessionId=${this.activeSessionId}
           .runningSessionIds=${[...this._conversationRuns.keys()]}
+          .busySessionIds=${this._busySessionIds}
+          .actionError=${this._sessionActionError}
           .activityMode=${this.sidebarActivityMode}
           .activityPreviews=${this.activityPreviews}
           @toggle-activity=${() => { this.sidebarActivityMode = !this.sidebarActivityMode; }}
@@ -685,7 +711,9 @@ export class LiltApp extends LitElement {
           @activity-preview-retry=${(event: CustomEvent<{ session: Session }>) => this._activityPreviewLoader?.request(event.detail.session, true)}
           @select-session=${this._onSelectSession}
           @rename-session=${this._onRenameSession}
-          @delete-session=${this._onDeleteSession}
+          @archive-session=${(e: CustomEvent<{ sessionId: string }>) => this._onSessionAction("archive", e)}
+          @delete-session=${(e: CustomEvent<{ sessionId: string }>) => this._onSessionAction("delete", e)}
+          @dismiss-session-action-error=${() => { this._sessionActionError = ""; }}
         ></lilt-chat-history>
         ${this.sidebarOpen ? html`
           <button
@@ -988,6 +1016,7 @@ export class LiltApp extends LitElement {
     const session = this.sessions.find((entry) =>
       entry.id === conversationId || entry.backendSessionId === conversationId
     ) ?? null;
+    if (session && (this._sessionActions.isBusy(session.id) || this._sessionActions.isRemoved(session.id))) return;
     if (!session) {
       return;
     }
@@ -1061,6 +1090,7 @@ export class LiltApp extends LitElement {
 
   private _onRenameSession(e: CustomEvent<{ sessionId: string; newTitle: string }>) {
     const { sessionId, newTitle } = e.detail;
+    if (this._sessionActions.isBusy(sessionId) || this._sessionActions.isRemoved(sessionId)) return;
     void window.lilto.renameConversation(sessionId, newTitle).then((result) => {
       if (!result.ok) {
         return;
@@ -1072,23 +1102,26 @@ export class LiltApp extends LitElement {
     });
   }
 
-  private _onDeleteSession(e: CustomEvent<{ sessionId: string }>) {
-    const { sessionId } = e.detail;
+  private _onSessionAction(kind: SessionActionKind, e: CustomEvent<{ sessionId: string }>) {
+    void this._sessionActions.run(kind, e.detail.sessionId);
+  }
+
+  /** Shared post-processing for a successful archive/delete. */
+  private _afterSessionRemoved(sessionId: string) {
+    const wasCurrent = sessionId === this._currentSessionId;
+    if (wasCurrent) ++this._navigationVersion;
+    this.sessions = this.sessions.filter((session) => session.id !== sessionId);
+    this._saveSessions();
+    this._conversationLoopStates.delete(sessionId);
+    this._conversationRuns.delete(sessionId);
     this._activityPreviewLoader?.invalidate(sessionId);
-    void window.lilto.archiveConversation(sessionId).then((result) => {
-      if (!result.ok) {
-        return;
-      }
-      localStorage.removeItem(`lilto.composer-draft.v1:${sessionId}`);
-      this.sessions = this.sessions.filter((s) => s.id !== sessionId);
-      this._saveSessions();
-      if (sessionId === this._currentSessionId) {
-        this.messages = [];
-        this.loopState = createInitialLoopState();
-        this._activateSession(null);
-        localStorage.removeItem(`lilto.composer-draft.v1:${sessionId}`);
-      }
-    });
+    if (wasCurrent) {
+      this.messages = [];
+      this.loopState = createInitialLoopState();
+      this._activateSession(null);
+    }
+    // After deselecting: switchDraft saves the previous draft, so discarding must come last.
+    this._composer.discardDraft(sessionId);
   }
 
   private _onAuthStateUpdated(e: CustomEvent<AuthState>) {
@@ -1237,7 +1270,7 @@ export class LiltApp extends LitElement {
   private async _onSendMessage(e: CustomEvent<{ text: string; images?: PromptImage[] }>) {
     const text = e.detail.text;
     const images = e.detail.images ?? [];
-    if (this._creatingConversation) {
+    if (this._creatingConversation || (this._currentSessionId && this._sessionActions.isBusy(this._currentSessionId))) {
       this._composer.restoreDraft(text);
       this._composer.restoreImages(images);
       return;

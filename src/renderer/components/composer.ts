@@ -100,6 +100,16 @@ export class LiltComposer extends LitElement {
     this._textarea.value = localStorage.getItem(this._draftKey()) ?? "";
   }
 
+  /** Discards a removed conversation's saved drafts. Call after it is deselected, or switchDraft re-saves it. */
+  discardDraft(sessionId: string) {
+    this._imageDrafts.delete(sessionId);
+    if (sessionId === this._draftSessionId) {
+      this._images = [];
+      this._textarea.value = "";
+    }
+    localStorage.removeItem(this._draftKey(sessionId));
+  }
+
   getDraftText(): string {
     return this._textarea?.value ?? "";
   }

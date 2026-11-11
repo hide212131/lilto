@@ -39,6 +39,8 @@ contextBridge.exposeInMainWorld("lilto", {
     ipcRenderer.invoke("conversations:rename", { conversationId, title }),
   archiveConversation: async (conversationId: string) =>
     ipcRenderer.invoke("conversations:archive", { conversationId }),
+  deleteConversation: async (conversationId: string) =>
+    ipcRenderer.invoke("conversations:delete", { conversationId }),
   getAgentsFile: async () => ipcRenderer.invoke("app:getAgentsFile"),
   openAgentsFile: async () => ipcRenderer.invoke("app:openAgentsFile"),
   openExternalUrl: async (url: string) => ipcRenderer.invoke("app:openExternal", { url }),

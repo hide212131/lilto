@@ -191,6 +191,10 @@ declare global {
         | { ok: true }
         | { ok: false; error: { code: string; message: string } }
       >;
+      deleteConversation: (conversationId: string) => Promise<
+        | { ok: true }
+        | { ok: false; error: { code: string; message: string } }
+      >;
       getAgentsFile: () => Promise<{ ok: true; path: string; exists: boolean }>;
       openAgentsFile: () => Promise<
         | { ok: true; path: string; created: boolean }

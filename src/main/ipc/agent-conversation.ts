@@ -9,8 +9,10 @@ import { validatePrompt } from "../ipc-contract";
 import { createLogger } from "../logger";
 import type { NotificationService } from "../notifications";
 import { normalizePluginMentionsForPrompt } from "../plugin-mentions";
+import { isHeartbeatAssistantSessionId } from "../../shared/heartbeat-assistant";
 import type { PluginService } from "../plugin-service";
 import type { ProviderSettingsService } from "../provider-settings";
+import type { SchedulerClient } from "../scheduler";
 import { broadcastLoopEvent, openConversationWindow } from "./utils";
 
 async function normalizePromptPluginMentions(text: string, pluginService: PluginService): Promise<string> {
@@ -31,13 +33,15 @@ export function registerAgentConversationIpcHandlers({
   providerSettingsService,
   notificationService,
   pluginService,
-  conversationHistory
+  conversationHistory,
+  scheduler
 }: {
   agentRuntime: AgentRuntime;
   providerSettingsService: ProviderSettingsService;
   notificationService: NotificationService;
   pluginService: PluginService;
   conversationHistory: ConversationHistoryService;
+  scheduler: SchedulerClient;
 }): void {
   const logger = createLogger("ipc");
   const preparingRuns = new Map<string, { aborted: boolean; ready: Promise<void>; resolve: () => void }>();
@@ -248,16 +252,57 @@ export function registerAgentConversationIpcHandlers({
     }
   });
 
-  ipcMain.handle("conversations:archive", async (_event, payload: unknown) => {
-    if (!payload || typeof payload !== "object" || typeof (payload as { conversationId?: unknown }).conversationId !== "string") {
-      return { ok: false, error: { code: "INVALID_REQUEST", message: "conversationId は必須です" } };
+  const removing = new Set<string>();
+  const removed = new Set<string>();
+  const removeConversation = async (kind: "archive" | "delete", payload: unknown) => {
+    const fail = (code: string, message: string) => ({ ok: false as const, error: { code, message } });
+    const conversationId = payload && typeof payload === "object" ? (payload as { conversationId?: unknown }).conversationId : undefined;
+    if (typeof conversationId !== "string" || !conversationId.trim()) {
+      return fail("INVALID_REQUEST", "conversationId は必須です");
     }
+    if (isHeartbeatAssistantSessionId(conversationId)) {
+      return fail("CONVERSATION_UNSUPPORTED", "この会話はアーカイブ・削除できません");
+    }
+    if (removed.has(conversationId)) {
+      return fail("CONVERSATION_UNAVAILABLE", "この会話は既に除去されています");
+    }
+    if (removing.has(conversationId)) {
+      return fail("CONVERSATION_BUSY", "この会話は別の操作を処理中です");
+    }
+    if (preparingRuns.has(conversationId) || agentRuntime.isConversationRunning(conversationId)) {
+      return fail("CONVERSATION_BUSY", "この会話は実行中です。処理の完了または中断後に再試行してください。");
+    }
+    removing.add(conversationId);
     try {
-      await conversationHistory.archiveConversation((payload as { conversationId: string }).conversationId);
-      return { ok: true };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return { ok: false, error: { code: "CONVERSATION_ARCHIVE_FAILED", message } };
+      let schedules: Awaited<ReturnType<SchedulerClient["listSchedules"]>>;
+      try {
+        schedules = await scheduler.listSchedules();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return fail("CONVERSATION_SCHEDULE_CHECK_FAILED", `スケジュールを確認できませんでした: ${message}`);
+      }
+      if (schedules.some((schedule) => schedule.sessionId === conversationId)) {
+        return fail("CONVERSATION_HAS_SCHEDULES", "この会話に紐付くスケジュールがあります。設定の Schedules で削除してから再試行してください。");
+      }
+      // A run may have started while the schedule list was being fetched.
+      if (preparingRuns.has(conversationId) || agentRuntime.isConversationRunning(conversationId)) {
+        return fail("CONVERSATION_BUSY", "この会話は実行中です。処理の完了または中断後に再試行してください。");
+      }
+      try {
+        if (kind === "archive") await conversationHistory.archiveConversation(conversationId);
+        else await conversationHistory.deleteConversation(conversationId);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return fail(kind === "archive" ? "CONVERSATION_ARCHIVE_FAILED" : "CONVERSATION_DELETE_FAILED", message);
+      }
+      removed.add(conversationId);
+      agentRuntime.forgetConversation(conversationId);
+      return { ok: true as const };
+    } finally {
+      removing.delete(conversationId);
     }
-  });
+  };
+
+  ipcMain.handle("conversations:archive", (_event, payload: unknown) => removeConversation("archive", payload));
+  ipcMain.handle("conversations:delete", (_event, payload: unknown) => removeConversation("delete", payload));
 }

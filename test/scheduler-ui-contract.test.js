@@ -11,6 +11,8 @@ test("preload は scheduler notification listener を公開する", () => {
   assert.match(content, /ipcRenderer\.invoke\("conversations:create", \{ title \}\)/);
   assert.match(content, /archiveConversation: async \(conversationId: string\)/);
   assert.match(content, /ipcRenderer\.invoke\("conversations:archive", \{ conversationId \}\)/);
+  assert.match(content, /deleteConversation: async \(conversationId: string\)/);
+  assert.match(content, /ipcRenderer\.invoke\("conversations:delete", \{ conversationId \}\)/);
   assert.match(content, /onSchedulerNotification:\s*\(listener/);
   assert.match(content, /ipcRenderer\.on\(SCHEDULER_NOTIFICATION_CHANNEL, wrapped\)/);
   assert.match(content, /silent: options\?\.silent === true/);
@@ -87,6 +89,7 @@ test("main ipc は scheduler 一覧取得と削除ハンドラを公開する", 
   assert.match(content, /ipcMain\.handle\("conversations:read"/);
   assert.match(content, /ipcMain\.handle\("conversations:create"/);
   assert.match(content, /ipcMain\.handle\("conversations:archive"/);
+  assert.match(content, /ipcMain\.handle\("conversations:delete"/);
   assert.match(content, /ipcMain\.handle\("scheduler:list"/);
   assert.match(content, /isHeartbeatInternalScheduleId/);
   assert.match(content, /await scheduler\.listSchedules\(\)/);
