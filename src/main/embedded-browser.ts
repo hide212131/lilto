@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
 
 import {
@@ -6,12 +7,15 @@ import {
   BrowserError,
   parseBrowsableUrl,
   type BrowserPanelState,
+  type BrowserEvaluateResult,
   type BrowserPresentation,
   type BrowserResult,
   type BrowserSnapshot,
   type BrowserToolState,
   type BrowserViewportUpdate
 } from "../shared/browser";
+import { buildEvaluateProgram, buildTokenProgram, checkScriptSyntax, envelopeToValue, parseEnvelope } from "./browser-evaluate";
+import { FrameTracker, isHttpOrigin, type FrameLike } from "./browser-frames";
 import { computeViewBounds, ExpectedInputLedger, ViewportGate, type IntRect } from "./browser-bounds";
 import { BrowserOwnership, SerialQueue, type Epochs } from "./browser-ownership";
 import { BROWSER_PAGE_WORLD_ID, buildRuntimeCall, type BrowserRuntimeMethod } from "./browser-page-runtime";
@@ -23,7 +27,8 @@ export type WebContentsLike = EventEmitter & {
   getTitle(): string;
   isLoading(): boolean;
   isDestroyed(): boolean;
-  close(): void;
+  close(options?: { waitForBeforeUnload?: boolean }): void;
+  readonly mainFrame: FrameLike;
   reload(): void;
   focus(): void;
   navigationHistory: { canGoBack(): boolean; canGoForward(): boolean; goBack(): void; goForward(): void };
@@ -61,7 +66,8 @@ export interface BrowserHost {
 }
 
 export type BrowserRunHandle = { runId: string; conversationId: string; signal: AbortSignal };
-type Ctx = { check: () => void; signal: AbortSignal; effect: "none" | "possible" | "applied"; deadline: number };
+type Ctx = { check: () => void; signal: AbortSignal; deadlineSignal: AbortSignal; effect: "none" | "possible" | "applied"; deadline: number };
+export type BrowserControllerSettings = { enabled: boolean; autoOpenOnToolUse: boolean; evaluateEnabled?: boolean };
 type Waiter = { resolve: () => void; reject: (error: unknown) => void };
 
 const POLL_MS = 100;
@@ -89,6 +95,13 @@ export class EmbeddedBrowserController {
   private epochCounter = 0;
   private enabled: boolean;
   private autoOpen: boolean;
+  private evaluateEnabled: boolean;
+  private frames = new FrameTracker();
+  /** Per view: a script was delivered here, so the page may still hold timers/listeners it registered. */
+  private viewHadEvaluate = false;
+  /** An abandoned view whose destruction is not yet confirmed: no new view may be created meanwhile. */
+  private awaitingDestroy: WebContentsLike | null = null;
+  private evaluateKey = `__lilto_${randomBytes(9).toString("hex")}`;
   private presentation: BrowserPresentation = { open: false, occluded: false, resizing: false };
   private panelRequested = false;
   private lastBounds: IntRect | null = null;
@@ -100,9 +113,11 @@ export class EmbeddedBrowserController {
   private disposed = false;
   private policyRevision = 1;
 
-  constructor(private readonly host: BrowserHost, settings: { enabled: boolean; autoOpenOnToolUse: boolean }, private readonly now: () => number = Date.now) {
+  constructor(private readonly host: BrowserHost, settings: BrowserControllerSettings, private readonly now: () => number = Date.now) {
     this.enabled = settings.enabled;
     this.autoOpen = settings.autoOpenOnToolUse;
+    this.evaluateEnabled = settings.evaluateEnabled === true;
+    this.frames = new FrameTracker(now);
     this.ownership.setIssuing(settings.enabled);
     this.ownership.onChange = () => {
       this.latestSnapshot = null;
@@ -292,6 +307,11 @@ export class EmbeddedBrowserController {
       this.publish();
       return;
     }
+    if (this.isAwaitingDestroy()) {
+      this.error = "前のページを閉じています。少し待ってからもう一度お試しください";
+      this.publish();
+      return;
+    }
     this.error = null;
     this.userTookOver();
     this.panelRequested = true;
@@ -347,10 +367,18 @@ export class EmbeddedBrowserController {
 
   /* -------------------------------------------------------------- settings */
 
-  async applySettings(next: { enabled: boolean; autoOpenOnToolUse: boolean }): Promise<void> {
+  async applySettings(next: BrowserControllerSettings): Promise<void> {
     const wasEnabled = this.enabled;
+    const wasEvaluate = this.evaluateEnabled;
+    const nextEvaluate = next.evaluateEnabled ?? wasEvaluate;
     this.autoOpen = next.autoOpenOnToolUse;
-    if (wasEnabled !== next.enabled) this.policyRevision += 1;
+    this.evaluateEnabled = nextEvaluate;
+    if (wasEnabled !== next.enabled || wasEvaluate !== nextEvaluate) this.policyRevision += 1;
+    if (wasEvaluate && !nextEvaluate && wasEnabled && next.enabled && this.viewHadEvaluate) {
+      // Scripts ran in this page: they may have left timers/listeners. Closing is the only reliable cleanup.
+      this.ownership.revokeAllRuns();
+      this.abandonView("AI のページ内 JavaScript を無効にしたため、実行済みのページを閉じました");
+    }
     if (wasEnabled && !next.enabled) {
       this.ownership.setIssuing(false);
       this.ownership.revokeAllRuns();
@@ -361,13 +389,18 @@ export class EmbeddedBrowserController {
       await this.host.clearSessionData();
     } else if (!wasEnabled && next.enabled) {
       this.enabled = true;
-      this.ownership.setIssuing(true);
     }
+    // prepare() stopped issuing for any permission change; whatever the outcome, issuing follows `enabled`.
+    this.ownership.setIssuing(this.enabled);
     this.publish();
   }
 
   isEnabled(): boolean {
     return this.enabled;
+  }
+
+  isEvaluateEnabled(): boolean {
+    return this.enabled && this.evaluateEnabled;
   }
 
   getPolicyRevision(): number {
@@ -391,10 +424,13 @@ export class EmbeddedBrowserController {
     if (this.view && !this.view.webContents.isDestroyed() && (forConversationId === null || this.viewConversationId === forConversationId)) {
       return this.view;
     }
+    if (this.isAwaitingDestroy()) throw new BrowserError("BROWSER_UNAVAILABLE", "The previous page is still being closed; try again shortly", { retryable: true });
     if (this.view) this.closeView();
     const view = this.host.createView();
     this.view = view;
     this.viewConversationId = forConversationId;
+    this.viewHadEvaluate = false;
+    this.frames = new FrameTracker(this.now);
     this.ownership.bumpView();
     this.latestSnapshot = null;
     this.wireView(view);
@@ -406,20 +442,57 @@ export class EmbeddedBrowserController {
     return view;
   }
 
-  private closeView(): void {
+  private closeView(): WebContentsLike | null {
     const view = this.view;
-    if (!view) return;
+    if (!view) return null;
     this.view = null;
     this.viewConversationId = null;
     this.visibleNow = false;
     this.ownership.bumpView();
     this.latestSnapshot = null;
+    this.frames.clear();
+    this.viewHadEvaluate = false;
     try {
       this.host.detachView(view);
     } catch {
       /* window may already be gone */
     }
-    if (!view.webContents.isDestroyed()) view.webContents.close();
+    // Never wait for a beforeunload handler: a hung or hostile page must not keep the view alive.
+    if (!view.webContents.isDestroyed()) view.webContents.close({ waitForBeforeUnload: false });
+    return view.webContents;
+  }
+
+  private isAwaitingDestroy(): boolean {
+    const pending = this.awaitingDestroy;
+    if (pending && pending.isDestroyed()) this.awaitingDestroy = null;
+    return this.awaitingDestroy !== null;
+  }
+
+  /**
+   * A delivered script did not finish (timeout/cancel/settings) or may have left background work:
+   * invalidate the lease and every id, and close the view. Creation of a new view is refused until
+   * the old one is confirmed destroyed. No automatic reload or re-run.
+   */
+  private abandonView(message: string): void {
+    this.ownership.expireLease({ interrupted: false });
+    const wc = this.closeView();
+    this.latestSnapshot = null;
+    this.error = message;
+    if (wc && !wc.isDestroyed()) {
+      this.awaitingDestroy = wc;
+      const clear = () => {
+        if (this.awaitingDestroy === wc) this.awaitingDestroy = null;
+      };
+      wc.once("destroyed", clear);
+      const poll = setInterval(() => {
+        if (wc.isDestroyed()) {
+          clearInterval(poll);
+          clear();
+        }
+      }, 100);
+      poll.unref?.();
+    }
+    this.publish();
   }
 
   private wireView(view: ViewLike): void {
@@ -438,6 +511,19 @@ export class EmbeddedBrowserController {
       // Popups never get a window; http(s) targets load in this same surface.
       if (parseBrowsableUrl(url)) void this.loadInView(url).catch(() => {});
       return { action: "deny" };
+    });
+    const frames = this.frames;
+    const root = () => (wc.isDestroyed() ? null : wc.mainFrame);
+    // Frame generations (design 3.3): navigation start, commit and in-page navigation all invalidate frame ids.
+    wc.on("did-start-navigation", (...args: unknown[]) => {
+      const details = args[0] as { frame?: { frameTreeNodeId?: number } | null; isSameDocument?: boolean } | undefined;
+      frames.onNavigation(root(), details?.frame);
+    });
+    wc.on("did-frame-navigate", (...args: unknown[]) => {
+      frames.onNavigation(root(), null, { processId: Number(args[5]), routingId: Number(args[6]) });
+    });
+    wc.on("did-navigate-in-page", (...args: unknown[]) => {
+      frames.onNavigation(root(), null, { processId: Number(args[3]), routingId: Number(args[4]) });
     });
     const documentChanged = () => {
       this.ownership.bumpDocument();
@@ -593,23 +679,32 @@ export class EmbeddedBrowserController {
   private async run<T>(
     run: BrowserRunHandle,
     leaseId: string,
-    options: { timeoutMs?: number; needsFocus?: boolean; snapshotId?: string },
+    options: { timeoutMs?: number; needsFocus?: boolean; snapshotId?: string; sharedDeadline?: boolean; documentEpoch?: number },
     body: (ctx: Ctx) => Promise<T>
   ): Promise<BrowserResult<T>> {
     const timeoutMs = options.timeoutMs ?? BROWSER_LIMITS.timeoutDefaultMs;
+    const startedAt = this.now();
     let effect: Ctx["effect"] = "none";
     try {
       if (!this.enabled) throw new BrowserError("BROWSER_DISABLED", "The embedded browser is disabled in settings");
+      if (options.sharedDeadline && !this.evaluateEnabled) throw new BrowserError("EVALUATE_DISABLED", "Page JavaScript execution is disabled in settings");
       this.ownership.assertLease(run.runId, leaseId);
       await this.ensurePresentable(run.signal, timeoutMs);
+      // One deadline for the whole request (panel wait + queue + run), not a fresh budget per stage.
+      const remainingMs = options.sharedDeadline ? Math.max(1, timeoutMs - (this.now() - startedAt)) : timeoutMs;
+      if (options.documentEpoch !== undefined && options.documentEpoch !== this.ownership.epochs.documentEpoch) {
+        throw new BrowserError("STALE_DOCUMENT", "The page changed since documentEpoch was observed; read the current state first");
+      }
       const before: Epochs = this.ownership.snapshotEpochs();
       let expired = false;
+      const deadlineAbort = new AbortController();
       const signal = AbortSignal.any([run.signal, this.ownership.leaseSignal(run.runId, leaseId)]);
       const ctx: Ctx = {
         signal,
+        deadlineSignal: deadlineAbort.signal,
         get effect() { return effect; },
         set effect(value) { effect = value; },
-        deadline: this.now() + timeoutMs,
+        deadline: this.now() + remainingMs,
         check: () => {
           if (signal.aborted || !this.ownership.isRunActive(run.runId)) throw new BrowserError("CANCELLED", "The operation was cancelled", { effect });
           if (expired) throw new BrowserError("TIMEOUT", "The operation timed out", { retryable: false, effect });
@@ -628,8 +723,9 @@ export class EmbeddedBrowserController {
       const timeout = new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => {
           expired = true;
+          deadlineAbort.abort();
           reject(new BrowserError("TIMEOUT", "The operation timed out", { effect }));
-        }, timeoutMs);
+        }, remainingMs);
       });
       try {
         const result = await Promise.race([this.queue.enqueue(() => body(ctx), ctx.check), timeout]);
@@ -688,6 +784,7 @@ export class EmbeddedBrowserController {
         owner: this.ownership.ownerView(),
         panelOpen: this.panelRequested,
         panelVisible: this.visibleNow,
+        evaluateEnabled: this.isEvaluateEnabled(),
         canGoBack: wc?.navigationHistory.canGoBack() ?? false,
         canGoForward: wc?.navigationHistory.canGoForward() ?? false,
         blockedReason: blocked && blocked.code !== "PANEL_OCCLUDED" ? blocked.code : this.presentation.occluded ? "PANEL_OCCLUDED" : null
@@ -831,7 +928,14 @@ export class EmbeddedBrowserController {
       ctx.check();
       this.unwrap(raw);
       this.latestSnapshot = { id: snapshotId, ownershipEpoch: epochs.ownershipEpoch, documentEpoch: epochs.documentEpoch, at: this.now() };
-      return raw.snapshot;
+      const snapshot: BrowserSnapshot = raw.snapshot;
+      const wc = this.liveContents();
+      if (this.isEvaluateEnabled() && wc && this.ownership.unchanged(epochs, ["viewEpoch", "ownershipEpoch", "documentEpoch"])) {
+        const listed = this.frames.list(wc.mainFrame, { viewEpoch: epochs.viewEpoch, ownershipEpoch: epochs.ownershipEpoch, documentEpoch: epochs.documentEpoch });
+        snapshot.frames = listed.frames;
+        snapshot.framesTruncated = listed.truncated;
+      }
+      return snapshot;
     });
   }
 
@@ -981,6 +1085,153 @@ export class EmbeddedBrowserController {
         });
       }
     });
+  }
+
+  /* ------------------------------------------------------------- evaluate */
+
+  /**
+   * Settles with `promise`, or with the controller's verdict as soon as the request is cancelled,
+   * loses a gate or runs out of time. The underlying executeJavaScript cannot be aborted, so the
+   * caller must treat "verdict first" as "the page may still be running" and abandon the view.
+   */
+  private raceVerdict<T>(ctx: Ctx, gate: () => void, promise: Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      let done = false;
+      const finish = (action: () => void) => {
+        if (done) return;
+        done = true;
+        clearInterval(poll);
+        ctx.signal.removeEventListener("abort", verdict);
+        ctx.deadlineSignal.removeEventListener("abort", verdict);
+        action();
+      };
+      const verdict = () => {
+        try {
+          gate();
+          finish(() => reject(new BrowserError("CANCELLED", "The operation was cancelled", { effect: ctx.effect })));
+        } catch (error) {
+          finish(() => reject(error));
+        }
+      };
+      const poll = setInterval(() => {
+        try {
+          gate();
+        } catch (error) {
+          finish(() => reject(error));
+        }
+      }, 50);
+      ctx.signal.addEventListener("abort", verdict, { once: true });
+      ctx.deadlineSignal.addEventListener("abort", verdict, { once: true });
+      if (ctx.signal.aborted || ctx.deadlineSignal.aborted) return verdict();
+      promise.then(
+        (value) => finish(() => resolve(value)),
+        (error: unknown) => finish(() => reject(error))
+      );
+    });
+  }
+
+  evaluate(run: BrowserRunHandle, args: { leaseId: string; documentEpoch: number; script: string; frameId?: string; timeoutMs?: number }): Promise<BrowserResult<BrowserEvaluateResult>> {
+    return this.run(run, args.leaseId, { timeoutMs: args.timeoutMs, needsFocus: true, sharedDeadline: true, documentEpoch: args.documentEpoch }, async (ctx) => {
+      const gate = () => {
+        if (ctx.signal.aborted) {
+          // The most specific reason wins (e.g. the user took over), with the effect known so far.
+          try {
+            this.ownership.assertLease(run.runId, args.leaseId);
+          } catch (error) {
+            if (error instanceof BrowserError && error.code === "USER_INTERRUPTED") throw new BrowserError(error.code, error.message, { effect: ctx.effect });
+          }
+        }
+        ctx.check();
+        if (!this.evaluateEnabled) throw new BrowserError("EVALUATE_DISABLED", "Page JavaScript execution is disabled in settings", { effect: ctx.effect });
+      };
+      gate();
+      const epochs = this.ownership.epochs;
+      if (epochs.documentEpoch !== args.documentEpoch) throw new BrowserError("STALE_DOCUMENT", "The page changed since documentEpoch was observed; read the current state first");
+      if (!this.host.isWindowFocused()) throw new BrowserError("WINDOW_NOT_FOCUSED", "Lilto is not the focused window; ask the user to bring it to the front", { retryable: true });
+      checkScriptSyntax(args.script);
+      const wc = this.liveContents();
+      if (!wc) throw new BrowserError("PAGE_CRASHED", "The page is not available");
+      const context = { viewEpoch: epochs.viewEpoch, ownershipEpoch: epochs.ownershipEpoch, documentEpoch: epochs.documentEpoch };
+      const tracker = this.frames;
+      const root = wc.mainFrame;
+
+      let frame: FrameLike;
+      let generation: number;
+      let frameId: string;
+      if (args.frameId !== undefined) {
+        ({ frame, generation } = tracker.resolve(args.frameId, root, context));
+        frameId = args.frameId;
+      } else {
+        frame = root;
+        generation = tracker.generation(root.frameTreeNodeId);
+        if (!isHttpOrigin(root.origin)) throw new BrowserError("UNSUPPORTED_TARGET", "Only http(s) pages can run scripts");
+        frameId = tracker.issue(root, context);
+      }
+      /** The target is still exactly the document we validated (view, ownership, top document, frame generation). */
+      const sameTarget = () => {
+        const now = this.ownership.epochs;
+        if (now.viewEpoch !== context.viewEpoch || now.ownershipEpoch !== context.ownershipEpoch || now.documentEpoch !== context.documentEpoch) return false;
+        if (tracker.generation(frame.frameTreeNodeId) !== generation) return false;
+        try {
+          return !frame.detached && frame.processId !== undefined && isHttpOrigin(frame.origin);
+        } catch {
+          return false;
+        }
+      };
+      const staleError = (effect: Ctx["effect"]) =>
+        new BrowserError(args.frameId !== undefined ? "STALE_FRAME" : "STALE_DOCUMENT", "The page or frame changed while the script was being prepared; take a new browser_snapshot", { effect });
+
+      // Step 1 (Main-authored code only, effect none): put a random token into the CURRENT document.
+      const token = await this.raceVerdict(ctx, gate, this.executeInFrame(frame, buildTokenProgram(this.evaluateKey, randomBytes(12).toString("hex")), staleError("none")));
+      gate();
+      if (typeof token !== "string" || token.length === 0) throw new BrowserError("INTERNAL_ERROR", "The page could not be prepared for script execution");
+      // A navigation that started after we validated (and before this reply) bumped the generation, so
+      // the token cannot belong to a newer document: any exec that landed there would imply a prior start event.
+      if (!sameTarget()) throw staleError("none");
+
+      // Step 2: deliver once. The token guard inside the program refuses a document that replaced the validated one.
+      const program = buildEvaluateProgram({ script: args.script, key: this.evaluateKey, token });
+      let settled = false;
+      ctx.effect = "possible";
+      this.viewHadEvaluate = true;
+      this.latestSnapshot = null;
+      const delivery = this.executeInFrame(frame, program, staleError("possible"));
+      delivery.then(() => (settled = true), () => (settled = true));
+      try {
+        const raw = await this.raceVerdict(ctx, gate, delivery);
+        const envelope = parseEnvelope(raw);
+        if (envelope.kind === "guard") {
+          ctx.effect = "none"; // the guard proves the script never started
+          throw staleError("none");
+        }
+        gate();
+        if (!sameTarget()) throw staleError("possible");
+        const value = envelopeToValue(envelope);
+        const origin = (() => {
+          try {
+            return { url: frame.url, origin: frame.origin };
+          } catch {
+            return { url: "", origin: "" };
+          }
+        })();
+        return { frameId, frameUrl: origin.url.slice(0, BROWSER_LIMITS.frameUrlMaxChars), frameOrigin: origin.origin.slice(0, BROWSER_LIMITS.frameUrlMaxChars), value };
+      } catch (error) {
+        // Verdict before the page answered (timeout / cancel / gate lost): the script may still be running.
+        if (!settled) this.abandonView("ページ内スクリプトが完了しなかったため、ページを閉じました");
+        throw error;
+      }
+    });
+  }
+
+  /** Page-side failures (frame disposed/navigated mid-flight) become the given error; details are not forwarded. */
+  private executeInFrame(frame: FrameLike, code: string, onFailure: BrowserError): Promise<unknown> {
+    try {
+      return frame.executeJavaScript(code, false).catch(() => {
+        throw onFailure;
+      });
+    } catch {
+      return Promise.reject(onFailure);
+    }
   }
 
   private async conditionMet(condition: Parameters<EmbeddedBrowserController["wait"]>[1]["condition"]): Promise<boolean> {

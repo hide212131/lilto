@@ -100,7 +100,8 @@ export class LiltApp extends LitElement {
     },
     browserSettings: {
       enabled: true,
-      autoOpenOnToolUse: true
+      autoOpenOnToolUse: true,
+      evaluateEnabled: false
     },
     updatedAt: Date.now()
   };

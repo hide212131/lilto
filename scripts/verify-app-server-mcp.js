@@ -26,7 +26,9 @@ const { resolveBrowserMcpServerPath } = dist("main/app-paths.js");
 const results = [];
 const check = (name, ok, detail) => { results.push({ name, ok: Boolean(ok), ...(ok ? {} : { detail: String(detail ?? "") }) }); if (!ok) console.error(`FAIL ${name} ${detail ?? ""}`); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const BIN = path.join(root, "node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex");
+const TARGETS = { "darwin-arm64": ["codex-darwin-arm64", "aarch64-apple-darwin"], "darwin-x64": ["codex-darwin-x64", "x86_64-apple-darwin"], "linux-x64": ["codex-linux-x64", "x86_64-unknown-linux-musl"], "linux-arm64": ["codex-linux-arm64", "aarch64-unknown-linux-musl"] };
+const [PACKAGE_DIR, TRIPLE] = TARGETS[`${process.platform}-${process.arch}`] ?? [];
+const BIN = path.join(root, "node_modules/@openai", PACKAGE_DIR ?? "unsupported", "vendor", TRIPLE ?? "unsupported", "bin", "codex");
 
 async function main() {
   const page = "<!doctype html><meta charset=utf-8><title>smoke</title><h1>スモーク</h1><button id=b onclick=\"document.getElementById('o').textContent='clicked'\">押す</button><p id=o></p>";
@@ -37,6 +39,8 @@ async function main() {
   const window = new BrowserWindow({ width: 1100, height: 800, show: true });
   await window.loadURL("data:text/html,<body>host</body>");
   window.focus();
+  // Input and evaluate are gated on window focus; on a desktop another app can take it at any moment.
+  const focusKeeper = setInterval(() => { if (!window.isDestroyed() && !window.isFocused()) { app.focus({ steal: true }); window.focus(); } }, 100);
   const controller = new EmbeddedBrowserController(createElectronBrowserHost(() => window), { enabled: true, autoOpenOnToolUse: true });
   controller.beginRendererEpoch();
   let seq = 0;
@@ -116,11 +120,36 @@ async function main() {
   check("revoked run token stops working immediately", afterRevoke.ok === false, JSON.stringify(afterRevoke));
   check("lease freed when the run ended", controller.ownership.getOwner().kind === "none");
 
+  // --- browser_evaluate: OFF => 16 tools + EVALUATE_DISABLED; ON => 17 tools and a real evaluate through codex
+  const offAcq = sc(await call(threadB, "browser_acquire", { url: base }));
+  const offEval = sc(await call(threadB, "browser_evaluate", { leaseId: offAcq.result?.leaseId ?? "x", documentEpoch: offAcq.state?.documentEpoch ?? 0, script: "return 1" }));
+  check("evaluate OFF: a direct browser_evaluate call is refused by Main (EVALUATE_DISABLED, effect none)", offEval.ok === false && offEval.error.code === "EVALUATE_DISABLED" && offEval.error.effect === "none", JSON.stringify(offEval));
+  leaseB.end();
+  await controller.applySettings({ enabled: true, autoOpenOnToolUse: true, evaluateEnabled: true });
+  const leaseC = support.begin({ conversationId: "C", requestId: "rc" });
+  const threadC = await startThread(leaseC);
+  const statusC = await client.request("mcpServerStatus/list", { threadId: threadC, serverName: "lilto_browser" }, 30000);
+  const toolsC = Object.keys((statusC.data || []).find((x) => x.name === "lilto_browser")?.tools || {});
+  check("evaluate ON: bundled App Server discovers 17 tools including browser_evaluate", toolsC.length === 17 && toolsC.includes("browser_evaluate"), JSON.stringify(toolsC));
+  const instructions = leaseC.developerInstructions ?? "";
+  check("evaluate ON: developer instructions mention browser_evaluate; OFF guidance did not", /browser_evaluate/.test(instructions) && !/browser_evaluate/.test(leaseA.developerInstructions ?? ""));
+  window.focus();
+  const cAcq = sc(await call(threadC, "browser_acquire", { url: base }));
+  check("evaluate ON: acquire", cAcq.ok === true, JSON.stringify(cAcq));
+  const cEval = sc(await call(threadC, "browser_evaluate", { leaseId: cAcq.result?.leaseId, documentEpoch: cAcq.state?.documentEpoch, script: "document.getElementById('b').click(); return { title: document.title, clicked: document.getElementById('o').textContent };" }));
+  check("evaluate ON: browser_evaluate through App Server returns a JSON value and acts on the page", cEval.ok === true && cEval.result.value.value.title === "smoke" && cEval.result.value.value.clicked === "clicked", JSON.stringify(cEval));
+  const cBad = await call(threadC, "browser_evaluate", { leaseId: cAcq.result?.leaseId, documentEpoch: cAcq.state?.documentEpoch, script: "return 1", extra: true }).then(() => null, (error) => error);
+  check("evaluate ON: extra properties are rejected as invalid arguments (never reach Main)", cBad && /invalid arguments/.test(String(cBad.message)), String(cBad?.message));
+  leaseC.end();
+
   // no external chromium launched by codex/mcp
   let ps = "";
   try { ps = execFileSync("ps", ["-eo", "pid,ppid,args"], { encoding: "utf8" }); } catch { /* ignore */ }
-  const own = String(process.pid);
-  const chromium = ps.split("\n").filter((l) => /(chrom(e|ium)|google-chrome|playwright)/i.test(l) && !l.includes("electron") && !l.includes(own));
+  // Only descendants of this process count: a desktop machine runs the user's own browsers.
+  const rows = ps.split("\n").map((l) => l.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/)).filter(Boolean).map((m) => ({ pid: Number(m[1]), ppid: Number(m[2]), args: m[3] }));
+  const descendants = new Set([process.pid]);
+  for (let grew = true; grew;) { grew = false; for (const r of rows) if (descendants.has(r.ppid) && !descendants.has(r.pid)) { descendants.add(r.pid); grew = true; } }
+  const chromium = rows.filter((r) => descendants.has(r.pid) && /(chrom(e|ium)|google-chrome|playwright)/i.test(r.args) && !/electron/i.test(r.args)).map((r) => `${r.pid} ${r.args}`);
   check("no external Chromium/Playwright process was started", chromium.length === 0, chromium.join("\n"));
 
   // skills: agent-browser hidden when ON, restored when OFF
@@ -138,6 +167,7 @@ async function main() {
   check("OFF: agent-browser is restored", off["agent-browser"] === true && off["skill-creator"] === true, JSON.stringify(off));
 
   leaseB.end();
+  clearInterval(focusKeeper);
   client.close();
   bridge.stop();
   controller.dispose();

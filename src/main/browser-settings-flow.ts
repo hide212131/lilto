@@ -16,12 +16,15 @@ export function createBrowserSettingsFlow(deps: {
   return {
     /** Steps 2-6. Throws when the skill policy cannot be synced; the feature then stays stopped. */
     async prepare(next: BrowserSettings, current: BrowserSettings): Promise<void> {
-      if (next.enabled === current.enabled) return;
+      const enabledChanged = next.enabled !== current.enabled;
+      // Turning page-JS on/off changes what a run may do just like ON/OFF does: no run may keep the old tool set.
+      if (!enabledChanged && next.evaluateEnabled === current.evaluateEnabled) return;
       deps.controller.ownership.setIssuing(false);
       deps.controller.ownership.revokeAllRuns();
       deps.bridge.stop();
       await deps.stopAllRuns();
-      deps.syncSkillPolicy(next.enabled);
+      // The agent-browser skill policy only depends on the browser being ON; evaluate-only changes leave it alone.
+      if (enabledChanged) deps.syncSkillPolicy(next.enabled);
     },
     /** Step 7 (after the settings file was written). */
     async commit(next: BrowserSettings): Promise<void> {
@@ -37,7 +40,7 @@ export function createBrowserSettingsFlow(deps: {
     async failSafe(): Promise<void> {
       deps.logger.error("browser_settings_apply_failed");
       deps.bridge.stop();
-      await deps.controller.applySettings({ enabled: false, autoOpenOnToolUse: false });
+      await deps.controller.applySettings({ enabled: false, autoOpenOnToolUse: false, evaluateEnabled: false });
     }
   };
 }

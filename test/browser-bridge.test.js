@@ -7,12 +7,17 @@ const { FakeHost, presentPanel } = require("./helpers/browser-fakes.js");
 
 const silent = { info() {}, error() {} };
 
+// Stop every bridge even when an assertion throws, otherwise the listening server keeps the process alive.
+const bridges = [];
+test.after(() => { for (const bridge of bridges) bridge.stop(); });
+
 async function setup() {
   const host = new FakeHost();
   const controller = new EmbeddedBrowserController(host, { enabled: true, autoOpenOnToolUse: true });
   controller.beginRendererEpoch();
   controller.onState((s) => { if (s.panelRequested && !s.panelVisible) setImmediate(() => presentPanel(controller)); });
   const bridge = new BrowserBridgeServer(controller, silent);
+  bridges.push(bridge);
   await bridge.start();
   const run = controller.issueRun({ conversationId: "A", requestId: "r", policyRevision: 1 });
   const env = bridge.getRunEnv(run);
@@ -35,9 +40,11 @@ function raw({ url, headers = {}, body = "", method = "POST", path = "/command" 
 const auth = (token, extra = {}) => ({ authorization: `Bearer ${token}`, "content-type": "application/json", ...extra });
 const cmd = (tool, args = {}, commandId = `c-${Math.random()}`) => JSON.stringify({ commandId, tool, arguments: args });
 
-test("env for the MCP child contains url, token and ELECTRON_RUN_AS_NODE only", async () => {
+test("env for the MCP child contains url, token, the evaluate visibility flag and ELECTRON_RUN_AS_NODE only", async () => {
   const { env, bridge, run } = await setup();
-  assert.deepEqual(Object.keys(env).sort(), ["ELECTRON_RUN_AS_NODE", "LILTO_BROWSER_BRIDGE_TOKEN", "LILTO_BROWSER_BRIDGE_URL"]);
+  assert.deepEqual(Object.keys(env).sort(), ["ELECTRON_RUN_AS_NODE", "LILTO_BROWSER_BRIDGE_TOKEN", "LILTO_BROWSER_BRIDGE_URL", "LILTO_BROWSER_EVALUATE_ENABLED"]);
+  assert.equal(env.LILTO_BROWSER_EVALUATE_ENABLED, "0");
+  assert.equal(bridge.getRunEnv({ token: "t" }, { evaluateEnabled: true }).LILTO_BROWSER_EVALUATE_ENABLED, "1");
   assert.match(env.LILTO_BROWSER_BRIDGE_URL, /^http:\/\/127\.0\.0\.1:\d+$/);
   assert.equal(env.LILTO_BROWSER_BRIDGE_TOKEN, run.token);
   bridge.stop();

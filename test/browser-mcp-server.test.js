@@ -9,12 +9,17 @@ const { FakeHost, presentPanel } = require("./helpers/browser-fakes.js");
 const SERVER = path.join(__dirname, "..", "dist", "main", "browser-mcp-server.js");
 const silent = { info() {}, error() {} };
 
+// Release every server/child even if an assertion throws mid-test; leaked handles keep the runner (and `node --test`) alive.
+const cleanups = [];
+test.after(() => { for (const cleanup of cleanups.splice(0)) cleanup(); });
+
 async function fixture() {
   const host = new FakeHost();
   const controller = new EmbeddedBrowserController(host, { enabled: true, autoOpenOnToolUse: true });
   controller.beginRendererEpoch();
   controller.onState((s) => { if (s.panelRequested && !s.panelVisible) setImmediate(() => presentPanel(controller)); });
   const bridge = new BrowserBridgeServer(controller, silent);
+  cleanups.push(() => bridge.stop());
   await bridge.start();
   const run = controller.issueRun({ conversationId: "A", requestId: "r", policyRevision: 1 });
   return { host, controller, bridge, run, env: bridge.getRunEnv(run) };
@@ -22,6 +27,7 @@ async function fixture() {
 
 function startChild(env) {
   const child = spawn(process.execPath, [SERVER], { env: { PATH: process.env.PATH, ...env }, stdio: ["pipe", "pipe", "pipe"] });
+  cleanups.push(() => child.kill("SIGKILL"));
   const lines = [];
   const waiters = [];
   let stderr = "";

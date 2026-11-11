@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
-import { BROWSER_MCP_PROTOCOL_VERSION, BROWSER_MCP_SERVER_NAME } from "../shared/browser";
-import { isBrowserToolName, listBrowserTools, validateToolArguments } from "./browser-tool-contract";
+import { BROWSER_LIMITS, BROWSER_MCP_PROTOCOL_VERSION, BROWSER_MCP_SERVER_NAME } from "../shared/browser";
+import { EVALUATE_TOOL_NAME, isBrowserToolName, listBrowserTools, validateToolArguments } from "./browser-tool-contract";
 
 /**
  * stdio MCP server for lilto_browser. stdout carries newline-delimited JSON-RPC only;
@@ -26,6 +26,12 @@ function bridgeConfig(): { url: string; token: string } | null {
   return { url, token };
 }
 
+/**
+ * Which tools to advertise is decided by the settings snapshot Main put in the env at run start.
+ * It only controls visibility: Main re-checks the live setting on every call.
+ */
+const EVALUATE_ADVERTISED = process.env.LILTO_BROWSER_EVALUATE_ENABLED === "1";
+
 function toolResult(payload: Record<string, any>): Record<string, unknown> {
   let image: { data: string; mimeType: string } | null = null;
   let structured = payload;
@@ -44,9 +50,15 @@ function localError(code: string, message: string, retryable = false): Record<st
   return toolResult({ ok: false, error: { code, message, retryable, effect: "none" } });
 }
 
-async function callTool(id: string | number | null, name: string, args: unknown): Promise<void> {
+/** After the request left this process an evaluate may already have run: never claim effect=none. */
+function unknownOutcome(message: string): Record<string, unknown> {
+  return toolResult({ ok: false, error: { code: "BROWSER_UNAVAILABLE", message, retryable: false, effect: "possible" } });
+}
+
+async function callTool(id: string | number | null, name: string, args: unknown, body: string): Promise<void> {
   const config = bridgeConfig();
   if (!config) return ok(id, localError("BROWSER_UNAVAILABLE", "Browser bridge configuration is missing"));
+  const sideEffecting = name === EVALUATE_TOOL_NAME;
   const controller = new AbortController();
   if (id !== null) inflight.set(id, controller);
   const timer = setTimeout(() => controller.abort(), BACKSTOP_MS);
@@ -54,17 +66,22 @@ async function callTool(id: string | number | null, name: string, args: unknown)
     const response = await fetch(`${config.url}/command`, {
       method: "POST",
       headers: { authorization: `Bearer ${config.token}`, "content-type": "application/json" },
-      body: JSON.stringify({ commandId: randomUUID(), tool: name, arguments: args ?? {} }),
+      body,
       signal: controller.signal
     });
     const payload = (await response.json()) as Record<string, any>;
-    if (!payload || typeof payload.ok !== "boolean") return ok(id, localError("INTERNAL_ERROR", "Invalid bridge response"));
+    if (!payload || typeof payload.ok !== "boolean") {
+      return ok(id, sideEffecting ? unknownOutcome("Invalid bridge response; the script may have run. Do not retry automatically; check the page state") : localError("INTERNAL_ERROR", "Invalid bridge response"));
+    }
     ok(id, toolResult(payload));
   } catch (error) {
     // Cancelled requests get no response (MCP cancellation semantics).
     if (controller.signal.aborted && id !== null && !inflight.has(id)) return;
     log(`bridge call failed: ${error instanceof Error ? error.name : "error"}`);
-    ok(id, localError("BROWSER_UNAVAILABLE", "The Lilto browser bridge is unreachable", true));
+    // Conservative for evaluate: the connection may have dropped after Main started the script. No auto-retry.
+    ok(id, sideEffecting
+      ? unknownOutcome("The connection to Lilto was lost; the script may have run. Do not retry automatically; check the page state")
+      : localError("BROWSER_UNAVAILABLE", "The Lilto browser bridge is unreachable", true));
   } finally {
     clearTimeout(timer);
     if (id !== null) inflight.delete(id);
@@ -95,13 +112,18 @@ async function handle(message: JsonRpcRequest): Promise<void> {
     case "ping":
       return ok(id, {});
     case "tools/list":
-      return ok(id, { tools: listBrowserTools() });
+      return ok(id, { tools: listBrowserTools({ evaluateEnabled: EVALUATE_ADVERTISED }) });
     case "tools/call": {
       const name = message.params?.name;
       if (!isBrowserToolName(name)) return rpcError(id, -32602, `unknown tool: ${String(name)}`);
       const validated = validateToolArguments(name, message.params?.arguments);
       if (!validated.ok) return rpcError(id, -32602, `invalid arguments: ${validated.message}`);
-      return callTool(id, name, validated.args);
+      // Known tool name even when not advertised (stale tool list): forward so Main refuses with its live setting.
+      const body = JSON.stringify({ commandId: randomUUID(), tool: name, arguments: validated.args ?? {} });
+      if (name === EVALUATE_TOOL_NAME && Buffer.byteLength(body, "utf8") > BROWSER_LIMITS.bridgeRequestMaxBytes) {
+        return rpcError(id, -32602, "invalid arguments: the serialized request is larger than 64 KiB");
+      }
+      return callTool(id, name, validated.args, body);
     }
     default:
       if (hasId) rpcError(id, -32601, `method not found: ${String(message.method)}`);
@@ -135,5 +157,6 @@ process.stdin.on("data", (chunk: string) => {
     });
   }
 });
-process.stdin.on("end", () => process.exit(0));
+// exit() would drop replies still queued on a pipe; the empty write's callback runs after they are flushed.
+process.stdin.on("end", () => process.stdout.write("", () => process.exit(0)));
 process.stdin.resume();

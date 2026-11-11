@@ -402,7 +402,7 @@ test("browserSettings: 旧設定は既定値で補完され、コピーが返る
   fs.writeFileSync(storagePath, JSON.stringify({ activeProvider: "oauth", customProvider: {} }));
   const service = new ProviderSettingsService({ storagePath, logger: { info() {}, error() {} } });
   const state = service.getState();
-  assert.deepEqual(state.browserSettings, { enabled: true, autoOpenOnToolUse: true });
+  assert.deepEqual(state.browserSettings, { enabled: true, autoOpenOnToolUse: true, evaluateEnabled: false });
   state.browserSettings.enabled = false;
   assert.equal(service.getState().browserSettings.enabled, true);
 });
@@ -414,23 +414,28 @@ test("browserSettings: ON/OFF 保存・再読込・省略保存で現在値を�
   const service = new ProviderSettingsService(options);
   const base = { activeProvider: "oauth", customProvider: { name: "", baseUrl: "", apiKey: "", modelId: "" } };
 
-  const off = service.save({ ...base, browserSettings: { enabled: false, autoOpenOnToolUse: false } });
+  const off = service.save({ ...base, browserSettings: { enabled: false, autoOpenOnToolUse: false, evaluateEnabled: true } });
   assert.equal(off.ok, true);
-  assert.deepEqual(new ProviderSettingsService(options).getState().browserSettings, { enabled: false, autoOpenOnToolUse: false });
+  assert.deepEqual(new ProviderSettingsService(options).getState().browserSettings, { enabled: false, autoOpenOnToolUse: false, evaluateEnabled: true });
 
   // browserSettings を省略した保存は現在値を維持する（既定値に戻さない）
   const omitted = service.save(base);
   assert.equal(omitted.ok, true);
-  assert.deepEqual(omitted.state.browserSettings, { enabled: false, autoOpenOnToolUse: false });
+  assert.deepEqual(omitted.state.browserSettings, { enabled: false, autoOpenOnToolUse: false, evaluateEnabled: true });
 
-  for (const bad of [null, [], "x", {}, { enabled: true }, { enabled: "yes", autoOpenOnToolUse: true }, { enabled: true, autoOpenOnToolUse: 1 }]) {
+  // 旧形式の部分保存（evaluateEnabled なし）でも現在値を維持する
+  const partial = service.save({ ...base, browserSettings: { enabled: false, autoOpenOnToolUse: false } });
+  assert.equal(partial.ok, true);
+  assert.equal(partial.state.browserSettings.evaluateEnabled, true);
+
+  for (const bad of [null, [], "x", {}, { enabled: true }, { enabled: "yes", autoOpenOnToolUse: true }, { enabled: true, autoOpenOnToolUse: 1 }, { enabled: true, autoOpenOnToolUse: true, evaluateEnabled: null }, { enabled: true, autoOpenOnToolUse: true, evaluateEnabled: "true" }, { enabled: true, autoOpenOnToolUse: true, evaluateEnabled: 1 }]) {
     const result = service.save({ ...base, browserSettings: bad });
     assert.equal(result.ok, false, JSON.stringify(bad));
   }
-  assert.deepEqual(service.getState().browserSettings, { enabled: false, autoOpenOnToolUse: false });
+  assert.deepEqual(service.getState().browserSettings, { enabled: false, autoOpenOnToolUse: false, evaluateEnabled: true });
 
-  const on = service.save({ ...base, browserSettings: { enabled: true, autoOpenOnToolUse: true } });
-  assert.deepEqual(on.state.browserSettings, { enabled: true, autoOpenOnToolUse: true });
+  const on = service.save({ ...base, browserSettings: { enabled: true, autoOpenOnToolUse: true, evaluateEnabled: false } });
+  assert.deepEqual(on.state.browserSettings, { enabled: true, autoOpenOnToolUse: true, evaluateEnabled: false });
 });
 
 test("browserSettings: 保存ファイル内の不正値は項目ごとに既定値へ戻る", () => {
@@ -438,5 +443,5 @@ test("browserSettings: 保存ファイル内の不正値は項目ごとに既定
   const storagePath = path.join(tempDir, "providers.json");
   fs.writeFileSync(storagePath, JSON.stringify({ browserSettings: { enabled: "no", autoOpenOnToolUse: false } }));
   const service = new ProviderSettingsService({ storagePath, logger: { info() {}, error() {} } });
-  assert.deepEqual(service.getState().browserSettings, { enabled: true, autoOpenOnToolUse: false });
+  assert.deepEqual(service.getState().browserSettings, { enabled: true, autoOpenOnToolUse: false, evaluateEnabled: false });
 });

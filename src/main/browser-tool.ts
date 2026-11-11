@@ -33,6 +33,7 @@ export async function executeBrowserTool(
       case "browser_get_text": return await controller.getText(run, a);
       case "browser_screenshot": return await controller.screenshot(run, a);
       case "browser_wait": return await controller.wait(run, a);
+      case "browser_evaluate": return await controller.evaluate(run, a);
     }
   } catch (error) {
     const e = error instanceof BrowserError ? error.toJSON() : { code: "INTERNAL_ERROR" as const, message: "Unexpected error", retryable: false, effect: "none" as const };
