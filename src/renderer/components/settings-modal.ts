@@ -58,7 +58,8 @@ export class LiltSettingsModal extends LitElement {
     },
     browserSettings: {
       enabled: true,
-      autoOpenOnToolUse: true
+      autoOpenOnToolUse: true,
+      evaluateEnabled: false
     },
     updatedAt: Date.now()
   };
@@ -91,6 +92,7 @@ export class LiltSettingsModal extends LitElement {
   @state() private _showToolExecutionDetails = false;
   @state() private _browserEnabled = true;
   @state() private _browserAutoOpen = true;
+  @state() private _browserEvaluate = false;
   @state() private _browserSaving = false;
   @state() private _browserSaveStatus = "";
   @state() private _heartbeatEnabled = false;
@@ -177,6 +179,7 @@ export class LiltSettingsModal extends LitElement {
       this._showToolExecutionDetails = cs?.showToolExecutionDetails ?? false;
       this._browserEnabled = this.providerSettings.browserSettings?.enabled ?? true;
       this._browserAutoOpen = this.providerSettings.browserSettings?.autoOpenOnToolUse ?? true;
+      this._browserEvaluate = this.providerSettings.browserSettings?.evaluateEnabled ?? false;
       this._heartbeatEnabled = this.providerSettings.heartbeatSettings?.enabled ?? false;
       this._heartbeatFilePath = this.providerSettings.heartbeatSettings?.filePath ?? "";
       this._heartbeatIntervalMinutes = this.providerSettings.heartbeatSettings?.intervalMinutes ?? 30;
@@ -1345,10 +1348,11 @@ export class LiltSettingsModal extends LitElement {
 
   private _renderBrowserSection() {
     const current = this.providerSettings.browserSettings?.enabled ?? true;
-    const willStopRuns = this._browserEnabled !== current;
+    const currentEvaluate = this.providerSettings.browserSettings?.evaluateEnabled ?? false;
+    const willStopRuns = this._browserEnabled !== current || this._browserEvaluate !== currentEvaluate;
     return html`
       <h3>ブラウザ</h3>
-      <p>AI のブラウザ操作を右側のパネルに表示します。自動表示を無効にした場合は、操作前にパネルを開いてください。認証は外部ブラウザを使う場合があります。</p>
+      <p>AI のブラウザ操作を右側のパネルに表示します。自動表示を無効にした場合は、操作前にパネルを開いてください。内蔵ブラウザのログイン状態は、外部ブラウザ（Chrome など）とは共有されません。</p>
 
       <section class="provider-section active">
         <h4>基本設定</h4>
@@ -1373,12 +1377,23 @@ export class LiltSettingsModal extends LitElement {
             />
             AI がブラウザを使うときにパネルを自動で開く
           </label>
+          <label>
+            <input
+              id="browser-evaluate"
+              type="checkbox"
+              .checked=${this._browserEvaluate}
+              ?disabled=${!this._browserEnabled || this._browserSaving}
+              @change=${(e: InputEvent) => { this._browserEvaluate = (e.target as HTMLInputElement).checked; }}
+            />
+            AI にページ内 JavaScript の実行を許可する（詳細操作）
+          </label>
+          <p class="status" id="browser-evaluate-warning">AI が表示中のページやフレーム内で JavaScript を実行します。ログイン済み情報の読み取りや、入力・送信・ページの変更ができます。実行は対象ページのオリジン権限で行われます。読み取り専用には制限されません。</p>
         </div>
         <div class="provider-actions">
           <button id="browser-save" ?disabled=${this._browserSaving} @click=${this._saveBrowserSettings}>ブラウザ設定を保存</button>
           <span class="status" role="status" aria-live="polite">${this._browserSaveStatus}</span>
         </div>
-        ${willStopRuns ? html`<p class="status" id="browser-stop-notice">有効／無効を切り替えて保存すると、実行中の AI 処理は停止します。</p>` : ""}
+        ${willStopRuns ? html`<p class="status" id="browser-stop-notice">この設定を変更して保存すると、実行中の AI 処理を停止します。無効化時は、JavaScript を実行したページを閉じます。タイムアウトや中断でも、送信済みの操作は取り消されません。</p>` : ""}
       </section>
     `;
   }
@@ -1390,7 +1405,7 @@ export class LiltSettingsModal extends LitElement {
     try {
       const next: ProviderSettings = {
         ...this.providerSettings,
-        browserSettings: { enabled: this._browserEnabled, autoOpenOnToolUse: this._browserAutoOpen }
+        browserSettings: { enabled: this._browserEnabled, autoOpenOnToolUse: this._browserAutoOpen, evaluateEnabled: this._browserEvaluate }
       };
       const result = await window.lilto.saveProviderSettings(next);
       if (result.ok) {

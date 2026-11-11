@@ -18,10 +18,15 @@ const { FakeHost } = require("./helpers/browser-fakes.js");
 
 const silent = { info() {}, error() {} };
 
+// Release every server/child even if an assertion throws mid-test; leaked handles keep the runner (and `node --test`) alive.
+const cleanups = [];
+test.after(() => { for (const cleanup of cleanups.splice(0)) cleanup(); });
+
 async function makeBrowser(enabled = true) {
   const controller = new EmbeddedBrowserController(new FakeHost(), { enabled, autoOpenOnToolUse: true });
   controller.beginRendererEpoch();
   const bridge = new BrowserBridgeServer(controller, silent);
+  cleanups.push(() => bridge.stop());
   if (enabled) await bridge.start();
   const support = createBrowserRunSupport({ controller, bridge, serverPath: () => "/app/dist/main/browser-mcp-server.js", execPath: "/usr/bin/node" });
   return { controller, bridge, support };

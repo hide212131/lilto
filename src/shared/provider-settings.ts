@@ -38,11 +38,14 @@ export type HeartbeatSettings = {
 export type BrowserSettings = {
   enabled: boolean;
   autoOpenOnToolUse: boolean;
+  /** Lets the AI run page JavaScript (browser_evaluate). Default false. */
+  evaluateEnabled: boolean;
 };
 
 export const DEFAULT_BROWSER_SETTINGS: BrowserSettings = {
   enabled: true,
-  autoOpenOnToolUse: true
+  autoOpenOnToolUse: true,
+  evaluateEnabled: false
 };
 
 export const DEFAULT_CHAT_SETTINGS: ChatSettings = {

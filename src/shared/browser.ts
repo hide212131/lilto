@@ -30,7 +30,18 @@ export const BROWSER_LIMITS = {
   screenshotMaxBytes: 1024 * 1024,
   bridgeRequestMaxBytes: 64 * 1024,
   bridgeResponseMaxBytes: 2 * 1024 * 1024,
-  snapshotTtlMs: 60_000
+  snapshotTtlMs: 60_000,
+  evaluateScriptMaxChars: 16_384,
+  evaluateScriptMaxBytes: 16 * 1024,
+  evaluateResultMaxBytes: 64 * 1024,
+  evaluateMaxDepth: 32,
+  evaluateMaxValues: 10_000,
+  evaluateMessageMaxChars: 300,
+  frameListMax: 128,
+  frameListMaxBytes: 64 * 1024,
+  frameUrlMaxChars: 2048,
+  frameNameMaxChars: 128,
+  frameIdTtlMs: 60_000
 } as const;
 
 export const BROWSER_ERROR_CODES = [
@@ -52,6 +63,12 @@ export const BROWSER_ERROR_CODES = [
   "CANCELLED",
   "RESULT_TOO_LARGE",
   "PAGE_CRASHED",
+  "EVALUATE_DISABLED",
+  "STALE_DOCUMENT",
+  "STALE_FRAME",
+  "SCRIPT_SYNTAX_ERROR",
+  "SCRIPT_EXECUTION_ERROR",
+  "RESULT_NOT_SERIALIZABLE",
   "INTERNAL_ERROR"
 ] as const;
 export type BrowserErrorCode = (typeof BROWSER_ERROR_CODES)[number];
@@ -112,6 +129,27 @@ export type BrowserSnapshotNode = {
   unsupportedReason?: string;
 };
 
+/** One frame of the current view, as enumerated by Main (never page-supplied). */
+export type BrowserFrameInfo = {
+  frameId: string;
+  parentFrameId: string | null;
+  url: string;
+  origin: string;
+  name: string;
+  isMainFrame: boolean;
+  evaluable: boolean;
+  unsupportedReason?: string;
+};
+
+export type BrowserJsonValue = null | boolean | number | string | BrowserJsonValue[] | { [key: string]: BrowserJsonValue };
+
+export type BrowserEvaluateResult = {
+  frameId: string;
+  frameUrl: string;
+  frameOrigin: string;
+  value: { type: "undefined" } | { type: "json"; value: BrowserJsonValue };
+};
+
 export type BrowserSnapshot = {
   format: "dom-v1";
   snapshotId: string;
@@ -121,6 +159,9 @@ export type BrowserSnapshot = {
   text: string;
   truncated: boolean;
   limitations: string[];
+  /** Present only while browserSettings.evaluateEnabled is true. */
+  frames?: BrowserFrameInfo[];
+  framesTruncated?: boolean;
 };
 
 export type BrowserOwnerView = null | { kind: "user" } | { kind: "agent"; conversationId: string };

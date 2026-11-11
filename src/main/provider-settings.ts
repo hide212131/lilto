@@ -128,7 +128,12 @@ function normalizeBrowserSettings(value: unknown): BrowserSettings {
     autoOpenOnToolUse:
       typeof record.autoOpenOnToolUse === "boolean"
         ? record.autoOpenOnToolUse
-        : DEFAULT_BROWSER_SETTINGS.autoOpenOnToolUse
+        : DEFAULT_BROWSER_SETTINGS.autoOpenOnToolUse,
+    // Existing installs have no evaluateEnabled: they must NOT gain the new execution permission.
+    evaluateEnabled:
+      typeof record.evaluateEnabled === "boolean"
+        ? record.evaluateEnabled
+        : DEFAULT_BROWSER_SETTINGS.evaluateEnabled
   };
 }
 
@@ -274,6 +279,8 @@ function isValidSavePayload(payload: unknown): payload is {
     }
     const browser = record.browserSettings as Record<string, unknown>;
     if (typeof browser.enabled !== "boolean" || typeof browser.autoOpenOnToolUse !== "boolean") return false;
+    // Optional for older callers (then the current value is kept), but never null / non-boolean.
+    if (browser.evaluateEnabled !== undefined && typeof browser.evaluateEnabled !== "boolean") return false;
   }
 
   return true;
@@ -337,10 +344,14 @@ export class ProviderSettingsService {
       };
     }
 
+    const record = payload as Record<string, unknown>;
+    const browserSettings = record.browserSettings as Record<string, unknown> | undefined;
     const normalized = normalizeSettings(
-      (payload as Record<string, unknown>).browserSettings === undefined
-        ? { ...(payload as Record<string, unknown>), browserSettings: this.state.browserSettings }
-        : payload
+      browserSettings === undefined
+        ? { ...record, browserSettings: this.state.browserSettings }
+        : browserSettings.evaluateEnabled === undefined
+          ? { ...record, browserSettings: { ...browserSettings, evaluateEnabled: this.state.browserSettings.evaluateEnabled } }
+          : payload
     );
     return { ok: true, state: normalized };
   }

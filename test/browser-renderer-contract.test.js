@@ -25,10 +25,13 @@ test("settings modal has the Browser tab with both options, the notice text and 
   const modal = read("src/renderer/components/settings-modal.ts");
   assert.match(modal, /内蔵ブラウザと AI のブラウザ連携を有効にする/);
   assert.match(modal, /AI がブラウザを使うときにパネルを自動で開く/);
-  assert.match(modal, /自動表示を無効にした場合は、操作前にパネルを開いてください。認証は外部ブラウザを使う場合があります。/);
-  assert.match(modal, /実行中の AI 処理は停止します/);
+  assert.match(modal, /自動表示を無効にした場合は、操作前にパネルを開いてください。内蔵ブラウザのログイン状態は、外部ブラウザ（Chrome など）とは共有されません。/);
+  assert.match(modal, /AI にページ内 JavaScript の実行を許可する（詳細操作）/);
+  assert.match(modal, /読み取り専用には制限されません/);
+  assert.match(modal, /無効化時は、JavaScript を実行したページを閉じます。タイムアウトや中断でも、送信済みの操作は取り消されません。/);
+  assert.match(modal, /実行中の AI 処理を停止します/);
   assert.match(modal, /\?disabled=\$\{!this\._browserEnabled \|\| this\._browserSaving\}/, "auto-open is disabled (value kept) while OFF");
-  assert.match(modal, /browserSettings: \{ enabled: this\._browserEnabled, autoOpenOnToolUse: this\._browserAutoOpen \}/);
+  assert.match(modal, /browserSettings: \{ enabled: this\._browserEnabled, autoOpenOnToolUse: this\._browserAutoOpen, evaluateEnabled: this\._browserEvaluate \}/);
 });
 
 test("dialogs hide the native page and wait for Main's ACK before drawing; legacy overlay artifacts are gone", () => {

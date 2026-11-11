@@ -1,4 +1,4 @@
-import { BROWSER_DEVELOPER_INSTRUCTIONS, type BrowserMcpLaunch } from "./agent-sdk-config";
+import { browserDeveloperInstructions, type BrowserMcpLaunch } from "./agent-sdk-config";
 import type { BrowserBridgeServer } from "./browser-bridge";
 import type { EmbeddedBrowserController } from "./embedded-browser";
 
@@ -26,14 +26,15 @@ export function createBrowserRunSupport(options: {
       } catch {
         return null;
       }
+      const evaluate = options.controller.isEvaluateEnabled();
       const launch: BrowserMcpLaunch = {
         command: options.execPath ?? process.execPath,
         args: [options.serverPath()],
-        env: options.bridge.getRunEnv(context)
+        env: options.bridge.getRunEnv(context, { evaluateEnabled: evaluate })
       };
       return {
         launch,
-        developerInstructions: BROWSER_DEVELOPER_INSTRUCTIONS,
+        developerInstructions: browserDeveloperInstructions({ evaluateEnabled: evaluate }),
         end: () => options.controller.ownership.revokeRun(context.runId)
       };
     },

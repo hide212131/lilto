@@ -32,6 +32,13 @@ function startServer() {
     }
     if (url.pathname === "/popup") { res.writeHead(200, { "content-type": "text/html" }); return res.end("<title>popup</title><p>popup page</p>"); }
     if (url.pathname === "/next") { res.writeHead(200, { "content-type": "text/html" }); return res.end("<title>next</title><h1>次のページ</h1>"); }
+    if (url.pathname === "/eval-parent") {
+      // Same-origin child + a localhost child (different site => out-of-process iframe).
+      const port = server.address().port;
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      return res.end(`<title>eval-parent</title><h1>親</h1><iframe name="same" src="/eval-child"></iframe><iframe name="cross" src="http://localhost:${port}/eval-child"></iframe>`);
+    }
+    if (url.pathname === "/eval-child") { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); return res.end("<title>child</title><p id='who'>子frame</p><script>window.childState = { n: 7 }</script>"); }
     if (url.pathname === "/form") { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); return res.end(form); }
     res.writeHead(404).end();
   });
@@ -42,9 +49,13 @@ async function main() {
   const { server, base } = await startServer();
   const window = new BrowserWindow({ width: 1100, height: 800, show: true, webPreferences: { sandbox: true } });
   await window.loadURL("data:text/html;charset=utf-8,<body style='margin:0'><p>host</p></body>");
+  app.focus({ steal: true });
   window.focus();
+  // Input and evaluate are gated on window focus; on a desktop another app can take it at any moment.
+  const focusKeeper = setInterval(() => { if (!window.isDestroyed() && !window.isFocused()) { app.focus({ steal: true }); window.focus(); } }, 100);
+  await sleep(1500); // let the freshly shown macOS window finish its show/focus/resize events before the first acquire
   const host = createElectronBrowserHost(() => window);
-  const controller = new EmbeddedBrowserController(host, { enabled: true, autoOpenOnToolUse: true });
+  const controller = new EmbeddedBrowserController(host, { enabled: true, autoOpenOnToolUse: true, evaluateEnabled: true });
   attachControllerToWindow(controller, window);
   controller.beginRendererEpoch();
   let seq = 0;
@@ -243,6 +254,86 @@ async function main() {
   present();
   check("view returns after a fresh measurement", controller.getState().panelVisible === true);
 
+  /* ---------- browser_evaluate (Issue #38) ---------- */
+  // evaluate requires the focused window; another app may take focus while this live script runs.
+  const focusedEvaluate = async (handle, args) => {
+    for (let i = 0; i < 20 && !window.isFocused(); i += 1) { app.focus({ steal: true }); window.focus(); await sleep(100); }
+    return controller.evaluate(handle, args);
+  };
+  controller.ownership.revokeRun(b.ctx.runId);
+  const ev = newRun("A");
+  const evAcq = await controller.acquire(ev.handle, { url: `${base}/eval-parent` });
+  check("evaluate: acquire parent page with frames", evAcq.ok, JSON.stringify(evAcq));
+  const evLease = evAcq.result?.leaseId;
+  const evEpoch = () => controller.ownership.epochs.documentEpoch;
+  const evalIn = (script, extra = {}) => focusedEvaluate(ev.handle, { leaseId: evLease, documentEpoch: evEpoch(), script, ...extra });
+  const mainEval = await evalIn("return document.title");
+  check("evaluate: main frame returns a JSON value", mainEval.ok && mainEval.result.value.type === "json" && mainEval.result.value.value === "eval-parent", JSON.stringify(mainEval));
+  check("evaluate: async body awaits and undefined is reported", (await evalIn("await new Promise(r => setTimeout(r, 50)); return 1+1")).result?.value.value === 2 && (await evalIn("1+1")).result?.value.type === "undefined");
+  const evSnap = await controller.snapshot(ev.handle, { leaseId: evLease });
+  const frames = evSnap.result?.frames ?? [];
+  check("evaluate: snapshot lists main + two child frames with opaque ids", evSnap.ok && frames.length === 3 && frames.filter((f) => f.isMainFrame).length === 1 && frames.every((f) => /^[A-Za-z0-9_-]+$/.test(f.frameId)), JSON.stringify(frames));
+  const childFrames = frames.filter((f) => !f.isMainFrame);
+  const sameFrame = childFrames.find((f) => f.name === "same");
+  const crossFrame = childFrames.find((f) => f.name === "cross");
+  check("evaluate: frames are evaluable http(s)", sameFrame?.evaluable === true && crossFrame?.evaluable === true, JSON.stringify(childFrames));
+  const sameEval = await evalIn("return [document.getElementById('who').textContent, window.childState.n]", { frameId: sameFrame?.frameId });
+  check("evaluate: same-origin child frame runs in that frame's page world", sameEval.ok && JSON.stringify(sameEval.result.value.value) === JSON.stringify(["子frame", 7]) && sameEval.result.frameUrl.endsWith("/eval-child"), JSON.stringify(sameEval));
+  const crossEval = await evalIn("return [location.hostname, window.childState.n]", { frameId: crossFrame?.frameId });
+  check("evaluate: cross-origin (out-of-process) child frame runs", crossEval.ok && JSON.stringify(crossEval.result.value.value) === JSON.stringify(["localhost", 7]), JSON.stringify(crossEval));
+  const afterEvalRef = await controller.getText(ev.handle, { leaseId: evLease, snapshotId: evSnap.result.snapshotId, ref: evSnap.result.nodes[0].ref });
+  check("evaluate: delivery invalidated the earlier snapshot", !afterEvalRef.ok && afterEvalRef.error.code === "STALE_REF", JSON.stringify(afterEvalRef));
+  const badEpoch = await focusedEvaluate(ev.handle, { leaseId: evLease, documentEpoch: evEpoch() + 99, script: "return 1" });
+  check("evaluate: wrong documentEpoch => STALE_DOCUMENT, effect none", !badEpoch.ok && badEpoch.error.code === "STALE_DOCUMENT" && badEpoch.error.effect === "none", JSON.stringify(badEpoch));
+  const bad = await evalIn("return new Date()");
+  check("evaluate: non-JSON result => error, not 'none' effect, not retryable", !bad.ok && bad.error.retryable === false && bad.error.effect !== "none", JSON.stringify(bad));
+  const big = await evalIn("return 'x'.repeat(70 * 1024)");
+  check("evaluate: >64 KiB result => RESULT_TOO_LARGE", !big.ok && big.error.code === "RESULT_TOO_LARGE", JSON.stringify(big).slice(0, 200));
+  const syntax = await evalIn("return (");
+  check("evaluate: syntax error is refused before delivery", !syntax.ok && syntax.error.effect === "none", JSON.stringify(syntax));
+
+  // Synchronous infinite loop in a cross-origin child frame: cut off by the deadline, view destroyed, host alive.
+  const loopStarted = Date.now();
+  const loop = await evalIn("while (true) {}", { frameId: crossFrame?.frameId, timeoutMs: 1000 });
+  check("evaluate: infinite loop in an OOPIF child => TIMEOUT within the deadline (not hung)", !loop.ok && loop.error.code === "TIMEOUT" && loop.error.retryable === false && loop.error.effect === "possible" && Date.now() - loopStarted < 6000, JSON.stringify(loop));
+  await sleep(500);
+  check("evaluate: the stuck view was closed and the host survives", !window.isDestroyed() && window.contentView.children.length === 0 && controller.liveContents() == null, `children=${window.contentView.children.length}`);
+
+  // Recovery: a fresh run can open a new view in the same partition and evaluate again.
+  const ev2 = newRun("A");
+  let evAcq2 = await controller.acquire(ev2.handle, { url: `${base}/eval-parent` });
+  for (let i = 0; !evAcq2.ok && i < 20; i += 1) { await sleep(250); evAcq2 = await controller.acquire(ev2.handle, { url: `${base}/eval-parent` }); }
+  check("evaluate: a new view can be created after the loop was cut off", evAcq2.ok, JSON.stringify(evAcq2));
+  const rec = await focusedEvaluate(ev2.handle, { leaseId: evAcq2.result?.leaseId, documentEpoch: controller.ownership.epochs.documentEpoch, script: "return document.title" });
+  check("evaluate: works again after recovery", rec.ok && rec.result.value.value === "eval-parent", JSON.stringify(rec));
+
+  // Main-frame infinite loop, and cancellation (run revoked) while the script is running.
+  const mainLoop = await focusedEvaluate(ev2.handle, { leaseId: evAcq2.result?.leaseId, documentEpoch: controller.ownership.epochs.documentEpoch, script: "while (true) {}", timeoutMs: 800 });
+  check("evaluate: infinite loop in the main frame => TIMEOUT", !mainLoop.ok && mainLoop.error.code === "TIMEOUT" && mainLoop.error.effect === "possible", JSON.stringify(mainLoop));
+  await sleep(500);
+  const ev3 = newRun("A");
+  let evAcq3 = await controller.acquire(ev3.handle, { url: `${base}/eval-parent` });
+  for (let i = 0; !evAcq3.ok && i < 20; i += 1) { await sleep(250); evAcq3 = await controller.acquire(ev3.handle, { url: `${base}/eval-parent` }); }
+  check("evaluate: reacquire after main-frame loop", evAcq3.ok, JSON.stringify(evAcq3));
+  const cancelStarted = Date.now();
+  const pending = focusedEvaluate(ev3.handle, { leaseId: evAcq3.result?.leaseId, documentEpoch: controller.ownership.epochs.documentEpoch, script: "await new Promise(() => {})", timeoutMs: 30000 });
+  await sleep(400);
+  controller.ownership.revokeRun(ev3.ctx.runId);
+  const cancelled3 = await pending;
+  check("evaluate: cancelling a running evaluate settles quickly with effect possible, retryable false", !cancelled3.ok && cancelled3.error.retryable === false && cancelled3.error.effect === "possible" && Date.now() - cancelStarted < 5000, JSON.stringify(cancelled3));
+  await sleep(500);
+  check("evaluate: the cancelled run's view was closed", controller.liveContents() == null && !window.isDestroyed());
+
+  // evaluate OFF at runtime: direct call is refused with effect none.
+  const ev4 = newRun("A");
+  let evAcq4 = await controller.acquire(ev4.handle, { url: `${base}/eval-parent` });
+  for (let i = 0; !evAcq4.ok && i < 20; i += 1) { await sleep(250); evAcq4 = await controller.acquire(ev4.handle, { url: `${base}/eval-parent` }); }
+  await controller.applySettings({ enabled: true, autoOpenOnToolUse: true, evaluateEnabled: false });
+  const ev5 = newRun("A");
+  const off = await focusedEvaluate(ev5.handle, { leaseId: evAcq4.result?.leaseId ?? "x", documentEpoch: 0, script: "return 1" });
+  check("evaluate: disabled in settings => refused (EVALUATE_DISABLED or lease rejected), effect none", !off.ok && off.error.effect === "none", JSON.stringify(off));
+  await controller.applySettings({ enabled: true, autoOpenOnToolUse: true, evaluateEnabled: true });
+
   /* ---------- crash isolation ---------- */
   const crashed = new Promise((resolve) => wc().once("render-process-gone", resolve));
   wc().forcefullyCrashRenderer();
@@ -253,6 +344,7 @@ async function main() {
   await controller.applySettings({ enabled: false, autoOpenOnToolUse: true });
   check("OFF closes the view and removes it from the window", window.contentView.children.length === 0 && !controller.getState().panelVisible);
 
+  clearInterval(focusKeeper);
   controller.dispose();
   server.close();
   const failed = results.filter((r) => !r.ok);
