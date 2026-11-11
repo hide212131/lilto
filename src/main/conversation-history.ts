@@ -313,6 +313,17 @@ export class ConversationHistoryService {
     }
   }
 
+  async deleteConversation(conversationId: string): Promise<void> {
+    const client = await this.createClient();
+    try {
+      await client.request("thread/delete", {
+        threadId: conversationId
+      });
+    } finally {
+      client.close();
+    }
+  }
+
   private async createClient(): Promise<CodexAppServerClient> {
     const packagedCodex = resolvePackagedCodexBinary();
     const invocationEnv = await resolveCodexProcessEnvironment({

@@ -605,6 +605,28 @@ export class AgentRuntime {
     return this.runningRequests.size > 0;
   }
 
+  /** True when a foreground run belongs to this conversation (renderer ID or backend thread ID). */
+  isConversationRunning(conversationId: string): boolean {
+    return [...this.runningRequests.values()].some((run) => run.conversationId !== undefined
+      && (run.conversationId === conversationId || this.conversationThreads.get(run.conversationId) === conversationId));
+  }
+
+  /** Drops cached threads for an archived/deleted conversation so they are never reused. */
+  forgetConversation(conversationId: string): void {
+    const ids = new Set([conversationId]);
+    for (const [key, threadId] of [...this.conversationThreads]) {
+      if (key === conversationId || threadId === conversationId) {
+        ids.add(key);
+        this.conversationThreads.delete(key);
+      }
+    }
+    for (const signature of [...this.sessionCache.keys()]) {
+      let cachedConversationId: unknown;
+      try { cachedConversationId = (JSON.parse(signature) as { conversationId?: unknown }).conversationId; } catch { continue; }
+      if (typeof cachedConversationId === "string" && ids.has(cachedConversationId)) this.sessionCache.delete(signature);
+    }
+  }
+
   constructor({
     createSession = createCodexThreadFromAppServer,
     authService,

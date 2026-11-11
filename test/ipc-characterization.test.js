@@ -16,6 +16,7 @@ const EXPECTED_HANDLE_CHANNELS = [
   "conversations:create",
   "conversations:rename",
   "conversations:archive",
+  "conversations:delete",
   "auth:getState",
   "auth:startClaudeOauth",
   "auth:submitCode",
@@ -62,11 +63,11 @@ function extractMatches(content, pattern) {
   return [...content.matchAll(pattern)].map((match) => match[1]).sort();
 }
 
-test("main ipc と preload invoke は同じ 48 チャネルを公開する", () => {
+test("main ipc と preload invoke は同じ 49 チャネルを公開する", () => {
   const mainChannels = extractMatches(ipcContent, /ipcMain\.handle\("([^"]+)"/g);
   const preloadChannels = [...new Set(extractMatches(preloadContent, /ipcRenderer\.invoke\("([^"]+)"/g))].sort();
 
-  assert.equal(mainChannels.length, 48);
+  assert.equal(mainChannels.length, 49);
   assert.deepEqual(mainChannels, EXPECTED_HANDLE_CHANNELS);
   assert.deepEqual(preloadChannels, EXPECTED_HANDLE_CHANNELS);
 });
@@ -91,6 +92,7 @@ test("agent と conversation IPC の payload 契約を固定する", () => {
   assert.match(preloadContent, /createConversation: async \(title\?: string\) => ipcRenderer\.invoke\("conversations:create", \{ title \}\)/);
   assert.match(preloadContent, /renameConversation: async \(conversationId: string, title: string\) =>\s*ipcRenderer\.invoke\("conversations:rename", \{ conversationId, title \}\)/);
   assert.match(preloadContent, /archiveConversation: async \(conversationId: string\) =>\s*ipcRenderer\.invoke\("conversations:archive", \{ conversationId \}\)/);
+  assert.match(preloadContent, /deleteConversation: async \(conversationId: string\) =>\s*ipcRenderer\.invoke\("conversations:delete", \{ conversationId \}\)/);
   assert.match(ipcContent, /ipcMain\.handle\("conversations:read", async \(_event, payload: unknown\) => \{/);
   assert.match(ipcContent, /message: "conversationId は必須です"/);
   assert.match(ipcContent, /message: "conversationId と title は必須です"/);

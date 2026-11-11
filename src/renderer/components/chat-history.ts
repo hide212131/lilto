@@ -3,6 +3,7 @@ import { customElement, property, state } from "lit/decorators.js";
 import type { Session } from "../types.js";
 import { extractActivityPreview, type ActivityPreview } from "../sidebar-activity.js";
 import type { SchedulerScheduleSummary } from "../../shared/scheduler.js";
+import { isHeartbeatAssistantSessionId } from "../../shared/heartbeat-assistant.js";
 
 @customElement("lilt-chat-history")
 export class LiltChatHistory extends LitElement {
@@ -10,6 +11,8 @@ export class LiltChatHistory extends LitElement {
   @property({ attribute: false }) runningSessionIds: string[] = [];
   @property({ type: Array }) schedules: SchedulerScheduleSummary[] = [];
   @property() activeSessionId: string | null = null;
+  @property({ attribute: false }) busySessionIds: string[] = [];
+  @property() actionError = "";
   @property({ type: Boolean }) activityMode = false;
   @property({ attribute: false }) activityPreviews: Record<string, ActivityPreview> = {};
   @state() private _menuOpenId: string | null = null;
@@ -310,8 +313,13 @@ export class LiltChatHistory extends LitElement {
     .dropdown-item {
       display: flex;
       align-items: center;
+      width: 100%;
       padding: 10px 14px;
+      border: 0;
+      background: transparent;
+      font: inherit;
       font-size: 13px;
+      text-align: left;
       color: var(--text, #1f2328);
       cursor: pointer;
       transition: background 0.12s ease;
@@ -319,6 +327,12 @@ export class LiltChatHistory extends LitElement {
     .dropdown-item:hover {
       background: #f5f5f5;
     }
+    .dropdown-item:focus-visible { outline: 2px solid #2f6df6; outline-offset: -2px; }
+    .action-error { display: flex; align-items: flex-start; gap: 6px; margin: 6px 8px 0; padding: 8px 10px; border: 1px solid #f3b4b4; border-radius: 8px; background: #fdecec; color: #8a1f1f; font-size: 12px; line-height: 1.5; }
+    .action-error span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+    .action-error button { flex-shrink: 0; border: 0; border-radius: 6px; padding: 2px 6px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+    .action-error button:focus-visible { outline: 2px solid #2f6df6; }
+    .menu-btn:disabled { cursor: default; }
     .dropdown-item.danger {
       color: #f87171;
     }
@@ -362,6 +376,12 @@ export class LiltChatHistory extends LitElement {
         ${this._searchFailed ? html`<span>一部の会話を検索できませんでした</span>
           <button @click=${() => { this._searchFailed = false; this._searching = true; void this._loadSearchContent(); }}>再試行</button>` : ""}
       </div>
+      ${this.actionError ? html`
+        <div class="action-error" role="alert">
+          <span>${this.actionError}</span>
+          <button type="button" aria-label="エラーを閉じる"
+            @click=${() => this.dispatchEvent(new CustomEvent("dismiss-session-action-error", { bubbles: true, composed: true }))}>閉じる</button>
+        </div>` : ""}
       <div class="list">
         ${keyword && sessions.length === 0
           ? this._searching ? "" : html`<div class="empty">${this._searchFailed ? "検索できた会話に一致するものはありません" : "一致する会話はありません"}</div>`
@@ -427,6 +447,8 @@ export class LiltChatHistory extends LitElement {
     const date = new Date(session.updatedAt);
     const dateLabel = this._formatDate(date);
     const menuOpen = this._menuOpenId === session.id;
+    const busy = this.busySessionIds.includes(session.id);
+    const hasMenu = !isHeartbeatAssistantSessionId(session.id);
     return html`
       <div
         data-session-id=${session.id}
@@ -450,23 +472,23 @@ export class LiltChatHistory extends LitElement {
           }
         </div>
         ${this._renderRunStatus(session.id)}
+        ${busy ? html`<span class="run-status" role="status">処理中…</span>` : ""}
         ${session.hasUnread && !isActive && !isEditing
           ? html`<span class="unread-dot" aria-label="未読"></span>`
           : ""}
-        ${!isEditing ? html`
+        ${!isEditing && hasMenu ? html`
           <button
             class="menu-btn ${menuOpen ? "open" : ""}"
             title="オプション"
+            aria-label="オプション"
+            ?disabled=${busy}
             @click=${(e: Event) => this._toggleMenu(e, session.id)}
           >⋮</button>
           ${menuOpen ? html`
             <div class="dropdown" @click=${(e: Event) => e.stopPropagation()}>
-              <div class="dropdown-item" @click=${(e: Event) => this._onRename(e, session)}>
-                名称変更
-              </div>
-              <div class="dropdown-item danger" @click=${(e: Event) => this._onDelete(e, session)}>
-                削除
-              </div>
+              <button type="button" class="dropdown-item" @click=${(e: Event) => this._onRename(e, session)}>名称変更</button>
+              <button type="button" class="dropdown-item" @click=${(e: Event) => this._onSessionAction(e, "archive-session", session)}>アーカイブ</button>
+              <button type="button" class="dropdown-item danger" @click=${(e: Event) => this._onSessionAction(e, "delete-session", session)}>削除</button>
             </div>
           ` : ""}
         ` : ""}
@@ -517,10 +539,17 @@ export class LiltChatHistory extends LitElement {
     this._editingId = null;
   }
 
-  private _onDelete(e: Event, session: Session) {
+  /** Moves focus back to a row's menu button (e.g. after a cancelled confirm). */
+  focusMenuButton(sessionId: string) {
+    void this.updateComplete.then(() => {
+      this.renderRoot.querySelector<HTMLElement>(`.session-item[data-session-id="${CSS.escape(sessionId)}"] .menu-btn`)?.focus();
+    });
+  }
+
+  private _onSessionAction(e: Event, type: "archive-session" | "delete-session", session: Session) {
     e.stopPropagation();
     this._menuOpenId = null;
-    this.dispatchEvent(new CustomEvent("delete-session", {
+    this.dispatchEvent(new CustomEvent(type, {
       detail: { sessionId: session.id },
       bubbles: true,
       composed: true
@@ -551,6 +580,7 @@ export class LiltChatHistory extends LitElement {
   }
 
   private _selectSession(session: Session) {
+    if (this.busySessionIds.includes(session.id)) return;
     this.dispatchEvent(new CustomEvent("select-session", {
       detail: session,
       bubbles: true,
