@@ -19,10 +19,10 @@
 ## 5. 検証
 
 - [x] 5.1 unit（ストア・ライフサイクル・runtime・SDK 委譲）と型検査。
-- [ ] 5.2 実 App Server＋記録サーバーでの項目数検証（CI 用の独立モード）。
-- [ ] 5.3 papa での実モデル確認（旧履歴回復・再 ON・再起動・自動圧縮・evaluate 往復）。
-- [ ] 5.4 ライブ UI 確認と最終 `npm run e2e:electron`。
+- [x] 5.2 実 App Server＋記録サーバーでの項目数検証（`npm run verify:instruction-lifecycle`、CI の独立ジョブ）。
+- [x] 5.3 実モデル確認（`scripts/verify-instruction-lifecycle-live.js`。旧履歴回復・再 ON・再起動・自動圧縮・evaluate 往復）。
+- [x] 5.4 ライブ UI 確認（`scripts/verify-instruction-lifecycle-ui.js`）と最終 `npm run e2e:electron`。
 
 ## 6. リリース資料
 
-- [ ] 6.1 回復方法を「OFF のまま既存会話を続ける」と記載する（スレッド作り直しは要求しない）。
+- [ ] 6.1 リリース資料に、回復方法を「OFF のまま既存会話を続ける」と記載する（スレッド作り直しは要求しない）。

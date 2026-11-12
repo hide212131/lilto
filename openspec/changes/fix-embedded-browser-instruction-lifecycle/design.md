@@ -18,3 +18,11 @@
 | ON 発行不能 | OFF に倒さず run を開始前に失敗させる。設定適用中も同様 |
 | SDK 入口 | ブラウザ管理対象 run は同じ App Server adapter に委譲する |
 | 採用しないもの | X3 `collaborationMode.settings.developer_instructions`、rollout の走査・編集、毎ターン送信 |
+
+## 圧縮停止の判定（実測による）
+
+- 停止は `item/started`（contextCompaction）を `CodexAppServerClient.onNotification` で行を解析した時点に購読して行う。利用側が通知を引く速さに依存しない。`item/completed` 契機には頼らない。
+- 圧縮が当該ターンの `userMessage` より前（pre-turn）で、そのターンが更新を送る場合は、更新は圧縮後の入力に入る（実 App Server と実プロバイダで確認）ので停止しない。それ以外（mid-turn、または更新を送らない pre-turn）は状態が消えるので止める。いずれも確定はしない。
+- 停止は圧縮を破棄し、トークン見積もりは通常応答でしか更新されない。そのため連続停止は無限ループになり得る。1 回停止した thread の再試行ターンは停止しない（再試行は更新を送る）。
+- 実 Electron main（記録サーバー別プロセス）での interrupt 遅延は main の停止時間にほぼ等しい。圧縮リクエストの所要時間より main の停止が短ければ間に合う。実プロバイダの圧縮リクエストは約 6〜8 秒（本 change の実測）。
+- 間に合わなかった場合の保証は「その 1 ターンの残りは状態なしで進み得る。確定していないので次ターンで再送される」まで。
