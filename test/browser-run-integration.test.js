@@ -11,7 +11,8 @@ const { EmbeddedBrowserController } = require("../dist/main/embedded-browser.js"
 const { BrowserBridgeServer } = require("../dist/main/browser-bridge.js");
 const { createBrowserRunSupport } = require("../dist/main/browser-run-support.js");
 const { createBrowserSettingsFlow } = require("../dist/main/browser-settings-flow.js");
-const { BROWSER_DEVELOPER_INSTRUCTIONS, withBrowserMcpConfig } = require("../dist/main/agent-sdk-config.js");
+const { resolveBrowserInstructionUpdate, withBrowserMcpConfig, BROWSER_INSTRUCTION_CONTEXT_KEY } = require("../dist/main/agent-sdk-config.js");
+const { BrowserInstructionStateStore } = require("../dist/main/browser-instruction-state-store.js");
 const { syncManagedSkillVisibility, collectAgentBrowserSkillPaths } = require("../dist/main/skill-runtime-policy.js");
 const { resolveBrowserMcpServerPath } = require("../dist/main/app-paths.js");
 const { FakeHost } = require("./helpers/browser-fakes.js");
@@ -21,6 +22,12 @@ const silent = { info() {}, error() {} };
 // Release every server/child even if an assertion throws mid-test; leaked handles keep the runner (and `node --test`) alive.
 const cleanups = [];
 test.after(() => { for (const cleanup of cleanups.splice(0)) cleanup(); });
+
+function makeStore() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lilto-instr-"));
+  cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return new BrowserInstructionStateStore({ filePath: path.join(dir, "state.json"), logger: silent });
+}
 
 async function makeBrowser(enabled = true) {
   const controller = new EmbeddedBrowserController(new FakeHost(), { enabled, autoOpenOnToolUse: true });
@@ -55,42 +62,50 @@ async function drain(thread, options) {
   for await (const _ of run.events) { /* drain */ }
 }
 
-test("browserRun adds mcp_servers.lilto_browser + developerInstructions to thread/start and turn/start, keeping cron", async () => {
+test("browserRun adds mcp_servers.lilto_browser to thread/start and turn/start, keeping cron; instructions ride on turn/start additionalContext only", async () => {
   const server = mockAppServer();
   try {
-    const thread = await createCodexThreadFromAppServer({ apiKey: "k", cwd: "/w", codexHomeDir: "/c", homeDir: "/h", config: { mcp_servers: { cron: { command: "x" } } } });
+    const thread = await createCodexThreadFromAppServer({ apiKey: "k", cwd: "/w", codexHomeDir: "/c", homeDir: "/h", instructionStore: makeStore(), config: { mcp_servers: { cron: { command: "x" } } } });
     const launch = { command: "/usr/bin/node", args: ["/app/browser-mcp-server.js"], env: { LILTO_BROWSER_BRIDGE_URL: "http://127.0.0.1:1", LILTO_BROWSER_BRIDGE_TOKEN: "tok-A", ELECTRON_RUN_AS_NODE: "1" } };
-    await drain(thread, { browserRun: { launch, developerInstructions: BROWSER_DEVELOPER_INSTRUCTIONS } });
+    const update = resolveBrowserInstructionUpdate({ enabled: true, evaluateEnabled: false });
+    await drain(thread, { browserRun: { launch, update } });
     const start = server.requests.find((r) => r.method === "thread/start").params;
     assert.deepEqual(Object.keys(start.config.mcp_servers).sort(), ["cron", "lilto_browser"]);
     assert.deepEqual(start.config.mcp_servers.lilto_browser, { command: launch.command, args: launch.args, env: launch.env, enabled: true });
-    assert.equal(start.developerInstructions, BROWSER_DEVELOPER_INSTRUCTIONS);
+    assert.equal("developerInstructions" in start, false, "thread/start never carries browser instructions");
     const turn = server.requests.find((r) => r.method === "turn/start").params;
     assert.equal(turn.config.mcp_servers.lilto_browser.env.LILTO_BROWSER_BRIDGE_TOKEN, "tok-A");
+    assert.deepEqual(turn.additionalContext, { [BROWSER_INSTRUCTION_CONTEXT_KEY]: { kind: "application", value: update.text } });
+    assert.equal(JSON.stringify(update.text).includes("tok-A"), false, "no per-run secret in the text");
   } finally { server.restore(); }
 });
 
-test("without browserRun (OFF/heartbeat) the key is absent and no developerInstructions are sent", async () => {
+test("without browserRun (excluded run) the key is absent and nothing about browser state is sent or recorded", async () => {
   const server = mockAppServer();
   try {
-    const thread = await createCodexThreadFromAppServer({ apiKey: "k", cwd: "/w", codexHomeDir: "/c", homeDir: "/h", config: { mcp_servers: { cron: { command: "x" } } } });
+    const store = makeStore();
+    const thread = await createCodexThreadFromAppServer({ apiKey: "k", cwd: "/w", codexHomeDir: "/c", homeDir: "/h", instructionStore: store, config: { mcp_servers: { cron: { command: "x" } } } });
     await drain(thread, {});
     const start = server.requests.find((r) => r.method === "thread/start").params;
     assert.equal("lilto_browser" in start.config.mcp_servers, false);
     assert.equal("developerInstructions" in start, false);
+    assert.equal("additionalContext" in server.requests.find((r) => r.method === "turn/start").params, false);
     assert.equal(JSON.stringify(start).includes("BRIDGE_TOKEN"), false);
+    assert.equal(fs.existsSync(store.options.filePath), false, "store never written");
   } finally { server.restore(); }
 });
 
 test("a cached thread never keeps a token: two runs on the same thread get their own tokens", async () => {
   const server = mockAppServer();
   try {
-    const thread = await createCodexThreadFromAppServer({ apiKey: "k", cwd: "/w", codexHomeDir: "/c", homeDir: "/h" });
-    const launch = (token) => ({ launch: { command: "n", args: ["s"], env: { LILTO_BROWSER_BRIDGE_TOKEN: token } }, developerInstructions: "d" });
+    const thread = await createCodexThreadFromAppServer({ apiKey: "k", cwd: "/w", codexHomeDir: "/c", homeDir: "/h", instructionStore: makeStore() });
+    const update = resolveBrowserInstructionUpdate({ enabled: true, evaluateEnabled: false });
+    const launch = (token) => ({ update, launch: { command: "n", args: ["s"], env: { LILTO_BROWSER_BRIDGE_TOKEN: token } } });
     await drain(thread, { browserRun: launch("tok-1") });
     await drain(thread, { browserRun: launch("tok-2") });
     await drain(thread, {});
     const starts = server.requests.filter((r) => r.method === "thread/start" || r.method === "thread/resume");
+    assert.deepEqual(starts.map((r) => r.method), ["thread/start", "thread/resume", "thread/resume"], "the reused object resumes the thread it started");
     const tokens = starts.map((r) => r.params.config?.mcp_servers?.lilto_browser?.env?.LILTO_BROWSER_BRIDGE_TOKEN);
     assert.deepEqual(tokens, ["tok-1", "tok-2", undefined]);
   } finally { server.restore(); }
@@ -155,15 +170,18 @@ test("AgentRuntime: parallel conversations receive different tokens; heartbeat a
   bridge.stop();
 });
 
-test("AgentRuntime: browser OFF (or bridge stopped) means new runs get no browser MCP", async () => {
+test("AgentRuntime: browser OFF means a managed run without launch; ON with a stopped bridge fails before any turn", async () => {
   const off = await makeBrowser(false);
   const seen = [];
   await fakeRuntime(off.support, seen).submitPrompt("x", settingsFor(), { requestId: "r", conversationId: "A" });
-  assert.deepEqual(seen, [null]);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].launch, undefined, "no capability while OFF");
+  assert.equal(seen[0].update.state.browser, "off");
   const on = await makeBrowser(true);
   on.bridge.stop();
-  await fakeRuntime(on.support, seen).submitPrompt("x", settingsFor(), { requestId: "r", conversationId: "A" });
-  assert.deepEqual(seen, [null, null]);
+  const result = await fakeRuntime(on.support, seen).submitPrompt("x", settingsFor(), { requestId: "r", conversationId: "A" });
+  assert.equal(result.ok, false, "ON without a capability is a failure, never an OFF");
+  assert.equal(seen.length, 1, "no turn was started for the failed ON run");
 });
 
 test("AgentRuntime.stopAllRuns aborts the turn, revokes tokens and returns once the run has wound down", async () => {

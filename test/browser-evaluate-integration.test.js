@@ -8,7 +8,7 @@ const { EmbeddedBrowserController } = require("../dist/main/embedded-browser.js"
 const { BrowserBridgeServer } = require("../dist/main/browser-bridge.js");
 const { createBrowserRunSupport } = require("../dist/main/browser-run-support.js");
 const { createBrowserSettingsFlow } = require("../dist/main/browser-settings-flow.js");
-const { browserDeveloperInstructions, BROWSER_DEVELOPER_INSTRUCTIONS } = require("../dist/main/agent-sdk-config.js");
+const { resolveBrowserInstructionUpdate } = require("../dist/main/agent-sdk-config.js");
 const { FakeHost, presentPanel } = require("./helpers/browser-fakes.js");
 
 const silent = { info() {}, error() {} };
@@ -32,24 +32,28 @@ async function makeBrowser({ evaluateEnabled = false, logger = silent } = {}) {
 
 /* ------------------------------------------------------------ run support */
 
-test("run support: env flag + developer instructions follow the evaluate setting (16-tool set keeps the old guidance)", async () => {
+test("run support: env flag + instruction update follow the evaluate setting (16-tool set says evaluate is unavailable)", async () => {
   const off = await makeBrowser({ evaluateEnabled: false });
-  const offRun = off.support.begin({ conversationId: "A", requestId: "r" });
+  const offRun = off.support.resolve({ conversationId: "A", requestId: "r" });
+  assert.equal(offRun.kind, "on");
   assert.equal(offRun.launch.env.LILTO_BROWSER_EVALUATE_ENABLED, "0");
-  assert.equal(offRun.developerInstructions, BROWSER_DEVELOPER_INSTRUCTIONS);
-  assert.match(offRun.developerInstructions, /ask the user to do it manually in the panel/);
-  assert.equal(offRun.developerInstructions.includes("browser_evaluate"), false);
+  assert.deepEqual(offRun.update, resolveBrowserInstructionUpdate({ enabled: true, evaluateEnabled: false }));
+  assert.equal(offRun.update.state.evaluate, false);
+  assert.match(offRun.update.text, /ask the user to do it manually in the panel/);
+  assert.match(offRun.update.text, /browser_evaluate is disabled and unavailable/);
+  assert.equal(offRun.update.text.includes("[browser_evaluate]"), false, "no evaluate usage section");
   off.bridge.stop();
 
   const on = await makeBrowser({ evaluateEnabled: true });
-  const onRun = on.support.begin({ conversationId: "A", requestId: "r" });
+  const onRun = on.support.resolve({ conversationId: "A", requestId: "r" });
   assert.equal(onRun.launch.env.LILTO_BROWSER_EVALUATE_ENABLED, "1");
-  const text = onRun.developerInstructions;
+  assert.equal(onRun.update.state.evaluate, true);
+  const text = onRun.update.text;
   for (const needle of ["browser_evaluate", "documentEpoch", "frameId", "frames", "64 KiB", "retry", "effect=possible", "untrusted", "synthetic", "never read-only", "another browser or tool", "iframe"]) {
     assert.ok(text.includes(needle), `instructions mention ${needle}`);
   }
   assert.equal(text.includes("ask the user to do it manually in the panel.") && /iframes, file upload/.test(text), false, "no blanket 'iframes: ask the user' any more");
-  assert.equal(browserDeveloperInstructions({ evaluateEnabled: true }), text);
+  assert.equal(text.includes("browser_evaluate is disabled"), false);
   on.bridge.stop();
 });
 

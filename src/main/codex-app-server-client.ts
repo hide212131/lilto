@@ -53,6 +53,7 @@ export class CodexAppServerClient {
   private readonly queuedNotifications = new Map<string, unknown[]>();
   private readonly notificationQueue: Array<{ method: string; params: unknown }> = [];
   private readonly nextNotificationWaiters = new Set<NextNotificationWaiter>();
+  private readonly notificationListeners = new Set<(message: { method: string; params: unknown }) => void>();
   private started = false;
 
   constructor(
@@ -228,6 +229,15 @@ export class CodexAppServerClient {
     });
   }
 
+  /**
+   * Observes every notification synchronously, the moment its line is parsed and independent of how fast
+   * the consumer pulls nextNotification(). For reactions that must not wait for the consumer (e.g. interrupt).
+   */
+  onNotification(listener: (message: { method: string; params: unknown }) => void): () => void {
+    this.notificationListeners.add(listener);
+    return () => { this.notificationListeners.delete(listener); };
+  }
+
   close(): void {
     this.readline?.close();
     this.readline = null;
@@ -275,6 +285,11 @@ export class CodexAppServerClient {
 
     const params = message.params;
     const queuedMessage = { method: message.method, params };
+    for (const listener of [...this.notificationListeners]) {
+      try { listener(queuedMessage); } catch (error) {
+        this.logger.error("codex_app_server_notification_listener_failed", { message: error instanceof Error ? error.message : String(error) });
+      }
+    }
     const nextWaiter = [...this.nextNotificationWaiters].find((waiter) => {
       if (!waiter.methods || waiter.methods.length === 0) {
         return true;

@@ -13,12 +13,17 @@ export function createBrowserSettingsFlow(deps: {
   syncSkillPolicy: (browserEnabled: boolean) => void;
   logger: Logger;
 }) {
+  // True from the first stop-issuing step until the new settings are applied or rolled back.
+  let applying = false;
   return {
+    /** New browser runs must not start while a permission change is half-applied. */
+    isApplying: () => applying,
     /** Steps 2-6. Throws when the skill policy cannot be synced; the feature then stays stopped. */
     async prepare(next: BrowserSettings, current: BrowserSettings): Promise<void> {
       const enabledChanged = next.enabled !== current.enabled;
       // Turning page-JS on/off changes what a run may do just like ON/OFF does: no run may keep the old tool set.
       if (!enabledChanged && next.evaluateEnabled === current.evaluateEnabled) return;
+      applying = true;
       deps.controller.ownership.setIssuing(false);
       deps.controller.ownership.revokeAllRuns();
       deps.bridge.stop();
@@ -28,19 +33,27 @@ export function createBrowserSettingsFlow(deps: {
     },
     /** Step 7 (after the settings file was written). */
     async commit(next: BrowserSettings): Promise<void> {
-      await deps.controller.applySettings(next);
-      if (next.enabled) {
-        // A bridge that cannot start means no MCP registration; surface it instead of failing silently.
-        await deps.bridge.start().catch((error: unknown) => {
-          deps.logger.error("browser_bridge_start_failed", { message: error instanceof Error ? error.message : String(error) });
-        });
+      try {
+        await deps.controller.applySettings(next);
+        if (next.enabled) {
+          // A bridge that cannot start means no MCP registration; surface it instead of failing silently.
+          await deps.bridge.start().catch((error: unknown) => {
+            deps.logger.error("browser_bridge_start_failed", { message: error instanceof Error ? error.message : String(error) });
+          });
+        }
+      } finally {
+        applying = false;
       }
     },
     /** Persisting failed: keep the browser stopped rather than run with unknown settings. */
     async failSafe(): Promise<void> {
       deps.logger.error("browser_settings_apply_failed");
-      deps.bridge.stop();
-      await deps.controller.applySettings({ enabled: false, autoOpenOnToolUse: false, evaluateEnabled: false });
+      try {
+        deps.bridge.stop();
+        await deps.controller.applySettings({ enabled: false, autoOpenOnToolUse: false, evaluateEnabled: false });
+      } finally {
+        applying = false;
+      }
     }
   };
 }
