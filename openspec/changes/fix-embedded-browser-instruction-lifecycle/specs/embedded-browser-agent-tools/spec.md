@@ -32,12 +32,14 @@ lilto は、最後に伝えた状態を Codex Home と実際の Codex thread ID 
 - **THEN** 次の通常ターンで現在状態のフル文面を再送する
 
 ### Requirement: 履歴の圧縮を跨いで状態を保証する
-Codex が会話履歴を圧縮すると状態項目が入力から失われるため、managed run は `contextCompaction` の開始通知を受けた時点で `turn/interrupt` により継続前に止め、当該スレッドを状態不明に戻さなければならない（SHALL）。圧縮を観測したターンを確定にしてはならない（SHALL NOT）。次の通常ターンでフル文面を再送しなければならない（SHALL）。
+Codex が会話履歴を圧縮すると状態項目が入力から失われる。managed run は `contextCompaction` の開始通知を受けた時点で、その圧縮が有効な状態を失わせる場合（ターン途中の圧縮、または更新を送らないターンの圧縮）に `turn/interrupt` で継続前に止め、当該スレッドを状態不明に戻さなければならない（SHALL）。当該ターンの user message より前の圧縮で、そのターンが更新を送る場合は、更新が圧縮後の入力に入るため止めなくてよい。圧縮を観測したターンを確定にしてはならない（SHALL NOT）。次の通常ターンでフル文面を再送しなければならない（SHALL）。
+
+停止は圧縮を破棄し、同じスレッドが再び圧縮を要求し続け得るため、停止した直後の再試行ターンは停止してはならない（SHALL NOT）。
 
 #### Scenario: 圧縮の検知
 - **WHEN** 実行中のターンで圧縮が始まる
-- **THEN** 圧縮後のモデル要求より前にターンを止め、再送信を促すエラーを表示する
-- **AND** 次のターンで状態のフル文面を送る
+- **THEN** 圧縮後のモデル要求より前にターンを止め、再送信を促すエラーを表示し、入力欄に送信内容を戻す
+- **AND** 再送信したターンで状態のフル文面を送り、再度停止しない
 
 ### Requirement: 対象外 run と capability 発行不能時の扱い
 heartbeat・freshContext・実効 ephemeral・内部 service（`lilto-background`）・会話 ID なしの run は、指示を送らず状態を記録してはならない（SHALL NOT）。永続的な通常会話を継続する scheduler follow-up は通常会話と同じ扱いとする。ブラウザ設定が ON なのに capability を発行できない場合（bridge 停止・発行失敗・設定適用中）は、OFF とみなしてはならず（SHALL NOT）、ターン・OFF の打消し・状態の記録をせず run を失敗させなければならない（SHALL）。
