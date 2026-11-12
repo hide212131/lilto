@@ -474,7 +474,13 @@ export async function createCodexThreadFromAppServer(options: {
 
       let turnResult: { turn?: { id?: string | null } };
       let runConfig: CodexConfig | undefined;
+      const claimThread = (threadId: string) => {
+        releaseThread = store!.tryAcquireThread(instructionNamespace, threadId);
+        if (!releaseThread) throw new Error("このスレッドは別の実行で使用中です。完了してから再送信してください。");
+      };
       try {
+        // A known thread is claimed before anything touches it (resume included); a new one right after thread/start.
+        if (browserRun && store && activeThreadId) claimThread(activeThreadId);
         await client.start();
 
         // Compaction drops lilto's browser state from the model input. React the moment the notification is parsed
@@ -482,21 +488,15 @@ export async function createCodexThreadFromAppServer(options: {
         if (browserRun && store) {
           stopListening = client.onNotification((message) => {
             const compaction = readCompactionItem(message.method, message.params);
-            if (!compaction || compaction.item.threadId !== activeThreadId) return;
+            if (!compaction || compaction.phase !== "started" || compaction.item.threadId !== activeThreadId) return;
             compactionSeen = true;
-            const streak = store.getCompactionInterrupts(instructionNamespace, compaction.item.threadId);
-            if (interruptedForCompaction) return;
-            // Stopping at the START discards that compaction; if the thread is still oversized the next turn would
-            // compact (and stop) again forever. After one such stop, wait until the compaction is committed.
-            if (compaction.phase === "started" && streak === 0) {
-              interruptedForCompaction = true;
-              store.setCompactionInterrupts(instructionNamespace, compaction.item.threadId, 1);
-              interruptTurn(compaction.item.turnId);
-            } else if (compaction.phase === "completed") {
-              interruptedForCompaction = true;
-              store.setCompactionInterrupts(instructionNamespace, compaction.item.threadId, 0);
-              interruptTurn(compaction.item.turnId);
-            }
+            // Stopping at the START discards that compaction, and the thread's token estimate only refreshes after a
+            // normal model response. So a second stop on the same still-oversized thread would loop forever: after one
+            // stop, the retry turn lets the compaction run (it still sends the update and is never confirmed).
+            if (interruptedForCompaction || store.getCompactionInterrupts(instructionNamespace, compaction.item.threadId) > 0) return;
+            interruptedForCompaction = true;
+            store.setCompactionInterrupts(instructionNamespace, compaction.item.threadId, 1);
+            interruptTurn(compaction.item.turnId);
           });
         }
 
@@ -529,8 +529,7 @@ export async function createCodexThreadFromAppServer(options: {
         }
 
         if (browserRun && store) {
-          releaseThread = store.tryAcquireThread(instructionNamespace, activeThreadId);
-          if (!releaseThread) throw new Error("このスレッドは別の実行で使用中です。完了してから再送信してください。");
+          if (!releaseThread) claimThread(activeThreadId);
           // Persisted before the turn is issued; a failure here means no turn at all.
           attempt = await store.begin(instructionNamespace, activeThreadId, browserRun.update.state);
         }
@@ -589,7 +588,7 @@ export async function createCodexThreadFromAppServer(options: {
               const turn = params.turn && typeof params.turn === "object" ? params.turn as Record<string, unknown> : {};
               const status = typeof turn.status === "string" ? turn.status : "failed";
               if (attempt && store) {
-                if (!compactionSeen) store.setCompactionInterrupts(instructionNamespace, activeThreadId!, 0);
+                if (!interruptedForCompaction) store.setCompactionInterrupts(instructionNamespace, activeThreadId!, 0);
                 if (status === "completed" && !compactionSeen && !runOptions?.signal?.aborted) {
                   attemptSettled = true;
                   await store.confirm(attempt);

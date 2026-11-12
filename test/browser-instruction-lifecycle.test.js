@@ -270,19 +270,23 @@ test("a turn that straddles a compaction is never confirmed, even if it complete
   } finally { server.restore(); }
 });
 
-test("repeated compaction stops: after one stop at START the next waits for the compaction to be committed (no endless loop)", async () => {
-  const server = fakeServer((i) => (i === 0 ? {} : { hold: true, notifications: i === 1 ? [compactionStarted] : [compactionStarted, compactionCompleted] }));
+test("repeated compaction: only the first turn is stopped; the retry lets it run, is never confirmed, and recovers after one more update", async () => {
+  const server = fakeServer((i) => (i === 1 ? { hold: true, notifications: [compactionStarted] } : i === 2 ? { notifications: [compactionStarted, compactionCompleted] } : {}));
   try {
     const store = openStore(tmpFile());
     const thread = await open(store, "t");
-    await run(thread, ctxFor(OFF));
-    const first = await run(thread, ctxFor(OFF));
+    await run(thread, ctxFor(OFF)); // 0: confirmed
+    const first = await run(thread, ctxFor(OFF)); // 1: compaction starts -> stopped (this discards the compaction)
     assert.equal(first.at(-1).error?.message, BROWSER_COMPACTION_STOP_MESSAGE);
     assert.equal(store.getCompactionInterrupts(NS, "t"), 1);
-    const second = await run(thread, ctxFor(OFF)); // compaction started + completed: stop only after it is committed
-    assert.equal(second.at(-1).error?.message, BROWSER_COMPACTION_STOP_MESSAGE);
-    assert.equal(store.getCompactionInterrupts(NS, "t"), 0);
-    assert.equal(store.peek(NS, "t").status, "unknown");
+    const retry = await run(thread, ctxFor(OFF)); // 2: compaction again: NOT stopped (would loop), completes
+    assert.equal(retry.some((e) => e.type === "turn.failed" || e.type === "error"), false);
+    assert.equal(server.log.interrupts.length, 1, "no second interrupt");
+    assert.equal(store.peek(NS, "t").status, "unknown", "a turn that saw a compaction is never confirmed");
+    assert.equal(store.getCompactionInterrupts(NS, "t"), 0, "streak ends with the uninterrupted retry");
+    await run(thread, ctxFor(OFF)); // 3: re-sent, confirmed
+    await run(thread, ctxFor(OFF)); // 4: nothing to send
+    assert.deepEqual(sentTurns(server), [true, false, true, true, false]);
   } finally { server.restore(); }
 });
 
