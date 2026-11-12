@@ -18,6 +18,7 @@
     "verify:dist": "node scripts/verify-dist-artifacts.js",
     "verify:release": "node scripts/verify-release-artifacts.js",
     "verify:embedded-browser": "npm run build && electron scripts/verify-embedded-browser.js",
+    "verify:instruction-lifecycle": "node scripts/verify-instruction-lifecycle.js",
     "verify:app-server-mcp": "npm run build && electron scripts/verify-app-server-mcp.js",
     "live-ui:manual": "node scripts/live-ui-manual-verification.js",
     "test:unit": "npm run build:unit && node scripts/run-unit-tests.js",

@@ -74,6 +74,7 @@ function fakeServer(script = {}) {
 }
 
 const compactionStarted = { method: "item/started", params: { item: { type: "contextCompaction", id: "c1" } } };
+const userMessageStarted = { method: "item/started", params: { item: { type: "userMessage", id: "u1" } } };
 const compactionCompleted = { method: "item/completed", params: { item: { type: "contextCompaction", id: "c1" } } };
 
 async function run(thread, browserRun, signal) {
@@ -287,6 +288,29 @@ test("repeated compaction: only the first turn is stopped; the retry lets it run
     await run(thread, ctxFor(OFF)); // 3: re-sent, confirmed
     await run(thread, ctxFor(OFF)); // 4: nothing to send
     assert.deepEqual(sentTurns(server), [true, false, true, true, false]);
+  } finally { server.restore(); }
+});
+
+test("compaction before this turn's own user message does not stop a turn that carries the update; the same compaction after it does", async () => {
+  const server = fakeServer((i) => (i === 0
+    ? { notifications: [compactionStarted, compactionCompleted] } // pre-turn, update being sent (unknown thread)
+    : i === 1
+      ? { hold: true, notifications: [userMessageStarted, compactionStarted] } // mid-turn, no update (state would be lost)
+      : i === 2
+        ? { notifications: [userMessageStarted, compactionStarted, compactionCompleted] } // retry: update sent, but mid-turn and already stopped once
+        : {}));
+  try {
+    const store = openStore(tmpFile());
+    const thread = await open(store, "t");
+    const first = await run(thread, ctxFor(OFF));
+    assert.equal(first.some((e) => e.type === "turn.failed"), false, "pre-turn + update: not stopped");
+    assert.equal(server.log.interrupts.length, 0);
+    assert.equal(store.peek(NS, "t").status, "unknown", "still never confirmed across a compaction");
+    await run(thread, ctxFor(OFF)); // 1: update re-sent (unknown), confirmed? it carries a mid-turn compaction => stopped
+    assert.equal(server.log.interrupts.length, 1, "mid-turn compaction stops even a turn that carried the update");
+    const retry = await run(thread, ctxFor(OFF)); // 2: stopped once already: runs through
+    assert.equal(retry.some((e) => e.type === "turn.failed"), false);
+    assert.equal(server.log.interrupts.length, 1);
   } finally { server.restore(); }
 });
 

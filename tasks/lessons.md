@@ -1,5 +1,11 @@
 # Lessons
 
+## 2026-11-13 Verify interrupt timing with the server in a separate process, and never stop on every compaction
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| 圧縮開始で `turn/interrupt` して状態を再送する継続性対策（#43）を実装・検証した。 | 記録サーバーを検証対象の Electron main と同じプロセスに置くと、main を止めた時間がサーバーの時刻にも乗り、interrupt が間に合うかを測れない。また圧縮のたびに停止すると、圧縮が破棄された大きなスレッドで毎ターン同じ停止が繰り返される（トークン見積もりは通常応答でしか更新されない）。 | 遅延耐性の検証は、遅延を与える側と観測するサーバーを別プロセスにする。割り込み系の対策は「同じ状態で再試行しても進む」ことを実 App Server で確かめ、2 回目は停止しない。 |
+
 ## 2026-11-05 Expose manual update checks in the app menu
 
 | Change | Mistake/Context | Rule to repeat |

@@ -50,16 +50,54 @@ function stateItems(body) {
     .filter((i) => i.role === "developer" && i.text.includes(HEADER));
 }
 
-async function createLab({ autoCompact = false, label = "lab" } = {}) {
-  const { startRecorder, makeHome } = require("./compaction-probe-lib.js");
+/** Same surface as startRecorder()'s result, but the server lives in a child process (see recorder-process.js). */
+async function startRemoteRecorder() {
+  const { fork } = require("node:child_process");
+  const child = fork(path.join(__dirname, "recorder-process.js"), [], { env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" }, execPath: process.execPath });
+  const requests = [];
+  const waiters = new Map();
+  let ping = 0;
+  const port = await new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.on("message", (m) => {
+      if (m.type === "ready") resolve(m.port);
+      else if (m.type === "request") requests.push(m.rec);
+      else if (m.type === "pong") { waiters.get(m.id)?.(); waiters.delete(m.id); }
+    });
+  });
+  const values = {};
+  const state = new Proxy(values, { set(target, key, value) { target[key] = value; child.send({ cmd: "state", key, value }); return true; }, get: (target, key) => target[key] });
+  return {
+    requests, state, port,
+    /** Resolves once every request message sent before now has been mirrored into `requests`. */
+    sync: () => new Promise((resolve) => { const id = ++ping; waiters.set(id, resolve); child.send({ cmd: "ping", id }); }),
+    close: () => { try { child.send({ cmd: "close" }); } catch { /* gone */ } setTimeout(() => child.kill(), 500).unref(); }
+  };
+}
+
+/**
+ * options.live = { model, autoLimit }: a REAL model through a recording forwarding proxy (provider named "OpenAI" so the
+ * real compaction path applies). Copies only ~/.codex/auth.json into the isolated CODEX_HOME; dispose() removes it.
+ * options.extraPath: directories put before PATH for the App Server (e.g. a fake external browser CLI).
+ */
+async function createLab({ autoCompact = false, label = "lab", recorderProcess = false, live = null, extraPath = [] } = {}) {
+  const { startRecorder, startProxy, makeHome } = require("./compaction-probe-lib.js");
   const { CodexAppServerClient } = dist("main/codex-app-server-client.js");
   const { createCodexThreadFromAppServer } = dist("main/agent-sdk.js");
   const { BrowserInstructionStateStore, browserInstructionNamespace } = dist("main/browser-instruction-state-store.js");
   const sdkConfig = dist("main/agent-sdk-config.js");
 
   const timeline = [];
-  const recorder = await startRecorder(timeline);
-  const home = makeHome(recorder.port, autoCompact ? [`model_auto_compact_token_limit = ${AUTO_LIMIT}`] : []);
+  const recorder = live ? await startProxy(timeline) : recorderProcess ? await startRemoteRecorder() : await startRecorder(timeline);
+  let home;
+  if (live) {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), `lilto-${label}-codexhome-`));
+    fs.writeFileSync(path.join(home, "config.toml"), [`model = "${live.model}"`, 'model_provider = "probe"', ...(autoCompact ? [`model_auto_compact_token_limit = ${live.autoLimit ?? 17500}`] : []), "", "[model_providers.probe]", 'name = "OpenAI"', `base_url = "http://127.0.0.1:${recorder.port}/backend-api/codex"`, 'wire_api = "responses"', "supports_websockets = false", "requires_openai_auth = true"].join("\n") + "\n");
+    fs.copyFileSync(path.join(os.homedir(), ".codex", "auth.json"), path.join(home, "auth.json"));
+    fs.chmodSync(path.join(home, "auth.json"), 0o600);
+  } else {
+    home = makeHome(recorder.port, autoCompact ? [`model_auto_compact_token_limit = ${AUTO_LIMIT}`] : []);
+  }
   const ws = fs.mkdtempSync(path.join(os.tmpdir(), `lilto-${label}-ws-`));
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), `lilto-${label}-state-`));
   const stateFile = path.join(stateDir, "browser-instruction-state.json");
@@ -67,7 +105,7 @@ async function createLab({ autoCompact = false, label = "lab" } = {}) {
 
   // The product spawns `codex` from PATH when it is not packaged: put the bundled binary first.
   const previousPath = process.env.PATH;
-  process.env.PATH = `${BIN_DIR}${path.delimiter}${previousPath}`;
+  process.env.PATH = [...extraPath, BIN_DIR, previousPath].join(path.delimiter);
 
   // Observe the real client's RPC traffic without replacing it.
   const rpc = [];
@@ -92,12 +130,12 @@ async function createLab({ autoCompact = false, label = "lab" } = {}) {
     /** A fresh "app process": new store object over the same file and a new adapter factory. */
     newStore(io) { return new BrowserInstructionStateStore({ filePath: stateFile, io, logger: { info() {}, error() {} } }); },
     async openThread(store, threadId) {
-      return createCodexThreadFromAppServer({ apiKey: null, model: { id: "probe-model" }, cwd: ws, codexHomeDir: home, homeDir, threadId, instructionStore: store });
+      return createCodexThreadFromAppServer({ apiKey: null, model: { id: live ? live.model : "probe-model" }, cwd: ws, codexHomeDir: home, homeDir, threadId, instructionStore: store });
     },
     launchFor(update) {
       const stub = path.join(__dirname, "probe-stub-mcp.js");
       return update.state.browser === "on"
-        ? { command: process.execPath, args: [stub], env: { PROBE_STUB_TOOLS: update.state.evaluate ? "17" : "16", PROBE_PAGE_BASE: "" } }
+        ? { command: process.execPath, args: [stub], env: { PROBE_STUB_TOOLS: update.state.evaluate ? "17" : "16", PROBE_PAGE_BASE: lab.pageBase ?? "" } }
         : undefined;
     },
     ctx(update) { const launch = lab.launchFor(update); return { update, ...(launch ? { launch } : {}) }; },
@@ -120,6 +158,7 @@ async function createLab({ autoCompact = false, label = "lab" } = {}) {
           events.push(r.value);
         }
       } catch (error) { thrown = error; }
+      await recorder.sync?.();
       const reqs = recorder.requests.slice(reqBefore);
       const calls = rpc.slice(rpcBefore);
       const turnStart = calls.find((c) => c.method === "turn/start");
@@ -152,7 +191,8 @@ async function createLab({ autoCompact = false, label = "lab" } = {}) {
       for (const c of clients) { try { c.close(); } catch { /* */ } }
       recorder.close();
       process.env.PATH = previousPath;
-      for (const dir of [home, ws, stateDir, homeDir]) fs.rmSync(dir, { recursive: true, force: true });
+      await new Promise((r) => setTimeout(r, 150)); // let the killed App Server finish writing before its home goes away
+      for (const dir of [home, ws, stateDir, homeDir]) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
       for (const fn of cleanups) fn();
     }
   };

@@ -322,3 +322,34 @@ test("resolveBrowserMcpServerPath prefers the asar-unpacked copy, falls back to 
   const dev = path.join(root, "dev");
   assert.equal(resolveBrowserMcpServerPath({ appRoot: dev }), path.join(dev, "dist", "main", "browser-mcp-server.js"));
 });
+
+test("settings flow gate: no run starts between prepare and commit/failSafe; OFF->ON does not slip an OFF run through", async () => {
+  const controller = new EmbeddedBrowserController(new FakeHost(), { enabled: false, autoOpenOnToolUse: true });
+  controller.beginRendererEpoch();
+  const bridge = new BrowserBridgeServer(controller, silent);
+  cleanups.push(() => bridge.stop());
+  let flow;
+  const support = createBrowserRunSupport({ controller, bridge, serverPath: () => "/s.js", execPath: "/usr/bin/node", isSettingsChanging: () => flow.isApplying() });
+  flow = createBrowserSettingsFlow({ controller, bridge, stopAllRuns: async () => {}, syncSkillPolicy: () => {}, logger: silent });
+  const off = { enabled: false, autoOpenOnToolUse: true, evaluateEnabled: false };
+  const on = { enabled: true, autoOpenOnToolUse: true, evaluateEnabled: false };
+  assert.equal(support.resolve({ conversationId: "A", requestId: "r" }).kind, "off");
+  await flow.prepare(on, off);
+  assert.deepEqual(support.resolve({ conversationId: "A", requestId: "r" }), { kind: "unavailable", reason: "settings-changing" });
+  await flow.commit(on);
+  assert.equal(support.resolve({ conversationId: "A", requestId: "r" }).kind, "on");
+  await flow.prepare({ ...on, evaluateEnabled: true }, on);
+  assert.equal(flow.isApplying(), true);
+  await flow.failSafe();
+  assert.equal(flow.isApplying(), false, "failSafe releases the gate (browser stays OFF)");
+  assert.equal(support.resolve({ conversationId: "A", requestId: "r" }).kind, "off");
+});
+
+test("run support: ON with a stopped bridge is unavailable, never off; revision changes with permissions", async () => {
+  const { controller, bridge, support } = await makeBrowser(true);
+  const rev = support.policyRevision();
+  bridge.stop();
+  assert.deepEqual(support.resolve({ conversationId: "A", requestId: "r" }), { kind: "unavailable", reason: "issue-failed" });
+  await controller.applySettings({ enabled: true, autoOpenOnToolUse: true, evaluateEnabled: true });
+  assert.notEqual(support.policyRevision(), rev);
+});

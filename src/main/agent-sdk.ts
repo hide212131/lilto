@@ -330,7 +330,7 @@ function buildAppServerSandboxPolicy(options: {
 
 /** Shown when a turn was stopped because Codex compacted the history (which drops lilto's browser state). */
 export const BROWSER_COMPACTION_STOP_MESSAGE =
-  "会話履歴の自動圧縮が発生したため、ブラウザ指示を再適用するためにこのターンを停止しました。もう一度送信すると、次のターンで指示が再送されて続行できます。";
+  "会話履歴の自動圧縮が発生したため、ブラウザ指示を再適用するためにこのターンを停止しました。入力欄の内容をもう一度送信するか「続けて」と送ると、次のターンで指示が再送されて続行できます。";
 
 type CompactionItem = { threadId: string; turnId: string | null };
 
@@ -424,6 +424,7 @@ export async function createCodexThreadFromAppServer(options: {
       let attemptSettled = false;
       let releaseThread: (() => void) | null = null;
       let compactionSeen = false;
+      let userMessageSeen = false;
       let interruptedForCompaction = false;
       let stopListening: () => void = () => {};
       const textByItemId = new Map<string, string>();
@@ -487,9 +488,14 @@ export async function createCodexThreadFromAppServer(options: {
         // (not when the consumer pulls it) so the turn stops before it continues without the state.
         if (browserRun && store) {
           stopListening = client.onNotification((message) => {
+            const params = message.params as { threadId?: unknown; item?: { type?: unknown } } | null;
+            if (message.method === "item/started" && params?.item?.type === "userMessage" && params.threadId === activeThreadId) userMessageSeen = true;
             const compaction = readCompactionItem(message.method, message.params);
             if (!compaction || compaction.phase !== "started" || compaction.item.threadId !== activeThreadId) return;
             compactionSeen = true;
+            // A compaction that precedes this turn's own user message ("pre-turn") is followed by this turn's input,
+            // additionalContext included: an update sent with this turn survives it. Everything else loses the state.
+            if (!userMessageSeen && attempt?.sendUpdate) return;
             // Stopping at the START discards that compaction, and the thread's token estimate only refreshes after a
             // normal model response. So a second stop on the same still-oversized thread would loop forever: after one
             // stop, the retry turn lets the compaction run (it still sends the update and is never confirmed).
