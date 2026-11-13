@@ -160,14 +160,26 @@ class FakeWebContents extends EventEmitter {
    * Real Electron API; tests simulate "no frame presented" by setting `framePresents = false`.
    * Defaults to true, like a real desktop: production code starts this subscription after settleFrames
    * has already resolved and trusts the very first callback it delivers.
+   *
+   * `dirtyRectSequence`, if set, is an array of dirtyRect values (or a function returning one) delivered
+   * one per callback, each on its own setImmediate tick, to simulate a compositor that first redelivers a
+   * stale surface (empty dirtyRect) before presenting a fresh one. Defaults to `{}` (uninterpretable, so
+   * winfix7's gate passes it through unchanged — matching every test written before that gate existed).
    */
   beginFrameSubscription(onlyDirty, callback) {
     this.frameSubscriptionCallback = callback;
     if (this.framePresents === false) return;
-    setImmediate(() => {
+    const sequence = this.dirtyRectSequence || [{}];
+    let i = 0;
+    const deliverNext = () => {
       if (this.frameSubscriptionCallback !== callback) return;
-      callback(this.makeImage(), {});
-    });
+      if (i >= sequence.length) return;
+      const rect = sequence[i];
+      i += 1;
+      callback(this.makeImage(), typeof rect === "function" ? rect() : rect);
+      if (i < sequence.length) setImmediate(deliverNext);
+    };
+    setImmediate(deliverNext);
   }
   endFrameSubscription() {
     this.frameSubscriptionCallback = null;

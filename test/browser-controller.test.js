@@ -973,3 +973,55 @@ test("win32: a settleFrames failure surfaces as its own error, not a generic SCR
     assert.equal(result.error.code, "SCREENSHOT_UNAVAILABLE");
   });
 });
+
+/**
+ * winfix7 (Issue #42 W2 continued): CI's software compositor kept redelivering a stale, pre-existing
+ * surface to a fresh beginFrameSubscription instead of erroring. dirtyRect (the changed region Electron
+ * reports alongside each presented bitmap) distinguishes a repeat of the old surface (empty dirtyRect)
+ * from an actually-fresh frame (non-empty dirtyRect).
+ */
+test("win32: a frame with an empty dirtyRect is skipped in favor of the next, non-empty one", async () => {
+  const f = await acquired();
+  f.wc.pageHandlers.viewport = async () => ({ ok: true, width: 480, height: 700, readyState: "complete" });
+  f.wc.shot = { width: 111, height: 222, bytes: 10 };
+  f.wc.dirtyRectSequence = [
+    { x: 0, y: 0, width: 0, height: 0 },
+    { x: 0, y: 0, width: 0, height: 0 },
+    { x: 10, y: 10, width: 50, height: 50 }
+  ];
+  await withPlatform("win32", async () => {
+    const result = await f.controller.screenshot(f.a.handle, { leaseId: f.lease });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.result.width, 111, "the fresh (non-empty-dirtyRect) frame must be the one captured");
+  });
+});
+
+test("win32: only-ever-empty dirtyRects time out as SCREENSHOT_UNAVAILABLE, never a stale image", async () => {
+  const f = await acquired();
+  f.wc.pageHandlers.viewport = async () => ({ ok: true, width: 480, height: 700, readyState: "complete" });
+  f.wc.dirtyRectSequence = [
+    { x: 0, y: 0, width: 0, height: 0 },
+    { x: 0, y: 0, width: 0, height: 0 },
+    { x: 0, y: 0, width: 0, height: 0 }
+  ];
+  await withPlatform("win32", async () => {
+    const result = await f.controller.screenshot(f.a.handle, { leaseId: f.lease });
+    assert.equal(result.ok, false);
+    assert.equal(result.error.code, "SCREENSHOT_UNAVAILABLE", "repeated stale-surface deliveries must never be trusted");
+  });
+});
+
+test("win32: a callback with no dirtyRect (older Electron / minimal fakes) is still trusted on the first frame", async () => {
+  const f = await acquired();
+  f.wc.pageHandlers.viewport = async () => ({ ok: true, width: 480, height: 700, readyState: "complete" });
+  f.wc.shot = { width: 321, height: 654, bytes: 10 };
+  f.wc.beginFrameSubscription = function (onlyDirty, callback) {
+    this.frameSubscriptionCallback = callback;
+    setImmediate(() => callback(this.makeImage()));
+  };
+  await withPlatform("win32", async () => {
+    const result = await f.controller.screenshot(f.a.handle, { leaseId: f.lease });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.result.width, 321, "a missing dirtyRect must not be treated as empty");
+  });
+});
