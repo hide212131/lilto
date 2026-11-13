@@ -71,8 +71,27 @@ async function startRemoteRecorder() {
     requests, state, port,
     /** Resolves once every request message sent before now has been mirrored into `requests`. */
     sync: () => new Promise((resolve) => { const id = ++ping; waiters.set(id, resolve); child.send({ cmd: "ping", id }); }),
+    child,
     close: () => { try { child.send({ cmd: "close" }); } catch { /* gone */ } setTimeout(() => child.kill(), 500).unref(); }
   };
+}
+
+/** Resolves once `child` has exited; SIGKILLs it if it has not within `graceMs`, then waits (bounded) for the exit. */
+async function waitForExit(child, graceMs = 3000, killMs = 5000) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  const exited = new Promise((resolve) => child.once("exit", resolve));
+  const timer = (ms) => new Promise((resolve) => { setTimeout(resolve, ms).unref(); });
+  if (await Promise.race([exited.then(() => true), timer(graceMs)])) return;
+  try { child.kill("SIGKILL"); } catch { /* gone */ }
+  await Promise.race([exited, timer(killMs)]);
+}
+
+/** Best-effort removal of temp dirs: a leftover directory must never fail a scenario (cleanup is separate from the checks). */
+async function removeDirs(dirs) {
+  for (const dir of dirs) {
+    try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); }
+    catch (error) { console.warn(`WARN could not remove temp dir ${dir}: ${error?.code ?? error}`); }
+  }
 }
 
 /**
@@ -116,7 +135,14 @@ async function createLab({ autoCompact = false, label = "lab", recorderProcess =
     rpc.push({ t: Date.now(), method, params });
     return originalRequest.call(this, method, params, ...rest);
   };
-  CodexAppServerClient.prototype.start = function patched(...args) { clients.add(this); return originalStart.apply(this, args); };
+  const children = new Set(); // every App Server process ever started, even after the client dropped its reference
+  const trackChild = (client) => { if (client.child) children.add(client.child); };
+  CodexAppServerClient.prototype.start = function patched(...args) {
+    clients.add(this);
+    const result = originalStart.apply(this, args);
+    trackChild(this);
+    return Promise.resolve(result).then((value) => { trackChild(this); return value; }, (error) => { trackChild(this); throw error; });
+  };
 
   const cleanups = [];
   const lab = {
@@ -188,15 +214,16 @@ async function createLab({ autoCompact = false, label = "lab", recorderProcess =
     async dispose() {
       CodexAppServerClient.prototype.request = originalRequest;
       CodexAppServerClient.prototype.start = originalStart;
-      for (const c of clients) { try { c.close(); } catch { /* */ } }
+      for (const c of clients) { trackChild(c); try { c.close(); } catch { /* */ } }
       recorder.close();
       process.env.PATH = previousPath;
-      await new Promise((r) => setTimeout(r, 150)); // let the killed App Server finish writing before its home goes away
-      for (const dir of [home, ws, stateDir, homeDir]) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+      // Nothing may still hold the homes when they are removed (Windows EBUSY, App Server writes racing rmdir on macOS).
+      await Promise.all([...children, recorder.child].map((c) => waitForExit(c)));
+      await removeDirs([home, ws, stateDir, homeDir]);
       for (const fn of cleanups) fn();
     }
   };
   return lab;
 }
 
-module.exports = { createLab, stateItems, HEADER, AUTO_LIMIT, BIG_USAGE, BIN, codexVersion };
+module.exports = { createLab, removeDirs, waitForExit, stateItems, HEADER, AUTO_LIMIT, BIG_USAGE, BIN, codexVersion };

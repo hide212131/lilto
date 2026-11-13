@@ -14,7 +14,7 @@ const net = require("node:net");
 const { spawn } = require("node:child_process");
 const root = path.resolve(__dirname, "..");
 const { startRecorder } = require("./helpers/compaction-probe-lib.js");
-const { stateItems, BIN, AUTO_LIMIT, BIG_USAGE } = require("./helpers/instruction-lifecycle-lab.js");
+const { removeDirs, stateItems, BIN, AUTO_LIMIT, BIG_USAGE } = require("./helpers/instruction-lifecycle-lab.js");
 const { oldOnText } = require("./helpers/app-server-instruction-probe.js");
 const { CodexAppServerClient } = require(path.join(root, "dist/main/codex-app-server-client.js"));
 const { resolveBrowserInstructionUpdate } = require(path.join(root, "dist/main/agent-sdk-config.js"));
@@ -211,7 +211,7 @@ async function main() {
   } finally {
     await quit();
     recorder.close();
-    fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    await removeDirs([userData]);
   }
   const failed = results.filter((r) => !r.ok);
   fs.writeFileSync(path.join(outDir, "result.json"), JSON.stringify({ total: results.length, failed: failed.length, results, threadId }, null, 1));

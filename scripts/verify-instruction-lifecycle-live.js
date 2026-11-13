@@ -13,7 +13,7 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { createLab, stateItems } = require("./helpers/instruction-lifecycle-lab.js");
+const { createLab, stateItems, removeDirs } = require("./helpers/instruction-lifecycle-lab.js");
 const { startPage, installFakeExternalBrowser } = require("./helpers/app-server-instruction-probe-live.js");
 const { oldOnText, Probe, makeHome } = require("./helpers/app-server-instruction-probe.js");
 
@@ -120,7 +120,7 @@ async function rounds() {
     } catch (error) { check(`round ${round} threw`, false, String(error?.stack ?? error).slice(0, 600)); }
     finally {
       fs.writeFileSync(path.join(outDir, `rounds-${round}.json`), JSON.stringify({ model: MODEL, ...rr }, null, 1));
-      await lab.dispose(); page.server.close(); fs.rmSync(pre, { recursive: true, force: true });
+      await lab.dispose(); page.server.close(); await removeDirs([pre]);
     }
     out.push(rr);
   }
