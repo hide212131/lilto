@@ -1246,8 +1246,6 @@ export class EmbeddedBrowserController {
       if (!wc) throw new BrowserError("PAGE_CRASHED", "The page is not available");
       // Current frame only: wait for the page to paint, then capture while hidden-safe (design 7). No cached image,
       // no restore of the window. A page whose frames cannot be produced fails explicitly.
-      this.unwrap(await this.page("settleFrames", {}));
-      ctx.check();
       let image: ImageLike;
       if (process.platform === "win32" && wc.beginFrameSubscription) {
         // win32-only: a minimized window's compositor can silently stop presenting new frames, which makes
@@ -1255,11 +1253,15 @@ export class EmbeddedBrowserController {
         // capturePage() can even return a stale surface right after beginFrameSubscription confirms a fresh
         // one was presented, because the two draw from different pipelines. So on win32 we capture the exact
         // bitmap handed to the subscription callback instead of calling capturePage() at all; that bitmap is
-        // the presented frame, not a separate (possibly-stale) read of it.
-        const presented = await this.awaitFramePresented(wc, SCREENSHOT_CAPTURE_MS);
-        if (!presented) throw new BrowserError("SCREENSHOT_UNAVAILABLE", "No new frame was presented before the deadline");
-        image = presented;
+        // the presented frame, not a separate (possibly-stale) read of it. The subscription is started before
+        // settleFrames so it can see every frame the page produces; frames presented before settleFrames's
+        // double-rAF resolves are discarded as potentially predating this call's content, and the first frame
+        // presented after that point is trusted without waiting for a second one (a static page may never
+        // produce one within the deadline).
+        image = await this.awaitFramePresentedAfterSettle(wc, SCREENSHOT_CAPTURE_MS);
       } else {
+        this.unwrap(await this.page("settleFrames", {}));
+        ctx.check();
         image = await this.capturePageWithTimeout(wc, SCREENSHOT_CAPTURE_MS);
       }
       ctx.check();
@@ -1282,19 +1284,29 @@ export class EmbeddedBrowserController {
   }
 
   /**
-   * Resolves with the bitmap of the second frame `wc` presents, or `undefined` if that doesn't happen within
-   * `timeoutMs` (win32 freshness gate). The first callback is skipped: it may carry a frame that was already
-   * in flight before the subscription started and can predate the content this call is trying to capture; the
-   * second is guaranteed to have been composited after we started listening.
+   * win32 freshness gate (Issue #42 W2). Starts the frame subscription *before* settleFrames so that no frame
+   * is missed, then trusts the first frame presented *after* settleFrames resolves (a page's two settle rAFs
+   * run on the main thread and resolve the promise via microtask before the resulting compositor frame is
+   * actually composited and delivered to this callback, so "presented after resolve" and "reflects
+   * settleFrames's content" coincide). Frames that arrive before settleFrames resolves are discarded: they may
+   * have been queued before this call started and can predate the content being captured. Waiting for a
+   * *second* post-settle frame was tried and dropped — a static page can legitimately produce exactly one
+   * frame and never a second within the deadline, which turned every such screenshot into a false
+   * SCREENSHOT_UNAVAILABLE. Rejects with SCREENSHOT_UNAVAILABLE if no qualifying frame arrives within
+   * `timeoutMs`, or with settleFrames's own error if that call fails.
    */
-  private awaitFramePresented(wc: WebContentsLike, timeoutMs: number): Promise<ImageLike | undefined> {
+  private awaitFramePresentedAfterSettle(wc: WebContentsLike, timeoutMs: number): Promise<ImageLike> {
     const begin = wc.beginFrameSubscription;
-    if (!begin) return Promise.resolve(undefined);
-    return new Promise((resolve) => {
+    if (!begin) {
+      return this.page("settleFrames", {}).then(() => {
+        throw new BrowserError("SCREENSHOT_UNAVAILABLE", "No new frame was presented before the deadline");
+      });
+    }
+    return new Promise<ImageLike>((resolve, reject) => {
       let settled = false;
-      let frames = 0;
-      const finish = (image: ImageLike | undefined) => {
-        if (settled) return;
+      let settleResolved = false;
+      const unavailable = () => new BrowserError("SCREENSHOT_UNAVAILABLE", "No new frame was presented before the deadline");
+      const cleanup = () => {
         settled = true;
         clearTimeout(timer);
         try {
@@ -1302,17 +1314,37 @@ export class EmbeddedBrowserController {
         } catch {
           /* subscription may already be gone with the page */
         }
+      };
+      const finishResolve = (image: ImageLike) => {
+        if (settled) return;
+        cleanup();
         resolve(image);
       };
-      const timer = setTimeout(() => finish(undefined), timeoutMs);
+      const finishReject = (err: unknown) => {
+        if (settled) return;
+        cleanup();
+        reject(err);
+      };
+      const timer = setTimeout(() => finishReject(unavailable()), timeoutMs);
       try {
         begin.call(wc, false, (image) => {
-          frames += 1;
-          if (frames >= 2) finish(image);
+          if (settleResolved) finishResolve(image);
         });
       } catch {
-        finish(undefined);
+        finishReject(unavailable());
+        return;
       }
+      this.page("settleFrames", {}).then(
+        (result) => {
+          try {
+            this.unwrap(result);
+            settleResolved = true;
+          } catch (err) {
+            finishReject(err);
+          }
+        },
+        (err) => finishReject(err)
+      );
     });
   }
 
