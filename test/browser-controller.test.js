@@ -935,3 +935,44 @@ test("non-win32 platforms are unaffected by the frame-presentation gate (no beha
     assert.equal(result.ok, true, JSON.stringify(result), "darwin/linux never wait on beginFrameSubscription");
   });
 });
+
+test("win32: a frame presented before settleFrames resolves is discarded; the next one is used", async () => {
+  const f = await acquired();
+  f.wc.pageHandlers.viewport = async () => ({ ok: true, width: 480, height: 700, readyState: "complete" });
+  const staleImage = {
+    getSize: () => ({ width: 999, height: 999 }),
+    resize: ({ width, height }) => ({ ...staleImage, getSize: () => ({ width, height }) }),
+    toPNG: () => Buffer.alloc(10, 1)
+  };
+  let resolveSettle;
+  f.wc.pageHandlers.settleFrames = () => new Promise((resolve) => { resolveSettle = resolve; });
+  f.wc.beginFrameSubscription = function (onlyDirty, callback) {
+    this.frameSubscriptionCallback = callback;
+    // A frame queued before settleFrames resolves: production code must not mistake this for fresh content.
+    callback(staleImage, {});
+    setImmediate(() => {
+      resolveSettle({ ok: true });
+      setImmediate(() => {
+        if (this.frameSubscriptionCallback !== callback) return;
+        callback(this.makeImage(), {});
+      });
+    });
+  };
+  await withPlatform("win32", async () => {
+    const result = await f.controller.screenshot(f.a.handle, { leaseId: f.lease });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.notEqual(result.result.width, 999, "the pre-settle frame must be discarded, not captured");
+  });
+});
+
+test("win32: a settleFrames failure surfaces as its own error, not a generic SCREENSHOT_UNAVAILABLE timeout", async () => {
+  const f = await acquired();
+  f.wc.pageHandlers.viewport = async () => ({ ok: true, width: 480, height: 700, readyState: "complete" });
+  f.wc.pageHandlers.settleFrames = async () => ({ ok: false, code: "SCREENSHOT_UNAVAILABLE", message: "The page is not producing frames" });
+  f.wc.framePresents = false;
+  await withPlatform("win32", async () => {
+    const result = await f.controller.screenshot(f.a.handle, { leaseId: f.lease });
+    assert.equal(result.ok, false);
+    assert.equal(result.error.code, "SCREENSHOT_UNAVAILABLE");
+  });
+});

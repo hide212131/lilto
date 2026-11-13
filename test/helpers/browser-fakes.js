@@ -158,8 +158,9 @@ class FakeWebContents extends EventEmitter {
   }
   /**
    * Real Electron API; tests simulate "no frame presented" by setting `framePresents = false`.
-   * Defaults to true, like a real desktop: production code waits for the *second* callback (to skip
-   * an in-flight frame queued before the subscription started), so this delivers two frames.
+   * Defaults to true, like a real desktop: production code trusts the first callback delivered after
+   * settleFrames resolves, so one presented frame (on a macrotask, after settleFrames's microtask) is
+   * enough for a successful screenshot.
    */
   beginFrameSubscription(onlyDirty, callback) {
     this.frameSubscriptionCallback = callback;
@@ -167,10 +168,6 @@ class FakeWebContents extends EventEmitter {
     setImmediate(() => {
       if (this.frameSubscriptionCallback !== callback) return;
       callback(this.makeImage(), {});
-      setImmediate(() => {
-        if (this.frameSubscriptionCallback !== callback) return;
-        callback(this.makeImage(), {});
-      });
     });
   }
   endFrameSubscription() {
