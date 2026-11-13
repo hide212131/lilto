@@ -691,6 +691,26 @@ test("minimized with a collapsed content size and no prior real measurement fall
   assert.deepEqual(f.host.views[0].bounds, { x: 0, y: 0, width: f.host.normalContent.width, height: f.host.normalContent.height });
 });
 
+test("a true first-time minimize (nothing ever read the host content size before it) still falls back to normal bounds once primeChromeOffset ran at attach time (Issue #42 W3)", async () => {
+  const f = setup();
+  // Simulates attachControllerToWindow()'s eager call: the window exists and is not minimized yet,
+  // but no tool has ever acquired/measured anything (the true cold-start repro).
+  f.controller.primeChromeOffset();
+  f.host.minimize();
+  const result = await f.controller.acquire(f.issue("A").handle, { url: URL1, timeoutMs: 300 });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(f.host.views[0].bounds, { x: 0, y: 0, width: f.host.normalContent.width, height: f.host.normalContent.height });
+});
+
+test("primeChromeOffset alone does not request a relayout or publish a new state", async () => {
+  const f = setup();
+  const before = f.controller.getState();
+  f.controller.primeChromeOffset();
+  const after = f.controller.getState();
+  assert.equal(after.revision, before.revision, "priming the chrome offset must not itself publish a state change");
+  assert.equal(after.layoutRevision, before.layoutRevision);
+});
+
 test("minimized with no content size and no prior measurement: still PANEL_NOT_READY (no fallback possible)", async () => {
   const f = setup();
   f.host.minimize();

@@ -189,6 +189,24 @@ test("host window state is one consistent read and background throttling follows
   assert.deepEqual(mod.createElectronBrowserHost(() => null).getWindowState(), { present: false, visible: false, minimized: false, focused: false });
 });
 
+test("getNormalContentSize derives a content estimate from getNormalBounds using an offset measured earlier while not minimized (Issue #42 W3)", () => {
+  const { mod } = loadWithFakeElectron();
+  let minimized = false;
+  const window = {
+    isDestroyed: () => false,
+    isMinimized: () => minimized,
+    getContentBounds: () => (minimized ? { width: 0, height: 0 } : { width: 1000, height: 700 }),
+    getBounds: () => (minimized ? { width: 0, height: 0 } : { width: 1016, height: 739 }),
+    getNormalBounds: () => ({ width: 1016, height: 739 })
+  };
+  const host = mod.createElectronBrowserHost(() => window);
+  assert.equal(host.getNormalContentSize(), null, "no offset measured yet");
+  assert.deepEqual(host.getContentSize(), { width: 1000, height: 700 }, "measures while not minimized (caches the chrome offset as a side effect)");
+  minimized = true;
+  assert.deepEqual(host.getContentSize(), { width: 0, height: 0 }, "collapses while minimized, as observed on Windows");
+  assert.deepEqual(host.getNormalContentSize(), { width: 1000, height: 700 }, "still derivable from getNormalBounds() minus the cached offset");
+});
+
 test("powerMonitor lock/suspend events reach the controller and are removed on cleanup", () => {
   const { mod, power } = loadWithFakeElectron();
   const events = [];
