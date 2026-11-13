@@ -697,6 +697,9 @@ test("a true first-time minimize (nothing ever read the host content size before
   // but no tool has ever acquired/measured anything (the true cold-start repro).
   f.controller.primeChromeOffset();
   f.host.minimize();
+  // Observed on Windows: the host's own content size also collapses while minimized, so only the
+  // chrome-offset-derived normal-bounds fallback (not the plain host-content-area fallback) can succeed.
+  f.host.collapseContentWhenMinimized = true;
   const result = await f.controller.acquire(f.issue("A").handle, { url: URL1, timeoutMs: 300 });
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.deepEqual(f.host.views[0].bounds, { x: 0, y: 0, width: f.host.normalContent.width, height: f.host.normalContent.height });
