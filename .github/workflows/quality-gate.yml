@@ -139,6 +139,7 @@ jobs:
   minimized-browser-operations:
     name: Minimized browser operations (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -175,33 +176,41 @@ jobs:
       # Facts only (input landing, capture freshness, timers/rAF while minimized); never fails the job.
       - name: Probe minimized-window behavior
         continue-on-error: true
+        timeout-minutes: 5
         run: npm.cmd run probe:minimized-browser
         if: runner.os == 'Windows'
 
       - name: Probe minimized-window behavior
         continue-on-error: true
+        timeout-minutes: 5
         run: npm run probe:minimized-browser
         if: runner.os != 'Windows'
 
+      # LILTO_VERIFY_WATCHDOG_MS: the script's own watchdog force-exits well before this step timeout,
+      # so a hang is reported with the last check reached instead of being cut off blind by the runner.
       - name: Verify minimized operations on a real Electron (Windows)
         run: npm.cmd run verify:minimized-browser
         env:
           LILTO_MIN_SOAK_MS: "60000"
+        timeout-minutes: 12
         if: runner.os == 'Windows'
 
       - name: Verify minimized operations on a real Electron
         run: npm run verify:minimized-browser
         env:
           LILTO_MIN_SOAK_MS: "60000"
+        timeout-minutes: 12
         if: runner.os != 'Windows'
 
       # Real Lit renderer + real Main: opening the panel while minimized and restoring (native BrowserWindow.minimize()).
       - name: Verify minimized panel on the real UI (Windows)
         run: npm.cmd run verify:minimized-ui
+        timeout-minutes: 5
         if: runner.os == 'Windows'
 
       - name: Verify minimized panel on the real UI
         run: npm run verify:minimized-ui
+        timeout-minutes: 5
         if: runner.os != 'Windows'
 
       - name: Upload minimized-window evidence
