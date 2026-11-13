@@ -70,6 +70,12 @@ export interface BrowserHost {
   attachView(view: ViewLike): void;
   detachView(view: ViewLike): void;
   getContentSize(): { width: number; height: number };
+  /**
+   * A content-size estimate derived from the window's normal (restored) bounds, for use only when
+   * `getContentSize()` has collapsed (observed on Windows while minimized). Null when no real,
+   * non-minimized measurement has ever been taken to derive the window chrome offset from.
+   */
+  getNormalContentSize(): { width: number; height: number } | null;
   getZoomFactor(): number;
   /** One consistent read of the host window: operation permission never depends on OS focus. */
   getWindowState(): BrowserWindowState;
@@ -279,10 +285,17 @@ export class EmbeddedBrowserController {
 
   updateViewport(update: BrowserViewportUpdate): boolean {
     if (!this.gate.accept(update)) return false;
-    // A minimized window may report a collapsed host viewport: adopt the panel state, keep the last valid surface.
-    const collapsed = update.viewport.width <= 0 || update.viewport.height <= 0 || update.hostViewport.width <= 0 || update.hostViewport.height <= 0;
-    if (collapsed && update.panelOpen && this.lastBounds !== null && this.host.getWindowState().minimized) {
+    const content = this.host.getContentSize();
+    // A minimized window may report a collapsed viewport, and on Windows the host's own content size
+    // can also collapse to zero while minimized: either way, adopt the panel state but keep the last
+    // known-good surface instead of destroying it with an unusable measurement.
+    const collapsed =
+      update.viewport.width <= 0 || update.viewport.height <= 0 || update.hostViewport.width <= 0 || update.hostViewport.height <= 0 ||
+      content.width <= 0 || content.height <= 0;
+    const knownGood = this.lastBounds ?? this.savedBounds;
+    if (collapsed && update.panelOpen && knownGood !== null && this.host.getWindowState().minimized) {
       this.adoptPresentation({ open: update.panelOpen, occluded: update.occluded, resizing: update.resizing }, { measured: true });
+      this.lastBounds = knownGood;
       this.applyView();
       this.publish();
       return true;
@@ -290,7 +303,6 @@ export class EmbeddedBrowserController {
     this.adoptPresentation({ open: update.panelOpen, occluded: update.occluded, resizing: update.resizing }, { measured: true });
     // Only a measurement taken against the current layoutRevision satisfies a pending relayout.
     if (update.layoutRevision >= this.layoutRevision) this.needsRelayout = false;
-    const content = this.host.getContentSize();
     const zoom = this.host.getZoomFactor();
     const clamped = {
       x: update.viewport.x,
@@ -794,7 +806,15 @@ export class EmbeddedBrowserController {
     let fallback = this.lastBounds ?? this.savedBounds;
     if (!fallback) {
       const content = this.host.getContentSize();
-      if (content.width > 0 && content.height > 0) fallback = { x: 0, y: 0, width: content.width, height: content.height };
+      if (content.width > 0 && content.height > 0) {
+        fallback = { x: 0, y: 0, width: content.width, height: content.height };
+      } else {
+        // Windows can report a collapsed content size while minimized even on the very first
+        // measurement, with no prior real bounds to fall back to; the window's own measured normal
+        // (restored) bounds are still real geometry, not a guess.
+        const normal = this.host.getNormalContentSize();
+        if (normal && normal.width > 0 && normal.height > 0) fallback = { x: 0, y: 0, width: normal.width, height: normal.height };
+      }
     }
     if (!fallback) return false;
     this.lastBounds = fallback;

@@ -20,6 +20,9 @@ function hardenSession(): Electron.Session {
 }
 
 export function createElectronBrowserHost(getWindow: () => BrowserWindow | null): BrowserHost {
+  // Captured only while not minimized, where getContentBounds()/getBounds() are both trustworthy;
+  // reused to turn getNormalBounds() (reliable even while minimized) into a content-size estimate.
+  let chromeOffset: { width: number; height: number } | null = null;
   return {
     createView(): ViewLike {
       hardenSession();
@@ -45,8 +48,20 @@ export function createElectronBrowserHost(getWindow: () => BrowserWindow | null)
       getWindow()?.contentView.removeChildView(view as unknown as WebContentsView);
     },
     getContentSize() {
-      const bounds = getWindow()?.getContentBounds();
-      return { width: bounds?.width ?? 0, height: bounds?.height ?? 0 };
+      const window = getWindow();
+      if (!window || window.isDestroyed()) return { width: 0, height: 0 };
+      const bounds = window.getContentBounds();
+      if (!window.isMinimized() && bounds.width > 0 && bounds.height > 0) {
+        const outer = window.getBounds();
+        chromeOffset = { width: Math.max(0, outer.width - bounds.width), height: Math.max(0, outer.height - bounds.height) };
+      }
+      return { width: bounds.width, height: bounds.height };
+    },
+    getNormalContentSize() {
+      const window = getWindow();
+      if (!window || window.isDestroyed() || !chromeOffset) return null;
+      const normal = window.getNormalBounds();
+      return { width: normal.width - chromeOffset.width, height: normal.height - chromeOffset.height };
     },
     getZoomFactor() {
       return getWindow()?.webContents.getZoomFactor() ?? 1;
