@@ -17,8 +17,12 @@ function setup(settings = { enabled: true, autoOpenOnToolUse: true }) {
 
 /** Make the view visible as soon as it exists (simulates the renderer answering an auto-open). */
 function autoRenderer(controller) {
+  // One answer per layout request or panel-open request (like the real renderer): a blocked environment must not loop forever.
+  let prev = { requested: false, layoutRevision: -1, epoch: "" };
   return controller.onState((state) => {
-    if (state.panelRequested && !state.panelVisible) setImmediate(() => presentPanel(controller));
+    const asked = (state.panelRequested && !prev.requested) || state.layoutRevision !== prev.layoutRevision || state.rendererEpoch !== prev.epoch;
+    prev = { requested: state.panelRequested, layoutRevision: state.layoutRevision, epoch: state.rendererEpoch };
+    if (state.panelRequested && !state.operationReady && asked) setImmediate(() => presentPanel(controller));
   });
 }
 
@@ -48,7 +52,7 @@ test("autoOpenOnToolUse OFF: acquire fails with PANEL_CLOSED and leaves no lease
   assert.equal(controller.getState().panelRequested, false);
 });
 
-test("hidden/minimized window rejects acquire and does not operate in the background", async () => {
+test("an explicitly hidden window rejects acquire and does not operate in the background", async () => {
   const { controller, issue, host } = setup();
   host.windowVisible = false;
   const result = await controller.acquire(issue("A").handle, { url: URL1 });
@@ -251,7 +255,7 @@ test("unplanned user mouse/keyboard input during an agent lease is blocked and t
   assert.equal((await controller.getText(a.handle, { leaseId: lease })).error.code, "USER_INTERRUPTED");
 });
 
-test("input needs window focus (WINDOW_NOT_FOCUSED) and sends nothing", async () => {
+test("input is delivered while the window is unfocused (OS focus is not an operation condition)", async () => {
   const { controller, issue, host } = setup();
   autoRenderer(controller);
   const a = issue("A");
@@ -261,8 +265,8 @@ test("input needs window focus (WINDOW_NOT_FOCUSED) and sends nothing", async ()
   const snapshotId = await takeSnapshot(controller, a.handle, lease, wc);
   host.windowFocused = false;
   const result = await controller.click(a.handle, { leaseId: lease, snapshotId, ref: "r" });
-  assert.equal(result.error.code, "WINDOW_NOT_FOCUSED");
-  assert.equal(wc.inputs.length, 0);
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.ok(wc.inputs.some((e) => e.type === "mouseDown"));
 });
 
 test("fill uses insertText (no per-key events) and verifies the resulting value; mismatch reports applied effect", async () => {
@@ -525,4 +529,262 @@ test("closing via a viewport message (racing the presentation message) still exp
   autoRenderer(controller);
   const fresh = issue("A");
   assert.equal((await controller.acquire(fresh.handle, { url: URL1 })).ok, true);
+});
+
+/* ---- Issue #42: minimized / unfocused / covered windows keep working ---- */
+
+async function acquired(settings) {
+  const f = setup(settings);
+  autoRenderer(f.controller);
+  const a = f.issue("A");
+  const result = await f.controller.acquire(a.handle, { url: URL1 });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  const wc = f.host.views[0].webContents;
+  wc.pageHandlers.getText = async () => ({ ok: true, text: "t", truncated: false });
+  return { ...f, a, lease: result.result.leaseId, wc };
+}
+
+test("minimize keeps the lease, the native view and the layout; panelVisible=false while operationReady=true", async () => {
+  const f = await acquired();
+  const before = f.controller.ownership.snapshotEpochs();
+  f.host.minimize();
+  f.controller.onWindowMinimized();
+  const state = f.controller.getState();
+  assert.equal(state.panelVisible, false);
+  assert.equal(state.operationReady, true);
+  assert.equal(state.windowMinimized, true);
+  assert.equal(f.host.views[0].visible, true, "the native view stays displayed (the parent window is minimized)");
+  assert.deepEqual(f.controller.ownership.snapshotEpochs(), before, "no epoch changes");
+  assert.equal(f.controller.ownership.getOwner().kind, "agent");
+  const snap = await takeSnapshot(f.controller, f.a.handle, f.lease, f.wc);
+  assert.ok(snap);
+  const text = await f.controller.getText(f.a.handle, { leaseId: f.lease });
+  assert.equal(text.ok, true, JSON.stringify(text));
+  assert.equal(text.state.panelVisible, false);
+  assert.equal(text.state.operationReady, true);
+  assert.equal(f.controller.status().result.available, true);
+  assert.equal(f.controller.status().result.blockedReason, null);
+  assert.equal(f.controller.status().result.operationReady, true);
+});
+
+test("minimized: click, fill, press, navigate and screenshot all work and send input without any focus", async () => {
+  const f = await acquired();
+  f.host.minimize(); f.host.windowFocused = false;
+  f.controller.onWindowMinimized();
+  f.wc.pageHandlers.prepareClick = async () => ({ ok: true, x: 3, y: 4 });
+  f.wc.pageHandlers.prepareFill = async () => ({ ok: true, empty: true });
+  f.wc.pageHandlers.verifyFill = async () => ({ ok: true, matches: true, focused: true });
+  f.wc.pageHandlers.prepareFocus = async () => ({ ok: true });
+  f.wc.pageHandlers.viewport = async () => ({ ok: true, width: 480, height: 700, readyState: "complete" });
+  const snapshotId = await takeSnapshot(f.controller, f.a.handle, f.lease, f.wc);
+  assert.equal((await f.controller.click(f.a.handle, { leaseId: f.lease, snapshotId, ref: "r" })).ok, true);
+  assert.equal((await f.controller.fill(f.a.handle, { leaseId: f.lease, snapshotId, ref: "r", text: "こんにちは" })).ok, true);
+  assert.equal((await f.controller.press(f.a.handle, { leaseId: f.lease, snapshotId, ref: "r", key: "Enter" })).ok, true);
+  assert.ok(f.wc.inputs.some((e) => e.type === "mouseDown") && f.wc.inputs.some((e) => e.type === "insertText") && f.wc.inputs.some((e) => e.type === "keyDown"));
+  const nav = await f.controller.navigate(f.a.handle, { leaseId: f.lease, url: "https://example.com/b" });
+  assert.equal(nav.ok, true, JSON.stringify(nav));
+  assert.equal(nav.state.panelVisible, false);
+  const shot = await f.controller.screenshot(f.a.handle, { leaseId: f.lease });
+  assert.equal(shot.ok, true, JSON.stringify(shot));
+  assert.deepEqual(f.wc.captureOptions, { stayHidden: true }, "capture the current surface without restoring the window");
+  assert.ok(f.wc.calls.indexOf("page:settleFrames") >= 0 && f.wc.calls.indexOf("page:settleFrames") < f.wc.calls.length, "frames settle before capture");
+});
+
+test("minimized: another run still gets BROWSER_BUSY; restore keeps the same lease and the view", async () => {
+  const f = await acquired();
+  f.host.minimize();
+  f.controller.onWindowMinimized();
+  const busy = await f.controller.acquire(f.issue("B").handle, { url: URL1 });
+  assert.equal(busy.error.code, "BROWSER_BUSY");
+  f.host.restore();
+  f.controller.onWindowRestored();
+  assert.equal(f.controller.getState().panelVisible, true);
+  assert.equal((await f.controller.getText(f.a.handle, { leaseId: f.lease })).ok, true);
+  assert.equal(f.controller.ownership.getOwner().kind, "agent");
+});
+
+test("restore with a changed window size re-measures: operations pause until the new layout arrives", async () => {
+  const f = await acquired();
+  f.host.minimize();
+  f.controller.onWindowMinimized();
+  f.host.content = { width: 900, height: 700 };
+  f.host.restore();
+  f.controller.onWindowRestored();
+  assert.equal(f.controller.getState().operationReady, false);
+  assert.equal(f.host.views[0].visible, false);
+  presentPanel(f.controller);
+  assert.equal(f.controller.getState().operationReady, true);
+});
+
+test("a resize event while minimized (platform shrink) does not discard the prepared surface", async () => {
+  const f = await acquired();
+  f.host.minimize();
+  f.controller.onWindowMinimized();
+  const revision = f.controller.getState().layoutRevision;
+  f.controller.onWindowGeometryChanged();
+  assert.equal(f.controller.getState().layoutRevision, revision);
+  assert.equal(f.controller.getState().operationReady, true);
+});
+
+test("a collapsed viewport reported by a minimized window does not overwrite the valid surface", async () => {
+  const f = await acquired();
+  f.host.minimize();
+  f.controller.onWindowMinimized();
+  const bounds = { ...f.host.views[0].bounds };
+  presentPanel(f.controller, { viewport: { x: 0, y: 0, width: 0, height: 0 }, hostViewport: { width: 0, height: 0 } });
+  assert.deepEqual(f.host.views[0].bounds, bounds);
+  assert.equal(f.controller.getState().operationReady, true);
+});
+
+test("minimized: first acquire auto-opens the panel logically and prepares an operable surface without restoring", async () => {
+  const f = setup();
+  f.host.minimize();
+  autoRenderer(f.controller);
+  const result = await f.controller.acquire(f.issue("A").handle, { url: URL1 });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.state.panelVisible, false);
+  assert.equal(result.state.operationReady, true);
+  assert.equal(f.host.windowMinimized, true, "the controller never restores the window");
+  assert.equal(f.controller.getState().panelRequested, true);
+});
+
+test("minimized with autoOpen OFF and the panel closed: PANEL_CLOSED, nothing delivered", async () => {
+  const f = setup({ enabled: true, autoOpenOnToolUse: false });
+  f.host.minimize();
+  const result = await f.controller.acquire(f.issue("A").handle, { url: URL1 });
+  assert.equal(result.error.code, "PANEL_CLOSED");
+  assert.equal(f.host.views.some((v) => v.webContents.calls.some((c) => c.startsWith("loadURL"))), false, "nothing was loaded");
+});
+
+test("minimized and the renderer never reports a layout: PANEL_NOT_READY with effect none (no guessed coordinates)", async () => {
+  const f = setup();
+  f.host.minimize();
+  const result = await f.controller.acquire(f.issue("A").handle, { url: URL1, timeoutMs: 300 });
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "PANEL_NOT_READY");
+  assert.equal(result.error.effect, "none");
+  assert.equal(f.controller.ownership.getOwner().kind, "none");
+});
+
+test("unfocused and covered windows are operable (focus and occlusion by other apps are not conditions)", async () => {
+  const f = await acquired();
+  f.host.windowFocused = false;
+  assert.equal((await f.controller.getText(f.a.handle, { leaseId: f.lease })).ok, true);
+  assert.equal(f.controller.getState().panelVisible, true);
+});
+
+test("explicit hide expires the lease and refuses operations; show never revives the old lease", async () => {
+  const f = await acquired();
+  f.host.windowVisible = false;
+  f.controller.onWindowHidden();
+  assert.equal(f.controller.ownership.getOwner().kind, "none");
+  assert.equal(f.controller.getState().operationReady, false);
+  const refused = await f.controller.getText(f.a.handle, { leaseId: f.lease });
+  assert.equal(refused.error.code, "BROWSER_UNAVAILABLE");
+  assert.equal(refused.error.effect, "none");
+  assert.equal(f.controller.status().result.available, false);
+  assert.match(refused.error.message, /explicitly hidden/);
+  f.host.windowVisible = true;
+  f.controller.onWindowShown();
+  presentPanel(f.controller);
+  assert.equal((await f.controller.getText(f.a.handle, { leaseId: f.lease })).ok, false, "the old lease stays dead");
+  assert.equal((await f.controller.release(f.a.handle, { leaseId: f.lease })).ok, false);
+});
+
+test("explicit hide while minimized still ends the lease", async () => {
+  const f = await acquired();
+  f.host.minimize();
+  f.controller.onWindowMinimized();
+  f.controller.onWindowHidden();
+  assert.equal(f.controller.ownership.getOwner().kind, "none");
+  assert.equal((await f.controller.getText(f.a.handle, { leaseId: f.lease })).error.code, "BROWSER_UNAVAILABLE");
+});
+
+test("hide mid-operation stops delivery and keeps the effect (not retryable once a side effect is possible)", async () => {
+  const f = await acquired();
+  f.wc.pageHandlers.prepareFill = async () => { f.controller.onWindowHidden(); return { ok: true, empty: true }; };
+  f.wc.pageHandlers.verifyFill = async () => ({ ok: true, matches: true, focused: true });
+  const snapshotId = await takeSnapshot(f.controller, f.a.handle, f.lease, f.wc);
+  const result = await f.controller.fill(f.a.handle, { leaseId: f.lease, snapshotId, ref: "r", text: "x" });
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "BROWSER_UNAVAILABLE");
+  assert.equal(f.wc.inputs.length, 0, "nothing was delivered after the gate closed");
+});
+
+test("screen lock and suspend refuse with SYSTEM_* and end the lease; resume never revives it", async () => {
+  const f = await acquired();
+  f.controller.onSystemLocked();
+  assert.equal(f.controller.ownership.getOwner().kind, "none");
+  assert.equal((await f.controller.getText(f.a.handle, { leaseId: f.lease })).error.code, "SYSTEM_LOCKED");
+  assert.equal((await f.controller.acquire(f.issue("B").handle, { url: URL1 })).error.code, "SYSTEM_LOCKED");
+  assert.equal(f.controller.status().result.blockedReason, "SYSTEM_LOCKED");
+  f.controller.onSystemSuspend();
+  assert.equal((await f.controller.acquire(f.issue("C").handle, { url: URL1 })).error.code, "SYSTEM_SUSPENDED");
+  f.controller.onSystemUnlocked();
+  assert.equal((await f.controller.acquire(f.issue("D").handle, { url: URL1 })).error.code, "SYSTEM_SUSPENDED");
+  f.controller.onSystemResume();
+  assert.notEqual((await f.controller.getText(f.a.handle, { leaseId: f.lease })).ok, true, "the old lease is not revived");
+  assert.equal(f.controller.status().result.blockedReason, null);
+});
+
+test("modal and resize keep refusing with PANEL_OCCLUDED even while minimized", async () => {
+  const f = await acquired();
+  f.host.minimize();
+  f.controller.onWindowMinimized();
+  f.controller.setPresentation({ open: true, occluded: true, resizing: false });
+  assert.equal(f.controller.getState().operationReady, false);
+  assert.equal((await f.controller.getText(f.a.handle, { leaseId: f.lease })).error.code, "PANEL_OCCLUDED");
+  assert.equal(f.controller.status().result.blockedReason, "PANEL_OCCLUDED");
+  assert.equal(f.controller.status().result.available, true);
+});
+
+test("release works while operations are blocked", async () => {
+  const f = await acquired();
+  f.controller.setPresentation({ open: true, occluded: true, resizing: false });
+  const released = await f.controller.release(f.a.handle, { leaseId: f.lease });
+  assert.equal(released.ok, true);
+  assert.equal(f.controller.ownership.getOwner().kind, "none");
+});
+
+test("background throttling is disabled on the page and the host only while an agent holds the browser, and restored after", async () => {
+  const f = await acquired();
+  assert.equal(f.wc.throttling, false);
+  assert.equal(f.host.hostThrottling, false);
+  await f.controller.release(f.a.handle, { leaseId: f.lease });
+  assert.equal(f.wc.throttling, true);
+  assert.equal(f.host.hostThrottling, true);
+  const g = await acquired();
+  assert.equal(g.host.hostThrottling, false);
+  g.controller.onWindowHidden();
+  assert.equal(g.host.hostThrottling, true, "hide ends the lease and restores throttling");
+  const h = await acquired();
+  h.controller.dispose();
+  assert.equal(h.host.hostThrottling, true, "dispose restores throttling");
+});
+
+test("a replacement view created during a lease also gets throttling disabled", async () => {
+  const f = await acquired();
+  await f.controller.release(f.a.handle, { leaseId: f.lease });
+  const b = f.issue("B");
+  const second = await f.controller.acquire(b.handle, { url: URL1 });
+  assert.equal(second.ok, true, JSON.stringify(second));
+  assert.equal(f.host.views.at(-1).webContents.throttling, false);
+});
+
+test("screenshot failures are explicit: capture error, empty image, no page frames, hung capture", async () => {
+  const f = await acquired();
+  f.wc.pageHandlers.viewport = async () => ({ ok: true, width: 480, height: 700, readyState: "complete" });
+  f.wc.captureError = "Current display surface not available for capture";
+  const failed = await f.controller.screenshot(f.a.handle, { leaseId: f.lease });
+  assert.equal(failed.error.code, "SCREENSHOT_UNAVAILABLE");
+  f.wc.captureError = null;
+  f.wc.shot = { width: 0, height: 0, bytes: 10 };
+  assert.equal((await f.controller.screenshot(f.a.handle, { leaseId: f.lease })).error.code, "SCREENSHOT_UNAVAILABLE");
+  f.wc.shot = null;
+  f.wc.pageHandlers.settleFrames = async () => ({ ok: false, code: "SCREENSHOT_UNAVAILABLE", message: "The page is not producing frames" });
+  assert.equal((await f.controller.screenshot(f.a.handle, { leaseId: f.lease })).error.code, "SCREENSHOT_UNAVAILABLE", "no frames: never a possibly stale image");
+  f.wc.pageHandlers.settleFrames = async () => ({ ok: true });
+  f.wc.capturePage = () => new Promise(() => {});
+  const hung = await f.controller.screenshot(f.a.handle, { leaseId: f.lease, timeoutMs: 20000 });
+  assert.equal(hung.error.code, "SCREENSHOT_UNAVAILABLE", "a capture that never answers is bounded");
 });

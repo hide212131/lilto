@@ -17,7 +17,7 @@ async function fixture() {
   const host = new FakeHost();
   const controller = new EmbeddedBrowserController(host, { enabled: true, autoOpenOnToolUse: true });
   controller.beginRendererEpoch();
-  controller.onState((s) => { if (s.panelRequested && !s.panelVisible) setImmediate(() => presentPanel(controller)); });
+  controller.onState((s) => { if (s.panelRequested && !s.operationReady) setImmediate(() => presentPanel(controller)); });
   const bridge = new BrowserBridgeServer(controller, silent);
   cleanups.push(() => bridge.stop());
   await bridge.start();

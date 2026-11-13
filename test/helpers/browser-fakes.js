@@ -72,7 +72,7 @@ class FakeWebContents extends EventEmitter {
     this.inputs = [];
     this.history = [];
     this.index = -1;
-    this.pageHandlers = {};
+    this.pageHandlers = { settleFrames: async () => ({ ok: true }) };
     this.loadBehavior = (url) => ({ url });
     this.windowOpenHandler = null;
     this.frameList = [];
@@ -139,7 +139,10 @@ class FakeWebContents extends EventEmitter {
   }
   sendInputEvent(event) { this.inputs.push(event); }
   async insertText(text) { this.inputs.push({ type: "insertText", text }); }
-  async capturePage() {
+  setBackgroundThrottling(allowed) { this.throttling = allowed; this.calls.push(`throttling:${allowed}`); }
+  async capturePage(rect, options) {
+    this.captureOptions = options ?? null;
+    if (this.captureError) throw new Error(this.captureError);
     const size = this.shot || { width: 2000, height: 1000, bytes: 1000 };
     const image = {
       getSize: () => ({ width: size.width, height: size.height }),
@@ -156,7 +159,10 @@ class FakeHost {
     this.views = [];
     this.attached = new Set();
     this.windowVisible = true;
+    this.windowMinimized = false;
+    this.windowPresent = true;
     this.windowFocused = true;
+    this.hostThrottling = true;
     this.external = [];
     this.cleared = 0;
     this.zoom = 1;
@@ -171,14 +177,18 @@ class FakeHost {
   detachView(view) { this.attached.delete(view); }
   getContentSize() { return this.content; }
   getZoomFactor() { return this.zoom; }
-  isWindowVisible() { return this.windowVisible; }
-  isWindowFocused() { return this.windowFocused; }
+  getWindowState() { return { present: this.windowPresent, visible: this.windowVisible && !this.windowMinimized, minimized: this.windowMinimized, focused: this.windowFocused }; }
+  setHostBackgroundThrottling(allowed) { this.hostThrottling = allowed; }
+  /** Like Electron: a minimized window is not "visible" on macOS but still shown logically. */
+  minimize() { this.windowMinimized = true; }
+  restore() { this.windowMinimized = false; }
   sendToRenderer(channel, payload) { this.sent.push({ channel, payload }); }
   openExternal(url) { this.external.push(url); }
   async clearSessionData() { this.cleared += 1; }
   focusHost() {}
 }
 
+/** Fakes must be able to express `panelVisible=false && operationReady=true` (a minimized, prepared panel). */
 /** Open the panel with a valid layout so the view becomes visible. */
 function presentPanel(controller, overrides = {}) {
   const epoch = controller.getState().rendererEpoch || controller.beginRendererEpoch();

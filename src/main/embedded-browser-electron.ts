@@ -1,4 +1,4 @@
-import { BrowserWindow, session, shell, WebContentsView } from "electron";
+import { BrowserWindow, powerMonitor, session, shell, WebContentsView } from "electron";
 
 import type { BrowserHost, EmbeddedBrowserController, ViewLike } from "./embedded-browser";
 
@@ -51,12 +51,14 @@ export function createElectronBrowserHost(getWindow: () => BrowserWindow | null)
     getZoomFactor() {
       return getWindow()?.webContents.getZoomFactor() ?? 1;
     },
-    isWindowVisible() {
+    getWindowState() {
       const window = getWindow();
-      return Boolean(window && !window.isDestroyed() && window.isVisible() && !window.isMinimized());
+      if (!window || window.isDestroyed()) return { present: false, visible: false, minimized: false, focused: false };
+      return { present: true, visible: window.isVisible(), minimized: window.isMinimized(), focused: window.isFocused() };
     },
-    isWindowFocused() {
-      return Boolean(getWindow()?.isFocused());
+    setHostBackgroundThrottling(allowed) {
+      const window = getWindow();
+      if (window && !window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.setBackgroundThrottling(allowed);
     },
     sendToRenderer(channel, payload) {
       const window = getWindow();
@@ -77,6 +79,15 @@ export function createElectronBrowserHost(getWindow: () => BrowserWindow | null)
   };
 }
 
+/**
+ * Explicit hide (close button => tray). Goes through the controller first so a hide always ends the lease,
+ * even when the hide event cannot be told apart from a minimize on some platform.
+ */
+export function hideWindowExplicitly(controller: EmbeddedBrowserController | null, window: BrowserWindow): void {
+  controller?.onWindowHidden();
+  window.hide();
+}
+
 /** Keep the controller in sync with the window (geometry, zoom, hide/minimize, renderer reloads). */
 export function attachControllerToWindow(controller: EmbeddedBrowserController, window: BrowserWindow): void {
   const relayout = () => controller.onWindowGeometryChanged();
@@ -85,13 +96,30 @@ export function attachControllerToWindow(controller: EmbeddedBrowserController, 
   window.on("unmaximize", relayout);
   window.on("enter-full-screen", relayout);
   window.on("leave-full-screen", relayout);
-  window.on("hide", () => controller.onWindowHidden());
-  window.on("minimize", () => controller.onWindowHidden());
+  // A minimize is not a hide: the lease, the view and the layout survive it (Issue #42).
+  window.on("hide", () => {
+    if (!window.isMinimized()) controller.onWindowHidden();
+  });
+  window.on("minimize", () => controller.onWindowMinimized());
   window.on("show", () => controller.onWindowShown());
-  window.on("restore", () => controller.onWindowShown());
+  window.on("restore", () => controller.onWindowRestored());
   window.webContents.on("did-start-navigation", (details) => {
     if (details.isMainFrame && !details.isSameDocument) controller.beginRendererEpoch();
   });
   window.webContents.on("zoom-changed", relayout);
   window.webContents.on("render-process-gone", () => controller.beginRendererEpoch());
+}
+
+/** Screen lock / suspend end operations and the lease (design 6.3). Returns the cleanup. */
+export function attachControllerToPowerMonitor(controller: EmbeddedBrowserController): () => void {
+  const handlers: Array<[string, () => void]> = [
+    ["lock-screen", () => controller.onSystemLocked()],
+    ["unlock-screen", () => controller.onSystemUnlocked()],
+    ["suspend", () => controller.onSystemSuspend()],
+    ["resume", () => controller.onSystemResume()]
+  ];
+  for (const [event, handler] of handlers) powerMonitor.on(event as "suspend", handler);
+  return () => {
+    for (const [event, handler] of handlers) powerMonitor.removeListener(event as "suspend", handler);
+  };
 }

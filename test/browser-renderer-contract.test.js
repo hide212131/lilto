@@ -49,6 +49,8 @@ function loadLayout() {
   const out = esbuild.buildSync({ entryPoints: [path.join(root, "src/renderer/browser-layout.ts")], bundle: true, format: "cjs", platform: "node", write: false });
   const store = new Map();
   const rafQueue = [];
+  const timers = new Map();
+  let timerId = 0;
   const listeners = new Map();
   const sandbox = {
     module: { exports: {} }, exports: {},
@@ -60,13 +62,32 @@ function loadLayout() {
     document: { documentElement: {} },
     ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
     requestAnimationFrame: (f) => { rafQueue.push(f); return rafQueue.length; },
-    cancelAnimationFrame: () => {}
+    cancelAnimationFrame: () => {},
+    setTimeout: (fn) => { timerId += 1; timers.set(timerId, fn); return timerId; },
+    clearTimeout: (id) => { timers.delete(id); }
   };
   sandbox.exports = sandbox.module.exports;
   vm.runInNewContext(out.outputFiles[0].text, sandbox);
   const runFrame = () => { const f = rafQueue.splice(0); f.forEach((fn) => fn()); };
-  return { mod: sandbox.module.exports, store, runFrame, window: sandbox.window, listeners };
+  /** Fire pending timers without running animation frames (a minimized window produces none). */
+  const runTimers = () => { const t = [...timers.values()]; timers.clear(); t.forEach((fn) => fn()); };
+  return { mod: sandbox.module.exports, store, runFrame, runTimers, window: sandbox.window, listeners };
 }
+
+test("BrowserLayoutSync still reports through its timer fallback when no animation frame runs (minimized window)", () => {
+  const { mod, runFrame, runTimers } = loadLayout();
+  const element = { getBoundingClientRect: () => ({ left: 700, top: 100, right: 1180, bottom: 780 }) };
+  const sent = [];
+  const sync = new mod.BrowserLayoutSync(() => element, () => ({ open: true, occluded: false, resizing: false }), (u) => sent.push(u));
+  sync.attach();
+  sync.setSync("e1", 1);
+  assert.equal(sent.length, 0);
+  runTimers();
+  assert.equal(sent.length, 1, "reported without any animation frame");
+  runFrame();
+  assert.equal(sent.length, 1, "the stale frame callback does not double-report");
+  sync.detach();
+});
 
 test("panel width persistence: default, clamp, stored preference, corrupt values", () => {
   const { mod, store } = loadLayout();

@@ -162,7 +162,7 @@ export class BrowserOwnership {
     }
   }
 
-  /** Close, hide, window hide/minimize, crash: expire the lease without giving it to the user. */
+  /** Close, explicit hide, screen lock/suspend, crash: expire the lease without giving it to the user. A minimize does not (Issue #42). */
   expireLease(options: { interrupted: boolean }): void {
     if (this.owner.kind !== "agent") return;
     if (options.interrupted) this.interruptAgentLease();

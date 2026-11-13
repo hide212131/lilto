@@ -9,6 +9,7 @@ function loadWithFakeElectron() {
   const handlers = new Map();
   const created = [];
   const sessionHandlers = {};
+  const power = new EventEmitter();
   const fakeSession = {
     setPermissionRequestHandler: (h) => (sessionHandlers.request = h),
     setPermissionCheckHandler: (h) => (sessionHandlers.check = h),
@@ -23,6 +24,7 @@ function loadWithFakeElectron() {
     ipcMain: { handle: (channel, fn) => handlers.set(channel, fn) },
     session: { fromPartition: (name) => { fakeSession.partition = name; return fakeSession; } },
     shell: { openExternal: () => {} },
+    powerMonitor: power,
     BrowserWindow: class {},
     WebContentsView: class {
       constructor(options) {
@@ -40,7 +42,7 @@ function loadWithFakeElectron() {
   delete require.cache[ipcModulePath];
   try {
     const mod = { ...require(modulePath), ...require(ipcModulePath) };
-    return { mod, handlers, created, sessionHandlers, fakeSession };
+    return { mod, handlers, created, sessionHandlers, fakeSession, power };
   } finally { Module._load = original; }
 }
 
@@ -126,19 +128,24 @@ test("window events drive the controller; the controller outlives the window 'cl
   const window = new EventEmitter();
   window.webContents = new EventEmitter();
   const events = [];
+  let minimized = false;
+  window.isMinimized = () => minimized;
   const controller = {
     onWindowGeometryChanged: () => events.push("geometry"), onWindowHidden: () => events.push("hidden"), onWindowShown: () => events.push("shown"),
+    onWindowMinimized: () => events.push("minimized"), onWindowRestored: () => events.push("restored"),
     beginRendererEpoch: () => events.push("epoch"), dispose: () => events.push("dispose")
   };
   mod.attachControllerToWindow(controller, window);
   for (const name of ["resize", "maximize", "unmaximize", "enter-full-screen", "leave-full-screen"]) window.emit(name);
-  window.emit("hide"); window.emit("minimize"); window.emit("show"); window.emit("restore");
+  window.emit("hide");
+  minimized = true; window.emit("minimize"); window.emit("hide"); // a hide event that is only a minimize side effect is ignored
+  minimized = false; window.emit("show"); window.emit("restore");
   window.webContents.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });
   window.webContents.emit("did-start-navigation", { isMainFrame: false, isSameDocument: false });
   window.webContents.emit("did-start-navigation", { isMainFrame: true, isSameDocument: true });
   window.webContents.emit("zoom-changed");
   window.emit("closed");
-  assert.deepEqual(events, ["geometry", "geometry", "geometry", "geometry", "geometry", "hidden", "hidden", "shown", "shown", "epoch", "geometry"]);
+  assert.deepEqual(events, ["geometry", "geometry", "geometry", "geometry", "geometry", "hidden", "minimized", "shown", "restored", "epoch", "geometry"]);
 });
 
 test("link navigation: http(s) links go to the controller, everything else is dropped; the host page never navigates", () => {
@@ -157,4 +164,38 @@ test("link navigation: http(s) links go to the controller, everything else is dr
   assert.deepEqual(openHandler({ url: "https://example.com/blank" }), { action: "deny" });
   assert.deepEqual(openHandler({ url: "data:text/html,x" }), { action: "deny" });
   assert.deepEqual(opened, ["https://example.com/a", "https://example.com/blank"]);
+});
+
+test("explicit hide goes through the controller first; minimize never expires anything", () => {
+  const { mod } = loadWithFakeElectron();
+  const calls = [];
+  const window = { hide: () => calls.push("window.hide") };
+  mod.hideWindowExplicitly({ onWindowHidden: () => calls.push("controller.hidden") }, window);
+  assert.deepEqual(calls, ["controller.hidden", "window.hide"]);
+  mod.hideWindowExplicitly(null, window);
+  assert.equal(calls.at(-1), "window.hide");
+});
+
+test("host window state is one consistent read and background throttling follows the host window", () => {
+  const { mod } = loadWithFakeElectron();
+  const throttling = [];
+  const window = { isDestroyed: () => false, isVisible: () => false, isMinimized: () => true, isFocused: () => false, webContents: { isDestroyed: () => false, setBackgroundThrottling: (v) => throttling.push(v) } };
+  const host = mod.createElectronBrowserHost(() => window);
+  assert.deepEqual(host.getWindowState(), { present: true, visible: false, minimized: true, focused: false });
+  host.setHostBackgroundThrottling(false);
+  host.setHostBackgroundThrottling(true);
+  assert.deepEqual(throttling, [false, true]);
+  assert.deepEqual(mod.createElectronBrowserHost(() => null).getWindowState(), { present: false, visible: false, minimized: false, focused: false });
+});
+
+test("powerMonitor lock/suspend events reach the controller and are removed on cleanup", () => {
+  const { mod, power } = loadWithFakeElectron();
+  const events = [];
+  const controller = { onSystemLocked: () => events.push("lock"), onSystemUnlocked: () => events.push("unlock"), onSystemSuspend: () => events.push("suspend"), onSystemResume: () => events.push("resume") };
+  const detach = mod.attachControllerToPowerMonitor(controller);
+  for (const name of ["lock-screen", "unlock-screen", "suspend", "resume"]) power.emit(name);
+  assert.deepEqual(events, ["lock", "unlock", "suspend", "resume"]);
+  detach();
+  power.emit("lock-screen");
+  assert.equal(events.length, 4);
 });

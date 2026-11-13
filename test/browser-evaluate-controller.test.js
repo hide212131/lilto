@@ -12,7 +12,7 @@ async function setup({ evaluateEnabled = true, conversation = "A" } = {}) {
   const controller = new EmbeddedBrowserController(host, { enabled: true, autoOpenOnToolUse: true, evaluateEnabled });
   controller.beginRendererEpoch();
   // Like the real renderer: it can only answer for a view that exists (an abandoned view has nothing to show).
-  controller.onState((state) => { if (state.panelRequested && !state.panelVisible && host.attached.size > 0) setImmediate(() => presentPanel(controller)); });
+  controller.onState((state) => { if (state.panelRequested && !state.operationReady && host.attached.size > 0 && host.rendererAnswers !== false) setImmediate(() => presentPanel(controller)); });
   const issue = (id) => {
     const ctx = controller.issueRun({ conversationId: id, requestId: `req-${id}`, policyRevision: 1 });
     const abort = new AbortController();
@@ -92,22 +92,40 @@ test("stale documentEpoch is STALE_DOCUMENT (effect none) and nothing is deliver
   assert.equal((await f.evaluate("return 2;")).ok, true, "the current epoch works");
 });
 
-test("gates: occluded panel, hidden window and lost focus refuse before delivery (effect none)", async () => {
+test("evaluate runs while the window is unfocused or minimized (panelVisible=false, operationReady=true)", async () => {
   const f = await setup();
   f.host.windowFocused = false;
   const unfocused = await f.evaluate("return 1;");
-  assert.equal(unfocused.error.code, "WINDOW_NOT_FOCUSED");
-  assert.equal(unfocused.error.effect, "none");
-  f.host.windowFocused = true;
+  assert.equal(unfocused.ok, true, JSON.stringify(unfocused));
+  f.host.minimize();
+  f.controller.onWindowMinimized();
+  const minimized = await f.evaluate("return 2;");
+  assert.equal(minimized.ok, true, JSON.stringify(minimized));
+  assert.equal(minimized.state.panelVisible, false);
+  assert.equal(minimized.state.operationReady, true);
+  assert.equal(minimized.state.windowMinimized, true);
+  f.host.restore();
+  f.controller.onWindowRestored();
+});
+
+test("gates: occluded panel, hidden window, screen lock refuse before delivery (effect none)", async () => {
+  const f = await setup();
   f.controller.setPresentation({ open: true, occluded: true, resizing: false });
   const occluded = await f.evaluate("return 1;");
   assert.equal(occluded.error.code, "PANEL_OCCLUDED");
   assert.equal(occluded.error.effect, "none");
   assert.equal(f.main.executed.length, 0);
   presentPanel(f.controller);
+  f.host.rendererAnswers = false; // a locked / hidden app has no renderer that answers layout requests
+  f.controller.onSystemLocked();
+  const locked = await f.evaluate("return 1;");
+  assert.equal(locked.error.code, "SYSTEM_LOCKED");
+  assert.equal(locked.error.effect, "none");
+  f.controller.onSystemUnlocked();
   f.controller.onWindowHidden();
   const hidden = await f.evaluate("return 1;");
-  assert.ok(["BROWSER_UNAVAILABLE", "LEASE_EXPIRED", "BROWSER_NOT_OWNED"].includes(hidden.error.code), hidden.error.code);
+  assert.equal(hidden.error.code, "BROWSER_UNAVAILABLE");
+  assert.equal(hidden.error.effect, "none");
   assert.equal(f.main.executed.length, 0);
 });
 

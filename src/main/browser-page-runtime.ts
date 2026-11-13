@@ -495,7 +495,24 @@ function installBrowserRuntime(): void {
     return { ok: true, width: window.innerWidth, height: window.innerHeight, readyState: document.readyState, nonce };
   }
 
-  g.__liltoBrowser = { snapshot, prepareClick, prepareFill, verifyFill, selectOptions, prepareFocus, scroll, getText, checkRef, hasText, viewport, nonce };
+  /**
+   * Resolves after two page frames. A page that produces none (e.g. a document loaded while the window is
+   * minimized is never painted) cannot be captured reliably: fail explicitly instead of risking a stale image.
+   */
+  function settleFrames(): any {
+    return new Promise((resolve) => {
+      let finished = false;
+      const finish = (settled: boolean) => {
+        if (finished) return;
+        finished = true;
+        resolve(settled ? { ok: true } : fail("SCREENSHOT_UNAVAILABLE", "The page is not producing frames, so a current screenshot cannot be guaranteed"));
+      };
+      setTimeout(() => finish(false), 3000);
+      requestAnimationFrame(() => requestAnimationFrame(() => finish(true)));
+    });
+  }
+
+  g.__liltoBrowser = { snapshot, prepareClick, prepareFill, verifyFill, selectOptions, prepareFocus, scroll, getText, checkRef, hasText, viewport, settleFrames, nonce };
 }
 
 /** Source for `executeJavaScriptInIsolatedWorld`: installs once, then calls a method. */
@@ -504,5 +521,5 @@ export function buildRuntimeCall(method: string, args: unknown): string {
   return `${install}\nglobalThis.__liltoBrowser[${JSON.stringify(method)}](${JSON.stringify(args ?? {})});`;
 }
 
-export const BROWSER_RUNTIME_METHODS = ["snapshot", "prepareClick", "prepareFill", "verifyFill", "selectOptions", "prepareFocus", "scroll", "getText", "checkRef", "hasText", "viewport"] as const;
+export const BROWSER_RUNTIME_METHODS = ["snapshot", "prepareClick", "prepareFill", "verifyFill", "selectOptions", "prepareFocus", "scroll", "getText", "checkRef", "hasText", "viewport", "settleFrames"] as const;
 export type BrowserRuntimeMethod = (typeof BROWSER_RUNTIME_METHODS)[number];
