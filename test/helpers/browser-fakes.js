@@ -151,6 +151,14 @@ class FakeWebContents extends EventEmitter {
     };
     return image;
   }
+  /** Real Electron API; tests simulate "no frame presented" by leaving `framePresents` false. */
+  beginFrameSubscription(onlyDirty, callback) {
+    this.frameSubscriptionCallback = callback;
+    if (this.framePresents) setImmediate(() => this.frameSubscriptionCallback === callback && callback({}, {}));
+  }
+  endFrameSubscription() {
+    this.frameSubscriptionCallback = null;
+  }
 }
 
 class FakeHost {

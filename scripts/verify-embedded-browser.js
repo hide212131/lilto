@@ -473,18 +473,22 @@ async function main() {
   const mTimeout = await controller.wait(m.handle, { leaseId: mLease, timeoutMs: 400, condition: { kind: "text", text: "出ない", present: true } });
   check("min: wait still times out normally", !mTimeout.ok && mTimeout.error.code === "TIMEOUT");
 
-  // Screenshot freshness: a generation marker changed while minimized must show up in the image.
+  // Screenshot freshness: a generation marker changed while minimized must show up in the image, or the
+  // call must fail explicitly (SCREENSHOT_UNAVAILABLE) — never a silently stale image (Issue #42 W2; on a
+  // platform whose compositor stops presenting frames while minimized, every generation reports UNAVAILABLE).
   let freshAll = true;
   const freshDetail = [];
   for (const gen of [11, 12, 13]) {
     await mWc().executeJavaScript(`window.setGen(${gen})`);
     const shot = await controller.screenshot(m.handle, { leaseId: mLease });
     const px = shot.ok ? shotPixel(shot) : null;
-    const ok = shot.ok && colorNear(px, genColor(gen)) && shot.result.width > 0 && Math.max(shot.result.width, shot.result.height) <= 1280 && Buffer.from(shot.result.imageBase64, "base64").length <= 1024 * 1024;
+    const ok = shot.ok
+      ? colorNear(px, genColor(gen)) && shot.result.width > 0 && Math.max(shot.result.width, shot.result.height) <= 1280 && Buffer.from(shot.result.imageBase64, "base64").length <= 1024 * 1024
+      : shot.error?.code === "SCREENSHOT_UNAVAILABLE";
     freshDetail.push({ gen, px, expected: genColor(gen), err: shot.error?.code });
     freshAll = freshAll && ok;
   }
-  check("min: screenshot shows the generation marker set while minimized (3 generations, size within limits)", freshAll && window.isMinimized(), JSON.stringify(freshDetail));
+  check("min: screenshot is current or explicitly unavailable while minimized, never stale (3 generations, size within limits)", freshAll && window.isMinimized(), JSON.stringify(freshDetail));
 
   // navigation keeps the minimize and updates URL / history / document epoch
   const docBefore = controller.ownership.epochs.documentEpoch;
@@ -583,7 +587,9 @@ async function main() {
   check(`min: host renderer rAF keeps running while minimized (${h1 - h0} frames)`, h1 - h0 > (SOAK_MS / 1000) * 20, JSON.stringify({ h0, h1 }));
   await mWc().executeJavaScript("window.setGen(77)");
   const soakShot = await controller.screenshot(s.handle, { leaseId: sLease });
-  check("min: after the soak the screenshot is still current and the lease is still valid", soakShot.ok && colorNear(shotPixel(soakShot), genColor(77)) && controller.ownership.getOwner().kind === "agent", JSON.stringify(soakShot).slice(0, 200));
+  // Fresh or explicitly unavailable, never stale (Issue #42 W2); the lease must survive either outcome.
+  const soakFresh = soakShot.ok ? colorNear(shotPixel(soakShot), genColor(77)) : soakShot.error?.code === "SCREENSHOT_UNAVAILABLE";
+  check("min: after the soak the screenshot is current or explicitly unavailable, never stale, and the lease is still valid", soakFresh && controller.ownership.getOwner().kind === "agent", JSON.stringify(soakShot).slice(0, 200));
 
   // modal while minimized
   blockPresent = true;

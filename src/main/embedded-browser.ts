@@ -38,6 +38,9 @@ export type WebContentsLike = EventEmitter & {
   capturePage(rect?: undefined, options?: { stayHidden?: boolean; stayAwake?: boolean }): Promise<ImageLike>;
   setBackgroundThrottling(allowed: boolean): void;
   setWindowOpenHandler(handler: (details: { url: string }) => { action: "deny" }): void;
+  /** Real Electron API; used only on win32 to confirm a frame was actually presented before trusting a capture. */
+  beginFrameSubscription?(onlyDirty: boolean, callback: (image: ImageLike, dirtyRect: unknown) => void): void;
+  endFrameSubscription?(): void;
 };
 
 export type ImageLike = {
@@ -1215,6 +1218,13 @@ export class EmbeddedBrowserController {
       // no restore of the window. A page whose frames cannot be produced fails explicitly.
       this.unwrap(await this.page("settleFrames", {}));
       ctx.check();
+      // win32-only: a minimized window's compositor can silently stop presenting new frames, which makes
+      // capturePage succeed with a stale image instead of erroring. Confirm at least one frame was actually
+      // presented after this point before trusting the capture; otherwise fail explicitly rather than risk stale data.
+      if (process.platform === "win32" && !(await this.awaitFramePresented(wc, SCREENSHOT_CAPTURE_MS))) {
+        throw new BrowserError("SCREENSHOT_UNAVAILABLE", "No new frame was presented before the deadline");
+      }
+      ctx.check();
       let image: ImageLike;
       try {
         let timer: NodeJS.Timeout | undefined;
@@ -1239,6 +1249,32 @@ export class EmbeddedBrowserController {
       if (png.byteLength > BROWSER_LIMITS.screenshotMaxBytes) throw new BrowserError("RESULT_TOO_LARGE", "The screenshot exceeds 1 MiB; scroll to a smaller region or use browser_get_text");
       const viewport = this.unwrap(await this.page<{ width: number; height: number }>("viewport", {}));
       return { mimeType: "image/png" as const, width: outWidth, height: outHeight, viewportWidth: viewport.width, viewportHeight: viewport.height, imageBase64: png.toString("base64") };
+    });
+  }
+
+  /** Resolves true once `wc` presents a frame, or false if none arrives within `timeoutMs` (win32 freshness gate). */
+  private awaitFramePresented(wc: WebContentsLike, timeoutMs: number): Promise<boolean> {
+    const begin = wc.beginFrameSubscription;
+    if (!begin) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (presented: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try {
+          wc.endFrameSubscription?.();
+        } catch {
+          /* subscription may already be gone with the page */
+        }
+        resolve(presented);
+      };
+      const timer = setTimeout(() => finish(false), timeoutMs);
+      try {
+        begin.call(wc, false, () => finish(true));
+      } catch {
+        finish(false);
+      }
     });
   }
 

@@ -837,3 +837,42 @@ test("screenshot failures are explicit: capture error, empty image, no page fram
   const hung = await f.controller.screenshot(f.a.handle, { leaseId: f.lease, timeoutMs: 20000 });
   assert.equal(hung.error.code, "SCREENSHOT_UNAVAILABLE", "a capture that never answers is bounded");
 });
+
+/**
+ * Issue #42 W2 (Windows): capturePage can succeed with a stale image when a minimized window's
+ * compositor stops presenting new frames. On win32 only, require a presented frame before trusting it.
+ */
+function withPlatform(value, fn) {
+  const original = Object.getOwnPropertyDescriptor(process, "platform");
+  Object.defineProperty(process, "platform", { value, configurable: true });
+  return fn().finally(() => Object.defineProperty(process, "platform", original));
+}
+
+test("win32: a capture with no presented frame is SCREENSHOT_UNAVAILABLE, never a stale image", async () => {
+  const f = await acquired();
+  f.wc.pageHandlers.viewport = async () => ({ ok: true, width: 480, height: 700, readyState: "complete" });
+  f.wc.framePresents = false;
+  await withPlatform("win32", async () => {
+    const result = await f.controller.screenshot(f.a.handle, { leaseId: f.lease, timeoutMs: 5000 });
+    assert.equal(result.ok, false);
+    assert.equal(result.error.code, "SCREENSHOT_UNAVAILABLE");
+  });
+});
+
+test("win32: a capture with a presented frame succeeds", async () => {
+  const f = await acquired();
+  f.wc.pageHandlers.viewport = async () => ({ ok: true, width: 480, height: 700, readyState: "complete" });
+  f.wc.framePresents = true;
+  await withPlatform("win32", async () => {
+    const result = await f.controller.screenshot(f.a.handle, { leaseId: f.lease });
+    assert.equal(result.ok, true, JSON.stringify(result));
+  });
+});
+
+test("non-win32 platforms are unaffected by the frame-presentation gate (no behavior change)", async () => {
+  const f = await acquired();
+  f.wc.pageHandlers.viewport = async () => ({ ok: true, width: 480, height: 700, readyState: "complete" });
+  f.wc.framePresents = false;
+  const result = await f.controller.screenshot(f.a.handle, { leaseId: f.lease });
+  assert.equal(result.ok, true, JSON.stringify(result), "darwin/linux never wait on beginFrameSubscription");
+});
