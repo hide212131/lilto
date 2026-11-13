@@ -159,7 +159,7 @@ test("Codex instructions: background operation is allowed, explicit refusals are
     const { text } = resolveBrowserInstructionUpdate({ enabled: true, evaluateEnabled });
     assert.match(text, /minimized, unfocused or covered/);
     assert.match(text, /panelVisible=false alone is no reason to stop/);
-    assert.match(text, /SYSTEM_LOCKED/);
+    assert.match(text, /SYSTEM_\*/);
     assert.doesNotMatch(text, /WINDOW_NOT_FOCUSED/);
     // Codex truncates a developer item above ~4000 chars (it cuts the middle): the wrapped state text must stay below that.
     assert.ok(text.length + 64 <= 4000, `state text is ${text.length} chars`);
