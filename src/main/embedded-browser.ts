@@ -39,9 +39,14 @@ export type WebContentsLike = EventEmitter & {
   setBackgroundThrottling(allowed: boolean): void;
   setWindowOpenHandler(handler: (details: { url: string }) => { action: "deny" }): void;
   /** Real Electron API; used only on win32 to confirm a frame was actually presented before trusting a capture. */
-  beginFrameSubscription?(onlyDirty: boolean, callback: (image: ImageLike, dirtyRect: unknown) => void): void;
+  beginFrameSubscription?(onlyDirty: boolean, callback: (image: ImageLike, dirtyRect: DirtyRectLike) => void): void;
   endFrameSubscription?(): void;
+  /** Real Electron API; used only on win32 to nudge the compositor into presenting a fresh frame after subscribing. */
+  invalidate?(): void;
 };
+
+/** Electron's Rectangle shape, as handed to beginFrameSubscription's callback. */
+export type DirtyRectLike = { x: number; y: number; width: number; height: number };
 
 export type ImageLike = {
   getSize(): { width: number; height: number };
@@ -96,6 +101,27 @@ type Waiter = { resolve: () => void; reject: (error: unknown) => void };
 const POLL_MS = 100;
 const AUTO_OPEN_WAIT_MS = 3000;
 const SCREENSHOT_CAPTURE_MS = 3000;
+
+/**
+ * winfix7: true only when a dirtyRect is present and interpretable (has numeric width/height) *and* reports
+ * no changed area. Anything uninterpretable (missing, not an object, non-numeric fields) is deliberately
+ * treated as "not empty" so a frame is never rejected just because the caller didn't model dirtyRect.
+ */
+function isDirtyRectEmpty(dirtyRect: DirtyRectLike | null | undefined): boolean {
+  if (!dirtyRect || typeof dirtyRect.width !== "number" || typeof dirtyRect.height !== "number") return false;
+  return dirtyRect.width <= 0 || dirtyRect.height <= 0;
+}
+
+/** winfix7 instrumentation: opt-in via LILTO_SCREENSHOT_DEBUG=1, silent otherwise, never affects behavior. */
+function logScreenshotDebug(image: ImageLike, dirtyRect: DirtyRectLike | null | undefined): void {
+  if (process.env.LILTO_SCREENSHOT_DEBUG !== "1") return;
+  try {
+    const size = image.getSize();
+    console.error(`[lilto screenshot debug] image=${size.width}x${size.height} dirtyRect=${JSON.stringify(dirtyRect ?? null)}`);
+  } catch {
+    /* diagnostics must never throw */
+  }
+}
 /** The window is closed to the tray or hidden by the user: the one visibility state that still refuses operations. */
 const WINDOW_HIDDEN_MESSAGE = "The Lilto window is explicitly hidden or unavailable";
 const KEY_CODES: Record<string, { keyCode: string; char?: string }> = {
@@ -1287,9 +1313,17 @@ export class EmbeddedBrowserController {
   }
 
   /**
-   * win32 freshness gate (Issue #42 W2). Called after settleFrames has already resolved; starts the frame
+   * win32 freshness gate (Issue #42 W2/W7). Called after settleFrames has already resolved; starts the frame
    * subscription and trusts the first bitmap handed to its callback as the presented frame, without calling
    * capturePage() at all. Rejects with SCREENSHOT_UNAVAILABLE if no frame arrives within `timeoutMs`.
+   *
+   * winfix7: on CI's software compositor a minimized window can keep delivering the *pre-existing* surface
+   * to a fresh subscription instead of erroring, so "the first frame handed to the callback" is not always
+   * fresh. Electron also reports which region of the frame actually changed via `dirtyRect`; a frame whose
+   * dirtyRect is empty (no changed pixels) is treated as a repeat of a stale surface and skipped in favor of
+   * the next callback, bounded by the same deadline. A dirtyRect that is missing or not in the expected shape
+   * (older Electron versions, or a test fake that only models the image) is *not* treated as empty — it is
+   * passed through unchanged, so real desktops and existing fakes keep today's behavior.
    */
   private awaitPresentedFrame(wc: WebContentsLike, timeoutMs: number): Promise<ImageLike> {
     const begin = wc.beginFrameSubscription;
@@ -1319,7 +1353,18 @@ export class EmbeddedBrowserController {
       };
       const timer = setTimeout(() => finishReject(new BrowserError("SCREENSHOT_UNAVAILABLE", "No new frame was presented before the deadline")), timeoutMs);
       try {
-        begin.call(wc, false, (image) => finishResolve(image));
+        begin.call(wc, false, (image, dirtyRect) => {
+          logScreenshotDebug(image, dirtyRect);
+          if (isDirtyRectEmpty(dirtyRect)) return;
+          finishResolve(image);
+        });
+        // winfix7: a best-effort nudge for the compositor to present a new frame now that the subscription
+        // is active; harmless if the real desktop already presents on its own (candidate A's primary path).
+        try {
+          wc.invalidate?.();
+        } catch {
+          /* optional API; a failure here must not affect the capture */
+        }
       } catch {
         finishReject(new BrowserError("SCREENSHOT_UNAVAILABLE", "No new frame was presented before the deadline"));
       }
