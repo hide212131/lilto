@@ -131,6 +131,80 @@ jobs:
           path: test/artifacts/instruction-lifecycle/result.json
           if-no-files-found: warn
 
+  # Issue #42: operations while the window is minimized / unfocused / covered, on a real Electron. Hosted runners
+  # have a desktop session on both OSes; the verification itself confirms a native minimize (event + isMinimized),
+  # so a runner that cannot minimize fails here instead of silently passing as a normal-visibility run.
+  # Lock / display-off / real taskbar or Dock interaction cannot be reproduced on hosted runners: those are
+  # covered by the manual live verification on an interactive machine (see the OpenSpec change tasks).
+  minimized-browser-operations:
+    name: Minimized browser operations (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-latest
+          - windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm.cmd ci
+        if: runner.os == 'Windows'
+
+      - name: Install npm dependencies
+        run: npm ci
+        if: runner.os != 'Windows'
+
+      - name: Download Electron runtime (Windows)
+        run: npx.cmd install-electron --no
+        if: runner.os == 'Windows'
+
+      - name: Download Electron runtime
+        run: npx install-electron --no
+        if: runner.os != 'Windows'
+
+      # Facts only (input landing, capture freshness, timers/rAF while minimized); never fails the job.
+      - name: Probe minimized-window behavior
+        continue-on-error: true
+        run: npm.cmd run probe:minimized-browser
+        if: runner.os == 'Windows'
+
+      - name: Probe minimized-window behavior
+        continue-on-error: true
+        run: npm run probe:minimized-browser
+        if: runner.os != 'Windows'
+
+      - name: Verify minimized operations on a real Electron (Windows)
+        run: npm.cmd run verify:minimized-browser
+        env:
+          LILTO_MIN_SOAK_MS: "60000"
+        if: runner.os == 'Windows'
+
+      - name: Verify minimized operations on a real Electron
+        run: npm run verify:minimized-browser
+        env:
+          LILTO_MIN_SOAK_MS: "60000"
+        if: runner.os != 'Windows'
+
+      - name: Upload minimized-window evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minimized-browser-${{ matrix.os }}
+          path: |
+            test/artifacts/probe-minimized-browser.json
+            test/artifacts/verify-embedded-browser.json
+          if-no-files-found: warn
+
   electron-e2e:
     name: Electron UI regression
     runs-on: macos-latest

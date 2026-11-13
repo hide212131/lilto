@@ -5,7 +5,7 @@
  *
  *   xvfb-run -a node_modules/.bin/electron --no-sandbox scripts/verify-app-server-mcp.js
  */
-const { app, BrowserWindow } = require("electron");
+const { app, BrowserWindow, nativeImage } = require("electron");
 const fs = require("node:fs");
 const http = require("node:http");
 const os = require("node:os");
@@ -15,7 +15,7 @@ const { execFileSync } = require("node:child_process");
 const root = path.resolve(__dirname, "..");
 const dist = (p) => require(path.join(root, "dist", p));
 const { EmbeddedBrowserController } = dist("main/embedded-browser.js");
-const { createElectronBrowserHost } = dist("main/embedded-browser-electron.js");
+const { createElectronBrowserHost, attachControllerToWindow } = dist("main/embedded-browser-electron.js");
 const { BrowserBridgeServer } = dist("main/browser-bridge.js");
 const { createBrowserRunSupport } = dist("main/browser-run-support.js");
 const { withBrowserMcpConfig } = dist("main/agent-sdk-config.js");
@@ -31,21 +31,24 @@ const [PACKAGE_DIR, TRIPLE] = TARGETS[`${process.platform}-${process.arch}`] ?? 
 const BIN = path.join(root, "node_modules/@openai", PACKAGE_DIR ?? "unsupported", "vendor", TRIPLE ?? "unsupported", "bin", "codex");
 
 async function main() {
-  const page = "<!doctype html><meta charset=utf-8><title>smoke</title><h1>スモーク</h1><button id=b onclick=\"document.getElementById('o').textContent='clicked'\">押す</button><p id=o></p>";
+  const page = "<!doctype html><meta charset=utf-8><title>smoke</title><h1>スモーク</h1><button id=b onclick=\"document.getElementById('o').textContent='clicked'\">押す</button><p id=o></p><input id=i aria-label=入力欄><div id=mark style='position:fixed;right:0;bottom:0;width:300px;height:300px;background:#000'></div><script>window.genColor=(n)=>[(n*37)%256,(n*91+40)%256,(n*53+100)%256];window.setGen=(n)=>{document.getElementById('mark').style.background='rgb('+window.genColor(n).join(',')+')';return n}</script>";
   const server = http.createServer((req, res) => { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); res.end(page); });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${server.address().port}/`;
 
   const window = new BrowserWindow({ width: 1100, height: 800, show: true });
   await window.loadURL("data:text/html,<body>host</body>");
-  window.focus();
-  // Input and evaluate are gated on window focus; on a desktop another app can take it at any moment.
-  const focusKeeper = setInterval(() => { if (!window.isDestroyed() && !window.isFocused()) { app.focus({ steal: true }); window.focus(); } }, 100);
+  // No focus keeper: operations must not depend on OS focus (Issue #42).
   const controller = new EmbeddedBrowserController(createElectronBrowserHost(() => window), { enabled: true, autoOpenOnToolUse: true });
+  attachControllerToWindow(controller, window);
   controller.beginRendererEpoch();
   let seq = 0;
+  // Like the real renderer: one answer per layout / panel-open request.
+  let prevAsk = { requested: false, layoutRevision: -1, epoch: "" };
   controller.onState((s) => {
-    if (s.panelRequested && !s.panelVisible) setImmediate(() => {
+    const asked = (s.panelRequested && !prevAsk.requested) || s.layoutRevision !== prevAsk.layoutRevision || s.rendererEpoch !== prevAsk.epoch;
+    prevAsk = { requested: s.panelRequested, layoutRevision: s.layoutRevision, epoch: s.rendererEpoch };
+    if (s.panelRequested && !s.operationReady && asked) setImmediate(() => {
       seq += 1;
       controller.updateViewport({ rendererEpoch: s.rendererEpoch, seq, layoutRevision: controller.getState().layoutRevision, viewport: { x: 500, y: 40, width: 580, height: 720 }, hostViewport: { width: 1100, height: 800 }, panelOpen: true, occluded: false, resizing: false });
     });
@@ -133,7 +136,6 @@ async function main() {
   check("evaluate ON: bundled App Server discovers 17 tools including browser_evaluate", toolsC.length === 17 && toolsC.includes("browser_evaluate"), JSON.stringify(toolsC));
   const instructions = leaseC.update.text ?? "";
   check("evaluate ON: state text carries the evaluate rules; the evaluate-OFF text says it is unavailable", /browser_evaluate/.test(instructions) && /browser_evaluate is disabled/.test(leaseA.update.text) && !/\[browser_evaluate\]/.test(leaseA.update.text));
-  window.focus();
   const cAcq = sc(await call(threadC, "browser_acquire", { url: base }));
   check("evaluate ON: acquire", cAcq.ok === true, JSON.stringify(cAcq));
   const cEval = sc(await call(threadC, "browser_evaluate", { leaseId: cAcq.result?.leaseId, documentEpoch: cAcq.state?.documentEpoch, script: "document.getElementById('b').click(); return { title: document.title, clicked: document.getElementById('o').textContent };" }));
@@ -141,6 +143,63 @@ async function main() {
   const cBad = await call(threadC, "browser_evaluate", { leaseId: cAcq.result?.leaseId, documentEpoch: cAcq.state?.documentEpoch, script: "return 1", extra: true }).then(() => null, (error) => error);
   check("evaluate ON: extra properties are rejected as invalid arguments (never reach Main)", cBad && /invalid arguments/.test(String(cBad.message)), String(cBad?.message));
   leaseC.end();
+
+  // --- Issue #42: the same App Server -> MCP -> bridge -> controller path while the window is minimized
+  const leaseD = support.resolve({ conversationId: "D", requestId: "rd" });
+  const threadD = await startThread(leaseD);
+  const leaseE = support.resolve({ conversationId: "E", requestId: "re" });
+  const threadE = await startThread(leaseE);
+  const dAcq = sc(await call(threadD, "browser_acquire", { url: base }));
+  await sleep(800); // paint on the visible window before minimizing
+  check("minimized: acquire on the visible window through App Server", dAcq.ok === true && dAcq.state.panelVisible === true && dAcq.state.operationReady === true, JSON.stringify(dAcq));
+  const dLease = dAcq.result?.leaseId;
+  const minimized = new Promise((resolve) => window.once("minimize", resolve));
+  window.minimize();
+  await Promise.race([minimized, sleep(3000)]);
+  for (let i = 0; i < 30 && !window.isMinimized(); i += 1) await sleep(100);
+  await sleep(500);
+  check("minimized: native minimize confirmed", window.isMinimized());
+  const dStatus = sc(await call(threadD, "browser_status", {}));
+  check("minimized: browser_status reports available, panelVisible=false, operationReady=true, windowMinimized=true, blockedReason null", dStatus.ok && dStatus.result.available === true && dStatus.result.panelVisible === false && dStatus.result.operationReady === true && dStatus.result.windowMinimized === true && dStatus.result.blockedReason === null, JSON.stringify(dStatus));
+  const dSnap = sc(await call(threadD, "browser_snapshot", { leaseId: dLease }));
+  const dButton = dSnap.result?.nodes.find((n) => n.role === "button" && n.name === "押す");
+  const dInput = dSnap.result?.nodes.find((n) => n.role === "textbox" && n.name === "入力欄");
+  check("minimized: snapshot through App Server", dSnap.ok && Boolean(dButton) && Boolean(dInput) && dSnap.state.panelVisible === false && dSnap.state.operationReady === true, JSON.stringify(dSnap).slice(0, 300));
+  const dClick = sc(await call(threadD, "browser_click", { leaseId: dLease, snapshotId: dSnap.result.snapshotId, ref: dButton.ref }));
+  const dWait = sc(await call(threadD, "browser_wait", { leaseId: dLease, condition: { kind: "text", text: "clicked", present: true }, timeoutMs: 5000 }));
+  check("minimized: click lands (wait observes it) through App Server", dClick.ok && dWait.ok && window.isMinimized(), JSON.stringify({ dClick, dWait }));
+  const dFill = sc(await call(threadD, "browser_fill", { leaseId: dLease, snapshotId: dSnap.result.snapshotId, ref: dInput.ref, text: "最小化中の入力" }));
+  check("minimized: fill (Japanese) through App Server", dFill.ok && await controller.liveContents().executeJavaScript("document.getElementById('i').value") === "最小化中の入力", JSON.stringify(dFill));
+  const dPress = sc(await call(threadD, "browser_press", { leaseId: dLease, snapshotId: dSnap.result.snapshotId, ref: dInput.ref, key: "Backspace" }));
+  check("minimized: press through App Server", dPress.ok && await controller.liveContents().executeJavaScript("document.getElementById('i').value") === "最小化中の入", JSON.stringify(dPress));
+  await controller.liveContents().executeJavaScript("window.setGen(7)");
+  const dShotRaw = await call(threadD, "browser_screenshot", { leaseId: dLease });
+  const dImage = dShotRaw.content.find((c) => c.type === "image");
+  let dPixel = null;
+  if (dImage) {
+    const img = nativeImage.createFromBuffer(Buffer.from(dImage.data, "base64"));
+    const { width, height } = img.getSize();
+    const bm = img.toBitmap();
+    const o = (Math.round(height * 0.97) * width + Math.round(width * 0.97)) * 4;
+    dPixel = [bm[o + 2], bm[o + 1], bm[o]];
+  }
+  const expectedColor = [(7 * 37) % 256, (7 * 91 + 40) % 256, (7 * 53 + 100) % 256];
+  check("minimized: screenshot through App Server is the current frame (generation marker)", dImage && dPixel && dPixel.every((v, i) => Math.abs(v - expectedColor[i]) <= 16), JSON.stringify({ dPixel, expectedColor, err: dImage ? null : sc(dShotRaw) }));
+  const dEval = sc(await call(threadD, "browser_evaluate", { leaseId: dLease, documentEpoch: dSnap.state.documentEpoch, script: "return document.title" }));
+  check("minimized: evaluate through App Server", dEval.ok && dEval.result.value.value === "smoke", JSON.stringify(dEval));
+  const dNav = sc(await call(threadD, "browser_navigate", { leaseId: dLease, url: `${base}?again` }));
+  check("minimized: navigate through App Server keeps the minimize", dNav.ok && window.isMinimized(), JSON.stringify(dNav));
+  const dBusy = sc(await call(threadE, "browser_acquire", { url: base }));
+  check("minimized: another conversation still gets BROWSER_BUSY", dBusy.ok === false && dBusy.error.code === "BROWSER_BUSY", JSON.stringify(dBusy));
+  controller.onWindowHidden();
+  const dHidden = sc(await call(threadD, "browser_snapshot", { leaseId: dLease }));
+  check("explicit hide while minimized: refused (BROWSER_UNAVAILABLE) and the lease is gone", dHidden.ok === false && dHidden.error.code === "BROWSER_UNAVAILABLE" && dHidden.error.effect === "none" && controller.ownership.getOwner().kind === "none", JSON.stringify(dHidden));
+  const dHiddenRelease = sc(await call(threadD, "browser_release", { leaseId: dLease }));
+  check("release after the lease ended is answered (no hang)", dHiddenRelease.ok === false || dHiddenRelease.ok === true);
+  leaseD.end();
+  leaseE.end();
+  window.restore();
+  await sleep(500);
 
   // no external chromium launched by codex/mcp
   let ps = "";
@@ -167,7 +226,6 @@ async function main() {
   check("OFF: agent-browser is restored", off["agent-browser"] === true && off["skill-creator"] === true, JSON.stringify(off));
 
   leaseB.end();
-  clearInterval(focusKeeper);
   client.close();
   bridge.stop();
   controller.dispose();
