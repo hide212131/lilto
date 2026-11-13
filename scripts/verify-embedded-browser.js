@@ -7,6 +7,8 @@
  * It does NOT exercise the Lit UI (that is the manual live-UI verification, T15).
  * No focus keeper and no re-focus helper runs: operations must not depend on OS focus (Issue #42).
  * LILTO_MIN_SOAK_MS sets how long the minimized soak waits (default 5000; the 60 s release run uses 60000).
+ * LILTO_VERIFY_WATCHDOG_MS caps the whole run (default LILTO_MIN_SOAK_MS + 8 min); past it the script force-exits
+ * with code 1 and writes partial results instead of hanging indefinitely on a never-resolving controller call.
  */
 const { app, BrowserWindow, nativeImage, powerMonitor } = require("electron");
 const fs = require("node:fs");
@@ -19,7 +21,9 @@ const { createElectronBrowserHost, attachControllerToWindow, attachControllerToP
 
 const results = [];
 const report = {};
+let lastCheckName = "(none yet)";
 const check = (name, condition, detail) => {
+  lastCheckName = name;
   results.push({ name, ok: Boolean(condition), ...(condition ? {} : { detail: String(detail ?? "") }) });
   if (!condition) console.error(`FAIL ${name} ${detail ?? ""}`);
 };
@@ -61,6 +65,25 @@ function startServer() {
 }
 
 async function main() {
+  // Any single controller call can in principle never resolve (observed: this script hung for 30+ minutes
+  // on windows-latest CI runners with no single await identified as the cause). A watchdog over the whole
+  // run turns a silent multi-hour hang into a fast, diagnosable failure instead of auditing every await.
+  const SOAK_MS = Number(process.env.LILTO_MIN_SOAK_MS ?? 5000);
+  const WATCHDOG_MS = Number(process.env.LILTO_VERIFY_WATCHDOG_MS ?? SOAK_MS + 8 * 60 * 1000);
+  const watchdog = setTimeout(() => {
+    console.error(`WATCHDOG: verify-embedded-browser did not finish within ${WATCHDOG_MS}ms; last check reached: "${lastCheckName}"`);
+    try {
+      fs.mkdirSync(path.join(root, "test/artifacts"), { recursive: true });
+      fs.writeFileSync(
+        path.join(root, "test/artifacts/verify-embedded-browser.json"),
+        JSON.stringify({ electron: process.versions.electron, platform: process.platform, watchdogTimeout: true, lastCheck: lastCheckName, total: results.length, failed: results.filter((r) => !r.ok).length + 1, ...report, results }, null, 2)
+      );
+    } catch (error) {
+      console.error("WATCHDOG: failed to write partial results", error);
+    }
+    exitNow(1);
+  }, WATCHDOG_MS);
+
   const { server, base } = await startServer();
   const window = new BrowserWindow({ width: 1100, height: 800, show: true, webPreferences: { sandbox: true } });
   await window.loadURL("data:text/html;charset=utf-8,<body style='margin:0'><p>host</p></body>");
@@ -352,7 +375,6 @@ async function main() {
   await controller.applySettings({ enabled: true, autoOpenOnToolUse: true, evaluateEnabled: true });
 
   /* ---------- Issue #42: minimized / unfocused / covered windows keep working ---------- */
-  const SOAK_MS = Number(process.env.LILTO_MIN_SOAK_MS ?? 5000);
   const winEvents = [];
   for (const name of ["minimize", "restore", "hide", "show"]) window.on(name, () => winEvents.push(name));
   const genColor = (n) => [(n * 37) % 256, (n * 91 + 40) % 256, (n * 53 + 100) % 256];
@@ -688,6 +710,7 @@ async function main() {
 
   controller.dispose();
   server.close();
+  clearTimeout(watchdog);
   const failed = results.filter((r) => !r.ok);
   fs.mkdirSync(path.join(root, "test/artifacts"), { recursive: true });
   fs.writeFileSync(path.join(root, "test/artifacts/verify-embedded-browser.json"), JSON.stringify({ electron: process.versions.electron, platform: process.platform, total: results.length, failed: failed.length, ...report, results }, null, 2));
