@@ -364,6 +364,16 @@ export class EmbeddedBrowserController {
 
   /* ------------------------------------------------------- window events */
 
+  /**
+   * Measures and caches the window-chrome offset (host.getContentSize()'s side effect) as early as
+   * possible, while the window is still guaranteed not minimized — a window can be minimized before
+   * any resize/relayout event ever fires, and the offset is only measurable while not minimized. Safe
+   * to call at any time; it has no effect on layout state (unlike onWindowGeometryChanged).
+   */
+  primeChromeOffset(): void {
+    this.host.getContentSize();
+  }
+
   onWindowGeometryChanged(): void {
     // Shrinking caused by minimizing is not a layout change; restore compares the real geometry.
     if (this.host.getWindowState().minimized) return;

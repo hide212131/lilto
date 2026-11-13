@@ -105,6 +105,10 @@ export function hideWindowExplicitly(controller: EmbeddedBrowserController | nul
 
 /** Keep the controller in sync with the window (geometry, zoom, hide/minimize, renderer reloads). */
 export function attachControllerToWindow(controller: EmbeddedBrowserController, window: BrowserWindow): void {
+  // Prime the chrome-offset cache immediately, while the window is freshly created and therefore
+  // guaranteed not minimized: a true first-time user can minimize before anything else ever reads the
+  // window's content size, after which the offset becomes unmeasurable until the next restore (Issue #42).
+  controller.primeChromeOffset();
   const relayout = () => controller.onWindowGeometryChanged();
   window.on("resize", relayout);
   window.on("maximize", relayout);
@@ -116,7 +120,10 @@ export function attachControllerToWindow(controller: EmbeddedBrowserController, 
     if (!window.isMinimized()) controller.onWindowHidden();
   });
   window.on("minimize", () => controller.onWindowMinimized());
-  window.on("show", () => controller.onWindowShown());
+  window.on("show", () => {
+    controller.primeChromeOffset();
+    controller.onWindowShown();
+  });
   window.on("restore", () => controller.onWindowRestored());
   window.webContents.on("did-start-navigation", (details) => {
     if (details.isMainFrame && !details.isSameDocument) controller.beginRendererEpoch();

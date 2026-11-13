@@ -131,6 +131,7 @@ test("window events drive the controller; the controller outlives the window 'cl
   let minimized = false;
   window.isMinimized = () => minimized;
   const controller = {
+    primeChromeOffset: () => events.push("prime"),
     onWindowGeometryChanged: () => events.push("geometry"), onWindowHidden: () => events.push("hidden"), onWindowShown: () => events.push("shown"),
     onWindowMinimized: () => events.push("minimized"), onWindowRestored: () => events.push("restored"),
     beginRendererEpoch: () => events.push("epoch"), dispose: () => events.push("dispose")
@@ -145,7 +146,7 @@ test("window events drive the controller; the controller outlives the window 'cl
   window.webContents.emit("did-start-navigation", { isMainFrame: true, isSameDocument: true });
   window.webContents.emit("zoom-changed");
   window.emit("closed");
-  assert.deepEqual(events, ["geometry", "geometry", "geometry", "geometry", "geometry", "hidden", "minimized", "shown", "restored", "epoch", "geometry"]);
+  assert.deepEqual(events, ["prime", "geometry", "geometry", "geometry", "geometry", "geometry", "hidden", "minimized", "prime", "shown", "restored", "epoch", "geometry"]);
 });
 
 test("link navigation: http(s) links go to the controller, everything else is dropped; the host page never navigates", () => {
