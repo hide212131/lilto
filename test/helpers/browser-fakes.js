@@ -80,6 +80,8 @@ class FakeWebContents extends EventEmitter {
     this.frameList.push(this.mainFrame);
     this.closeOptions = null;
     this.destroyDelayMs = 0;
+    /** Like a real desktop compositor: frames are presented unless a test says otherwise. */
+    this.framePresents = true;
     this.navigationHistory = {
       canGoBack: () => this.index > 0,
       canGoForward: () => this.index >= 0 && this.index < this.history.length - 1,
@@ -140,9 +142,7 @@ class FakeWebContents extends EventEmitter {
   sendInputEvent(event) { this.inputs.push(event); }
   async insertText(text) { this.inputs.push({ type: "insertText", text }); }
   setBackgroundThrottling(allowed) { this.throttling = allowed; this.calls.push(`throttling:${allowed}`); }
-  async capturePage(rect, options) {
-    this.captureOptions = options ?? null;
-    if (this.captureError) throw new Error(this.captureError);
+  makeImage() {
     const size = this.shot || { width: 2000, height: 1000, bytes: 1000 };
     const image = {
       getSize: () => ({ width: size.width, height: size.height }),
@@ -151,10 +151,27 @@ class FakeWebContents extends EventEmitter {
     };
     return image;
   }
-  /** Real Electron API; tests simulate "no frame presented" by leaving `framePresents` false. */
+  async capturePage(rect, options) {
+    this.captureOptions = options ?? null;
+    if (this.captureError) throw new Error(this.captureError);
+    return this.makeImage();
+  }
+  /**
+   * Real Electron API; tests simulate "no frame presented" by setting `framePresents = false`.
+   * Defaults to true, like a real desktop: production code waits for the *second* callback (to skip
+   * an in-flight frame queued before the subscription started), so this delivers two frames.
+   */
   beginFrameSubscription(onlyDirty, callback) {
     this.frameSubscriptionCallback = callback;
-    if (this.framePresents) setImmediate(() => this.frameSubscriptionCallback === callback && callback({}, {}));
+    if (this.framePresents === false) return;
+    setImmediate(() => {
+      if (this.frameSubscriptionCallback !== callback) return;
+      callback(this.makeImage(), {});
+      setImmediate(() => {
+        if (this.frameSubscriptionCallback !== callback) return;
+        callback(this.makeImage(), {});
+      });
+    });
   }
   endFrameSubscription() {
     this.frameSubscriptionCallback = null;
