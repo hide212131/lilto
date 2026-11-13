@@ -336,15 +336,17 @@ test("screenshot downsizes to <=1280 edge and enforces the 1 MiB cap", async () 
   const lease = (await controller.acquire(a.handle, { url: URL1 })).result.leaseId;
   const wc = host.views[0].webContents;
   wc.pageHandlers.viewport = async () => ({ ok: true, width: 480, height: 700, readyState: "complete" });
-  const shot = await controller.screenshot(a.handle, { leaseId: lease });
-  assert.equal(shot.ok, true);
-  assert.equal(shot.result.width, 1280);
-  assert.equal(shot.result.height, 640);
-  assert.equal(shot.result.mimeType, "image/png");
-  assert.equal(Buffer.from(shot.result.imageBase64, "base64").length, 1000);
-  wc.shot = { width: 800, height: 600, bytes: 1024 * 1024 + 1 };
-  const big = await controller.screenshot(a.handle, { leaseId: lease });
-  assert.equal(big.error.code, "RESULT_TOO_LARGE");
+  await withPlatform("darwin", async () => {
+    const shot = await controller.screenshot(a.handle, { leaseId: lease });
+    assert.equal(shot.ok, true);
+    assert.equal(shot.result.width, 1280);
+    assert.equal(shot.result.height, 640);
+    assert.equal(shot.result.mimeType, "image/png");
+    assert.equal(Buffer.from(shot.result.imageBase64, "base64").length, 1000);
+    wc.shot = { width: 800, height: 600, bytes: 1024 * 1024 + 1 };
+    const big = await controller.screenshot(a.handle, { leaseId: lease });
+    assert.equal(big.error.code, "RESULT_TOO_LARGE");
+  });
 });
 
 test("navigation failure reports NAVIGATION_FAILED and releases the orphan lease on acquire", async () => {
@@ -584,10 +586,12 @@ test("minimized: click, fill, press, navigate and screenshot all work and send i
   const nav = await f.controller.navigate(f.a.handle, { leaseId: f.lease, url: "https://example.com/b" });
   assert.equal(nav.ok, true, JSON.stringify(nav));
   assert.equal(nav.state.panelVisible, false);
-  const shot = await f.controller.screenshot(f.a.handle, { leaseId: f.lease });
-  assert.equal(shot.ok, true, JSON.stringify(shot));
-  assert.deepEqual(f.wc.captureOptions, { stayHidden: true }, "capture the current surface without restoring the window");
-  assert.ok(f.wc.calls.indexOf("page:settleFrames") >= 0 && f.wc.calls.indexOf("page:settleFrames") < f.wc.calls.length, "frames settle before capture");
+  await withPlatform("darwin", async () => {
+    const shot = await f.controller.screenshot(f.a.handle, { leaseId: f.lease });
+    assert.equal(shot.ok, true, JSON.stringify(shot));
+    assert.deepEqual(f.wc.captureOptions, { stayHidden: true }, "capture the current surface without restoring the window");
+    assert.ok(f.wc.calls.indexOf("page:settleFrames") >= 0 && f.wc.calls.indexOf("page:settleFrames") < f.wc.calls.length, "frames settle before capture");
+  });
 });
 
 test("minimized: another run still gets BROWSER_BUSY; restore keeps the same lease and the view", async () => {
@@ -870,19 +874,23 @@ test("a replacement view created during a lease also gets throttling disabled", 
 test("screenshot failures are explicit: capture error, empty image, no page frames, hung capture", async () => {
   const f = await acquired();
   f.wc.pageHandlers.viewport = async () => ({ ok: true, width: 480, height: 700, readyState: "complete" });
-  f.wc.captureError = "Current display surface not available for capture";
-  const failed = await f.controller.screenshot(f.a.handle, { leaseId: f.lease });
-  assert.equal(failed.error.code, "SCREENSHOT_UNAVAILABLE");
-  f.wc.captureError = null;
-  f.wc.shot = { width: 0, height: 0, bytes: 10 };
-  assert.equal((await f.controller.screenshot(f.a.handle, { leaseId: f.lease })).error.code, "SCREENSHOT_UNAVAILABLE");
-  f.wc.shot = null;
-  f.wc.pageHandlers.settleFrames = async () => ({ ok: false, code: "SCREENSHOT_UNAVAILABLE", message: "The page is not producing frames" });
-  assert.equal((await f.controller.screenshot(f.a.handle, { leaseId: f.lease })).error.code, "SCREENSHOT_UNAVAILABLE", "no frames: never a possibly stale image");
-  f.wc.pageHandlers.settleFrames = async () => ({ ok: true });
-  f.wc.capturePage = () => new Promise(() => {});
-  const hung = await f.controller.screenshot(f.a.handle, { leaseId: f.lease, timeoutMs: 20000 });
-  assert.equal(hung.error.code, "SCREENSHOT_UNAVAILABLE", "a capture that never answers is bounded");
+  // Pinned to darwin: these failures are all simulated on the capturePage() path, which win32 no longer
+  // uses (it captures the frame-subscription bitmap directly instead; see "win32:" tests below).
+  await withPlatform("darwin", async () => {
+    f.wc.captureError = "Current display surface not available for capture";
+    const failed = await f.controller.screenshot(f.a.handle, { leaseId: f.lease });
+    assert.equal(failed.error.code, "SCREENSHOT_UNAVAILABLE");
+    f.wc.captureError = null;
+    f.wc.shot = { width: 0, height: 0, bytes: 10 };
+    assert.equal((await f.controller.screenshot(f.a.handle, { leaseId: f.lease })).error.code, "SCREENSHOT_UNAVAILABLE");
+    f.wc.shot = null;
+    f.wc.pageHandlers.settleFrames = async () => ({ ok: false, code: "SCREENSHOT_UNAVAILABLE", message: "The page is not producing frames" });
+    assert.equal((await f.controller.screenshot(f.a.handle, { leaseId: f.lease })).error.code, "SCREENSHOT_UNAVAILABLE", "no frames: never a possibly stale image");
+    f.wc.pageHandlers.settleFrames = async () => ({ ok: true });
+    f.wc.capturePage = () => new Promise(() => {});
+    const hung = await f.controller.screenshot(f.a.handle, { leaseId: f.lease, timeoutMs: 20000 });
+    assert.equal(hung.error.code, "SCREENSHOT_UNAVAILABLE", "a capture that never answers is bounded");
+  });
 });
 
 /**
@@ -920,6 +928,10 @@ test("non-win32 platforms are unaffected by the frame-presentation gate (no beha
   const f = await acquired();
   f.wc.pageHandlers.viewport = async () => ({ ok: true, width: 480, height: 700, readyState: "complete" });
   f.wc.framePresents = false;
-  const result = await f.controller.screenshot(f.a.handle, { leaseId: f.lease });
-  assert.equal(result.ok, true, JSON.stringify(result), "darwin/linux never wait on beginFrameSubscription");
+  // Pinned to darwin: this test asserts platform-specific (non-win32) behavior, so it must not depend
+  // on whichever OS actually runs the suite (the real win32 CI runner exercises the gate for real).
+  await withPlatform("darwin", async () => {
+    const result = await f.controller.screenshot(f.a.handle, { leaseId: f.lease });
+    assert.equal(result.ok, true, JSON.stringify(result), "darwin/linux never wait on beginFrameSubscription");
+  });
 });
