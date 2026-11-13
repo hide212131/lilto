@@ -104,6 +104,35 @@ async function main() {
   const result = await controller.acquire(handle, { url: `${base}/`, timeoutMs: 4000 });
   const elapsedMs = Date.now() - startedAt;
 
+  // Post-acquire diagnostics (Issue #42 W3): on a successful acquire while still minimized, capture the
+  // tool-visible viewport (snapshot's result.viewport, i.e. the page's own window.innerWidth/innerHeight
+  // via the isolated-world runtime), the WebContentsView's real native bounds, and a second, independent
+  // read of window.innerWidth/innerHeight straight from the page. This is to tell apart "the surface was
+  // never given real bounds" (a product bug) from "bounds were real but Windows never laid out / painted
+  // a view whose ancestor window is minimized" (a Chromium/compositor limitation outside product control).
+  let postAcquireSnapshot = null;
+  if (result.ok) {
+    const leaseId = result.result.leaseId;
+    const snap = await controller.snapshot(handle, { leaseId });
+    const view = controller.view;
+    let viewBounds = null;
+    let pageInnerSize = null;
+    try { viewBounds = view && typeof view.getBounds === "function" ? view.getBounds() : null; } catch (error) { viewBounds = { error: String(error) }; }
+    try {
+      pageInnerSize = await view.webContents.executeJavaScript("[window.innerWidth, window.innerHeight, document.readyState]");
+    } catch (error) {
+      pageInnerSize = { error: String(error) };
+    }
+    postAcquireSnapshot = {
+      snapshotOk: snap.ok,
+      snapshotViewport: snap.ok ? snap.result.viewport : null,
+      snapshotError: snap.ok ? null : snap.error,
+      viewBounds,
+      pageInnerSize,
+      windowMinimizedAtSnapshot: window.isMinimized()
+    };
+  }
+
   const report = {
     electron: process.versions.electron,
     platform: process.platform,
@@ -123,7 +152,8 @@ async function main() {
     },
     windowAfterAcquire: windowGeometry(window),
     controllerInternalsAfterAcquire: controllerInternals(controller),
-    controllerState: controller.getState()
+    controllerState: controller.getState(),
+    postAcquireSnapshot
   };
 
   clearTimeout(watchdog);
@@ -134,6 +164,9 @@ async function main() {
   fs.writeFileSync(OUT, JSON.stringify(report, null, 2));
   console.log(`repro written to ${OUT}`);
   console.log(`summary: ok=${report.ok} elapsedMs=${elapsedMs} error=${result.ok ? "(none)" : JSON.stringify(result.error)}`);
+  if (postAcquireSnapshot) {
+    console.log(`post-acquire: snapshotViewport=${JSON.stringify(postAcquireSnapshot.snapshotViewport)} viewBounds=${JSON.stringify(postAcquireSnapshot.viewBounds)} pageInnerSize=${JSON.stringify(postAcquireSnapshot.pageInnerSize)}`);
+  }
   exitNow(0);
 }
 
