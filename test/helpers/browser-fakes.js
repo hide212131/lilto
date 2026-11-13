@@ -175,6 +175,10 @@ class FakeHost {
     this.cleared = 0;
     this.zoom = 1;
     this.content = { width: 1200, height: 800 };
+    /** Simulates the real Windows bug: getContentBounds() collapses to 0x0 while minimized (Issue #42 W1). */
+    this.collapseContentWhenMinimized = false;
+    /** Simulates BrowserWindow.getNormalBounds() converted to a content-size estimate; null until a real (non-minimized) measurement has been taken, like the real host's cached chrome offset. */
+    this.normalContent = null;
   }
   createView() {
     const view = { webContents: new FakeWebContents(), bounds: null, visible: false, setBounds(b) { this.bounds = b; }, setVisible(v) { this.visible = v; } };
@@ -183,7 +187,12 @@ class FakeHost {
   }
   attachView(view) { this.attached.add(view); }
   detachView(view) { this.attached.delete(view); }
-  getContentSize() { return this.content; }
+  getContentSize() {
+    if (this.collapseContentWhenMinimized && this.windowMinimized) return { width: 0, height: 0 };
+    if (!this.windowMinimized) this.normalContent = { ...this.content };
+    return this.content;
+  }
+  getNormalContentSize() { return this.normalContent; }
   getZoomFactor() { return this.zoom; }
   getWindowState() { return { present: this.windowPresent, visible: this.windowVisible && !this.windowMinimized, minimized: this.windowMinimized, focused: this.windowFocused }; }
   setHostBackgroundThrottling(allowed) { this.hostThrottling = allowed; }

@@ -667,6 +667,30 @@ test("minimized and the renderer never reports a layout: falls back to the host 
   assert.deepEqual(f.host.views[0].bounds, { x: 0, y: 0, width: f.host.content.width, height: f.host.content.height });
 });
 
+test("a real measurement while minimized with a collapsed host content size (observed on Windows) keeps the known-good surface instead of wiping it with a bad one (Issue #42 W1)", async () => {
+  const f = await acquired();
+  const bounds = { ...f.host.views[0].bounds };
+  f.host.minimize();
+  f.controller.onWindowMinimized();
+  f.host.collapseContentWhenMinimized = true;
+  // The renderer reports a normal, non-collapsed viewport; only the host's own content size has collapsed.
+  presentPanel(f.controller);
+  assert.equal(f.controller.getState().operationReady, true, "a bad measurement must not make a previously ready surface unready");
+  assert.deepEqual(f.host.views[0].bounds, bounds, "the previous real measurement is kept, not nulled out by an unusable one");
+});
+
+test("minimized with a collapsed content size and no prior real measurement falls back to the normal (restored) bounds, not PANEL_NOT_READY (Issue #42 W1)", async () => {
+  const f = setup();
+  // A real, non-minimized content size is recorded first (like the window's normal measurement at startup).
+  f.host.getContentSize();
+  f.host.minimize();
+  f.host.collapseContentWhenMinimized = true;
+  const result = await f.controller.acquire(f.issue("A").handle, { url: URL1, timeoutMs: 300 });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.state.operationReady, true);
+  assert.deepEqual(f.host.views[0].bounds, { x: 0, y: 0, width: f.host.normalContent.width, height: f.host.normalContent.height });
+});
+
 test("minimized with no content size and no prior measurement: still PANEL_NOT_READY (no fallback possible)", async () => {
   const f = setup();
   f.host.minimize();
