@@ -1,5 +1,11 @@
 # Lessons
 
+## 2026-11-13 Verify background rendering with the display state recorded, and keep injected instructions under Codex's truncation limit
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| 最小化中も内蔵ブラウザを操作可能にする（#42）。macOS の実 Electron で入力・screenshot・timer を実測した。 | ディスプレイがスリープすると、新規作成した View が描画されず（rAF 0・capturePage 失敗）クリックも着弾しなくなる。同じスクリプトが数分前は全通過していたため、コードの回帰と取り違えかけた。また案内文を足した結果、evaluate ON の developer 項目が約 4000 文字を超え、Codex が中央を `…tokens truncated…` で切り詰めていた（指示ライフサイクル検証だけが検出）。 | 描画・入力に依存する実機検証は、ディスプレイ状態（`system_profiler SPDisplaysDataType` の Display Asleep）と画面ロックを結果に併記し、失敗時はまず環境差を疑って再現条件を固定する（`caffeinate -u` の定期実行で点灯）。additionalContext／developer 項目の文面を変えたら、必ず `verify:instruction-lifecycle`（実 App Server）を回し、長さのガード（ラッパー込み 4000 文字未満）を unit に置く。 |
+
 ## 2026-11-13 Verify interrupt timing with the server in a separate process, and never stop on every compaction
 
 | Change | Mistake/Context | Rule to repeat |
