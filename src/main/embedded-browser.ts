@@ -122,6 +122,8 @@ export class EmbeddedBrowserController {
   private presentation: BrowserPresentation = { open: false, occluded: false, resizing: false };
   private panelRequested = false;
   private lastBounds: IntRect | null = null;
+  /** Last real measurement, kept across a renderer reload (unlike lastBounds) for the minimized fallback (W1). */
+  private savedBounds: IntRect | null = null;
   private visibleNow = false;
   /** The view is prepared and shown natively (also while the host window is minimized). */
   private surfaceReady = false;
@@ -294,6 +296,7 @@ export class EmbeddedBrowserController {
       height: Math.min(update.viewport.height, update.hostViewport.height)
     };
     this.lastBounds = computeViewBounds(clamped, zoom, content);
+    if (this.lastBounds) this.savedBounds = this.lastBounds;
     this.measured = { width: content.width, height: content.height, zoom };
     this.applyView();
     this.publish();
@@ -775,6 +778,29 @@ export class EmbeddedBrowserController {
     return null;
   }
 
+  /**
+   * On some platforms (observed on Windows) a minimized window's renderer never completes a layout
+   * measurement, so the real report that normally satisfies `needsRelayout` never arrives. Only once the
+   * wait has actually timed out, and only while minimized, fall back to the last known-good surface size
+   * (this epoch's `lastBounds`, else the last `savedBounds` across a reload, else the full host content
+   * area) so operations are not permanently blocked. A real measurement on restore still re-validates it.
+   */
+  private applyMinimizedFallbackLayout(): boolean {
+    if (!this.needsRelayout) return false;
+    if (!this.host.getWindowState().minimized) return false;
+    let fallback = this.lastBounds ?? this.savedBounds;
+    if (!fallback) {
+      const content = this.host.getContentSize();
+      if (content.width > 0 && content.height > 0) fallback = { x: 0, y: 0, width: content.width, height: content.height };
+    }
+    if (!fallback) return false;
+    this.lastBounds = fallback;
+    this.needsRelayout = false;
+    this.applyView();
+    this.publish();
+    return true;
+  }
+
   /** Prepare the operation surface (auto-open the panel logically, even while minimized) before touching the page. */
   private async ensureOperable(signal: AbortSignal, timeoutMs: number): Promise<void> {
     const blocked = this.environmentError();
@@ -787,7 +813,10 @@ export class EmbeddedBrowserController {
     }
     await new Promise<void>((resolve, reject) => {
       const waiter: Waiter = { resolve: () => done(null), reject: (error) => done(error) };
-      const timer = setTimeout(() => done(new BrowserError("PANEL_NOT_READY", "The browser panel did not report a usable layout in time", { retryable: true })), Math.min(timeoutMs, AUTO_OPEN_WAIT_MS));
+      const timer = setTimeout(() => {
+        if (this.applyMinimizedFallbackLayout()) done(null);
+        else done(new BrowserError("PANEL_NOT_READY", "The browser panel did not report a usable layout in time", { retryable: true }));
+      }, Math.min(timeoutMs, AUTO_OPEN_WAIT_MS));
       const onAbort = () => done(new BrowserError("CANCELLED", "The operation was cancelled"));
       const done = (error: unknown | null) => {
         if (!this.waiters.delete(waiter)) return;

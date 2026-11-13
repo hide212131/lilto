@@ -656,14 +656,63 @@ test("minimized with autoOpen OFF and the panel closed: PANEL_CLOSED, nothing de
   assert.equal(f.host.views.some((v) => v.webContents.calls.some((c) => c.startsWith("loadURL"))), false, "nothing was loaded");
 });
 
-test("minimized and the renderer never reports a layout: PANEL_NOT_READY with effect none (no guessed coordinates)", async () => {
+test("minimized and the renderer never reports a layout: falls back to the host content area so the surface is still prepared (Issue #42 W1)", async () => {
   const f = setup();
   f.host.minimize();
+  const result = await f.controller.acquire(f.issue("A").handle, { url: URL1, timeoutMs: 300 });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.state.operationReady, true);
+  assert.equal(result.state.panelVisible, false);
+  assert.equal(f.controller.ownership.getOwner().kind, "agent");
+  assert.deepEqual(f.host.views[0].bounds, { x: 0, y: 0, width: f.host.content.width, height: f.host.content.height });
+});
+
+test("minimized with no content size and no prior measurement: still PANEL_NOT_READY (no fallback possible)", async () => {
+  const f = setup();
+  f.host.minimize();
+  f.host.content = { width: 0, height: 0 };
   const result = await f.controller.acquire(f.issue("A").handle, { url: URL1, timeoutMs: 300 });
   assert.equal(result.ok, false);
   assert.equal(result.error.code, "PANEL_NOT_READY");
   assert.equal(result.error.effect, "none");
   assert.equal(f.controller.ownership.getOwner().kind, "none");
+});
+
+test("not minimized and the renderer never reports a layout: still PANEL_NOT_READY (the fallback is minimized-only)", async () => {
+  const f = setup();
+  const result = await f.controller.acquire(f.issue("A").handle, { url: URL1, timeoutMs: 300 });
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "PANEL_NOT_READY");
+  assert.equal(f.controller.ownership.getOwner().kind, "none");
+});
+
+test("minimized fallback reuses the last real measurement (savedBounds) across a renderer reload, not just the content area", async () => {
+  const f = setup();
+  const a = f.issue("A");
+  const firstAcquire = f.controller.acquire(a.handle, { url: URL1 });
+  await new Promise((resolve) => setImmediate(resolve));
+  presentPanel(f.controller); // answer the real layout once, manually (no autoRenderer here)
+  const first = await firstAcquire;
+  assert.equal(first.ok, true, JSON.stringify(first));
+  const realBounds = { ...f.host.views[0].bounds };
+  await f.controller.release(a.handle, { leaseId: first.result.leaseId });
+  f.controller.beginRendererEpoch(); // simulates a renderer reload: lastBounds is cleared, savedBounds is not
+  f.host.minimize();
+  const second = await f.controller.acquire(f.issue("B").handle, { url: URL1, timeoutMs: 300 });
+  assert.equal(second.ok, true, JSON.stringify(second));
+  assert.deepEqual(f.host.views.at(-1).bounds, realBounds, "the saved real measurement is reused instead of a generic default");
+});
+
+test("a minimized fallback is replaced by a real measurement on restore (never trusted as final)", async () => {
+  const f = setup();
+  f.host.minimize();
+  const result = await f.controller.acquire(f.issue("A").handle, { url: URL1, timeoutMs: 300 });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  f.host.restore();
+  f.controller.onWindowRestored();
+  assert.equal(f.controller.getState().operationReady, false, "the fallback bounds never satisfy a real geometry check");
+  presentPanel(f.controller);
+  assert.equal(f.controller.getState().operationReady, true);
 });
 
 test("unfocused and covered windows are operable (focus and occlusion by other apps are not conditions)", async () => {
