@@ -195,6 +195,15 @@ jobs:
           LILTO_MIN_SOAK_MS: "60000"
         if: runner.os != 'Windows'
 
+      # Real Lit renderer + real Main: opening the panel while minimized and restoring (native BrowserWindow.minimize()).
+      - name: Verify minimized panel on the real UI (Windows)
+        run: npm.cmd run verify:minimized-ui
+        if: runner.os == 'Windows'
+
+      - name: Verify minimized panel on the real UI
+        run: npm run verify:minimized-ui
+        if: runner.os != 'Windows'
+
       - name: Upload minimized-window evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -203,6 +212,8 @@ jobs:
           path: |
             test/artifacts/probe-minimized-browser.json
             test/artifacts/verify-embedded-browser.json
+            test/artifacts/verify-minimized-ui.json
+            test/artifacts/verify-minimized-ui-host.png
           if-no-files-found: warn
 
   electron-e2e:
