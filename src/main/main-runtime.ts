@@ -16,6 +16,7 @@ import { SchedulerBridgeServer } from "./scheduler-bridge";
 import { resolveCodexHomeDir, setupSkillRuntime, type SkillRuntimeSetup } from "./skill-runtime";
 import { WindowsSandboxSetupService } from "./windows-sandbox-setup";
 import { BrowserBridgeServer } from "./browser-bridge";
+import { BrowserInstructionStateStore } from "./browser-instruction-state-store";
 import { createBrowserRunSupport } from "./browser-run-support";
 import { createBrowserSettingsFlow, type BrowserSettingsFlow } from "./browser-settings-flow";
 import { EmbeddedBrowserController } from "./embedded-browser";
@@ -209,13 +210,21 @@ export async function initializeMainRuntime({
     });
   }
 
+  // Declared before the runtime so the run gate can ask whether a permission change is half-applied.
+  let browserSettingsFlowRef: BrowserSettingsFlow | null = null;
   const agentRuntime = new AgentRuntime({
     logger: createLogger("agent"),
     authService,
     workspaceDir: skillRuntime.workspaceDir,
     codexHomeDir: skillRuntime.codexHomeDir,
     schedulerBridge,
-    browserSupport: createBrowserRunSupport({ controller: browserController, bridge: browserBridge, serverPath: () => resolveBrowserMcpServerPath() }),
+    instructionStore: new BrowserInstructionStateStore({ filePath: path.join(userDataDir, "browser-instruction-state.json"), logger: createLogger("browser-instruction-state") }),
+    browserSupport: createBrowserRunSupport({
+      controller: browserController,
+      bridge: browserBridge,
+      serverPath: () => resolveBrowserMcpServerPath(),
+      isSettingsChanging: () => browserSettingsFlowRef?.isApplying() ?? false
+    }),
     availableSkills: skillRuntime.availableSkills
   });
   const syncSkillPolicy = (browserEnabled: boolean) => {
@@ -234,6 +243,7 @@ export async function initializeMainRuntime({
     syncSkillPolicy,
     logger: browserLogger
   });
+  browserSettingsFlowRef = browserSettingsFlow;
 
   heartbeatAssistant = new HeartbeatAssistantService({
     logger: createLogger("heartbeat-assistant"),

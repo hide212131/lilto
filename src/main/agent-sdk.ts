@@ -2,11 +2,12 @@ import { buildPromptInput, type PromptImage } from "../shared/prompt-images";
 import http from "node:http";
 import path from "node:path";
 import { createLogger, type Logger } from "./logger";
-import { buildCustomModel, buildOauthModel, buildSessionThreadOptions, isLocalOllamaUrl, mergeCodexConfig, withBrowserMcpConfig, augmentPromptForScheduler, SCHEDULER_FOLLOW_UP_PROMPT_PREFIX, AUXILIARY_THREAD_SERVICE_NAME } from "./agent-sdk-config";
+import { buildCustomModel, buildOauthModel, buildSessionThreadOptions, isLocalOllamaUrl, mergeCodexConfig, withBrowserMcpConfig, BROWSER_INSTRUCTION_CONTEXT_KEY, augmentPromptForScheduler, SCHEDULER_FOLLOW_UP_PROMPT_PREFIX, AUXILIARY_THREAD_SERVICE_NAME } from "./agent-sdk-config";
 import { standardizeExecutionError } from "./agent-sdk-errors";
 import { processThreadEvent, translateAppServerItem } from "./agent-sdk-event-processing";
-import type { AgentResult, CodexConfig, RunStreamedOptions, RuntimeModel, SessionThreadOptions, Thread, ThreadEvent, ThreadItem } from "./agent-sdk-types";
+import type { AgentResult, BrowserRunOptions, CodexConfig, RunStreamedOptions, RuntimeModel, SessionThreadOptions, Thread, ThreadEvent, ThreadItem } from "./agent-sdk-types";
 import type { BrowserRunSupport } from "./browser-run-support";
+import { BrowserInstructionStateStore, browserInstructionNamespace, type BrowserInstructionAttempt } from "./browser-instruction-state-store";
 import type { ClaudeAuthService } from "./auth-service";
 import type { ProviderSettings } from "./provider-settings";
 import { isCustomProviderReady } from "./provider-settings";
@@ -174,8 +175,13 @@ export async function createCodexThreadFromSdk(options: {
   schedulerSessionId?: string;
   sandboxMode?: "danger-full-access" | "workspace-write";
   config?: CodexConfig;
+  ephemeralThread?: boolean;
+  serviceName?: string;
   environment?: Record<string, string>;
+  instructionStore?: BrowserInstructionStateStore;
 }, dependencies?: {
+  /** Test seam: the App Server adapter that browser-managed runs are delegated to. */
+  createAppServerThread?: typeof createCodexThreadFromAppServer;
   createCodex?: (options: {
     apiKey?: string;
     baseUrl?: string;
@@ -274,7 +280,31 @@ export async function createCodexThreadFromSdk(options: {
     networkAccessEnabled: true,
     skipGitRepoCheck: true
   };
-  return options.threadId ? codex.resumeThread(options.threadId, threadOptions) : codex.startThread(threadOptions);
+  const sdkThread = options.threadId ? codex.resumeThread(options.threadId, threadOptions) : codex.startThread(threadOptions);
+  // The SDK cannot carry lilto's browser state (it has no additionalContext/browserRun support), so runs that are
+  // browser-managed go through the same App Server adapter as the default factory. Other runs stay on the SDK.
+  let managed = null as Thread | null;
+  let managedActive = false;
+  return {
+    get id() { return managed?.id ?? sdkThread.id; },
+    async steer(input, images) {
+      const target = managedActive ? managed : sdkThread;
+      if (!target?.steer) throw new Error("追加指示を受け付ける実行中のターンがありません。再送信してください。");
+      await target.steer(input, images);
+    },
+    async runStreamed(input, runOptions) {
+      if (!runOptions?.browserRun) {
+        managedActive = false;
+        return sdkThread.runStreamed(input, runOptions);
+      }
+      const appServerThread = managed ??= await (dependencies?.createAppServerThread ?? createCodexThreadFromAppServer)({
+        ...options,
+        threadId: sdkThread.id ?? options.threadId
+      });
+      managedActive = true;
+      return appServerThread.runStreamed(input, runOptions);
+    }
+  };
 }
 
 function buildAppServerSandboxPolicy(options: {
@@ -298,6 +328,20 @@ function buildAppServerSandboxPolicy(options: {
 }
 
 
+/** Shown when a turn was stopped because Codex compacted the history (which drops lilto's browser state). */
+export const BROWSER_COMPACTION_STOP_MESSAGE =
+  "会話履歴の自動圧縮が発生したため、ブラウザ指示を再適用するためにこのターンを停止しました。入力欄の内容をもう一度送信するか「続けて」と送ると、次のターンで指示が再送されて続行できます。";
+
+type CompactionItem = { threadId: string; turnId: string | null };
+
+function readCompactionItem(method: string, params: unknown): { phase: "started" | "completed"; item: CompactionItem } | null {
+  if (method !== "item/started" && method !== "item/completed") return null;
+  if (!params || typeof params !== "object") return null;
+  const p = params as { item?: { type?: unknown }; threadId?: unknown; turnId?: unknown };
+  if (p.item?.type !== "contextCompaction" || typeof p.threadId !== "string") return null;
+  return { phase: method === "item/started" ? "started" : "completed", item: { threadId: p.threadId, turnId: typeof p.turnId === "string" ? p.turnId : null } };
+}
+
 export async function createCodexThreadFromAppServer(options: {
   apiKey: string | null;
   model?: RuntimeModel;
@@ -313,6 +357,8 @@ export async function createCodexThreadFromAppServer(options: {
   ephemeralThread?: boolean;
   serviceName?: string;
   environment?: Record<string, string>;
+  /** Required for runs that carry a browserRun context; owns the per-thread record of the announced state. */
+  instructionStore?: BrowserInstructionStateStore;
 }): Promise<Thread> {
   const packagedCodex = resolvePackagedCodexBinary();
   const bridgeEnv = options.schedulerBridge
@@ -347,25 +393,40 @@ export async function createCodexThreadFromAppServer(options: {
     cwd: options.cwd ?? process.cwd(),
     additionalDirectories: options.additionalDirectories
   });
+  const codexHomeDir = options.codexHomeDir ?? path.join(options.homeDir ?? process.env.HOME ?? process.cwd(), ".codex");
+  const instructionNamespace = browserInstructionNamespace(codexHomeDir);
 
   let steerActiveTurn: ((input: string, images?: PromptImage[]) => Promise<void>) | null = null;
+  // The backend thread this object represents. Kept across runs so a reused object resumes instead of starting anew.
+  let currentThreadId = options.threadId ?? null;
   return {
-    id: options.threadId ?? null,
+    get id() { return currentThreadId; },
     async steer(input: string, images?: PromptImage[]) {
       if (!steerActiveTurn) throw new Error("追加指示を受け付ける実行中のターンがありません。再送信してください。");
       await steerActiveTurn(input, images);
     },
     async runStreamed(input: string, runOptions?: RunStreamedOptions) {
       const client = new CodexAppServerClient({
-        codexHomeDir: options.codexHomeDir ?? path.join(options.homeDir ?? process.env.HOME ?? process.cwd(), ".codex"),
+        codexHomeDir,
         codexCommand: packagedCodex?.command,
         invocationEnv
       });
 
-      let activeThreadId = options.threadId ?? null;
+      const browserRun = runOptions?.browserRun;
+      const store = options.instructionStore;
+      if (browserRun && !store) throw new Error("browser instruction store is not configured");
+
+      let activeThreadId = currentThreadId;
       let activeTurnId: string | null = null;
       let startedEphemeralThread = false;
       let closed = false;
+      let attempt: BrowserInstructionAttempt | null = null;
+      let attemptSettled = false;
+      let releaseThread: (() => void) | null = null;
+      let compactionSeen = false;
+      let userMessageSeen = false;
+      let interruptedForCompaction = false;
+      let stopListening: () => void = () => {};
       const textByItemId = new Map<string, string>();
       const reasoningByItemId = new Map<string, string>();
 
@@ -374,7 +435,26 @@ export async function createCodexThreadFromAppServer(options: {
           return;
         }
         closed = true;
+        stopListening();
         client.close();
+      };
+
+      /** Anything that is not a normal completion: no record of this thread may be trusted any more. */
+      const settleUnknown = async () => {
+        if (!attempt || attemptSettled) return;
+        attemptSettled = true;
+        await store!.markUnknown(attempt);
+      };
+      const releaseAll = () => {
+        releaseThread?.();
+        releaseThread = null;
+      };
+
+      const interruptTurn = (turnId: string | null) => {
+        const threadId = activeThreadId;
+        const target = turnId ?? activeTurnId;
+        if (!threadId || !target) return;
+        void client.request("turn/interrupt", { threadId, turnId: target }, 5000).catch(() => { closeClient(); });
       };
 
       const abortHandler = () => {
@@ -382,12 +462,7 @@ export async function createCodexThreadFromAppServer(options: {
           closeClient();
           return;
         }
-        void client.request("turn/interrupt", {
-          threadId: activeThreadId,
-          turnId: activeTurnId
-        }, 5000).catch(() => {
-          closeClient();
-        });
+        interruptTurn(activeTurnId);
       };
 
       if (runOptions?.signal) {
@@ -398,45 +473,93 @@ export async function createCodexThreadFromAppServer(options: {
         }
       }
 
-      await client.start();
-
-      // The browser MCP server (and its token) exists only for this run's client.
-      const runConfig = withBrowserMcpConfig(mergeCodexConfig(mcpConfig, options.config), runOptions?.browserRun?.launch);
-      const threadParams: Record<string, unknown> = {
-        model: options.model?.id,
-        cwd: options.cwd ?? process.cwd(),
-        approvalPolicy: "never",
-        sandbox: options.sandboxMode === "workspace-write" ? "workspace-write" : "danger-full-access",
-        serviceName: options.serviceName ?? "lilto",
-        ...(runConfig ? { config: runConfig } : {}),
-        ...(runOptions?.browserRun ? { developerInstructions: runOptions.browserRun.developerInstructions } : {})
+      let turnResult: { turn?: { id?: string | null } };
+      let runConfig: CodexConfig | undefined;
+      const claimThread = (threadId: string) => {
+        releaseThread = store!.tryAcquireThread(instructionNamespace, threadId);
+        if (!releaseThread) throw new Error("このスレッドは別の実行で使用中です。完了してから再送信してください。");
       };
+      try {
+        // A known thread is claimed before anything touches it (resume included); a new one right after thread/start.
+        if (browserRun && store && activeThreadId) claimThread(activeThreadId);
+        await client.start();
 
-      if (activeThreadId) {
-        await client.request("thread/resume", {
+        // Compaction drops lilto's browser state from the model input. React the moment the notification is parsed
+        // (not when the consumer pulls it) so the turn stops before it continues without the state.
+        if (browserRun && store) {
+          stopListening = client.onNotification((message) => {
+            const params = message.params as { threadId?: unknown; item?: { type?: unknown } } | null;
+            if (message.method === "item/started" && params?.item?.type === "userMessage" && params.threadId === activeThreadId) userMessageSeen = true;
+            const compaction = readCompactionItem(message.method, message.params);
+            if (!compaction || compaction.phase !== "started" || compaction.item.threadId !== activeThreadId) return;
+            compactionSeen = true;
+            // A compaction that precedes this turn's own user message ("pre-turn") is followed by this turn's input,
+            // additionalContext included: an update sent with this turn survives it. Everything else loses the state.
+            if (!userMessageSeen && attempt?.sendUpdate) return;
+            // Stopping at the START discards that compaction, and the thread's token estimate only refreshes after a
+            // normal model response. So a second stop on the same still-oversized thread would loop forever: after one
+            // stop, the retry turn lets the compaction run (it still sends the update and is never confirmed).
+            if (interruptedForCompaction || store.getCompactionInterrupts(instructionNamespace, compaction.item.threadId) > 0) return;
+            interruptedForCompaction = true;
+            store.setCompactionInterrupts(instructionNamespace, compaction.item.threadId, 1);
+            interruptTurn(compaction.item.turnId);
+          });
+        }
+
+        // The browser MCP server (and its token) exists only for this run's client.
+        runConfig = withBrowserMcpConfig(mergeCodexConfig(mcpConfig, options.config), browserRun?.launch);
+        // Browser instructions travel as turn/start additionalContext only; thread/start|resume developerInstructions are never used.
+        const threadParams: Record<string, unknown> = {
+          model: options.model?.id,
+          cwd: options.cwd ?? process.cwd(),
+          approvalPolicy: "never",
+          sandbox: options.sandboxMode === "workspace-write" ? "workspace-write" : "danger-full-access",
+          serviceName: options.serviceName ?? "lilto",
+          ...(runConfig ? { config: runConfig } : {})
+        };
+
+        if (activeThreadId) {
+          await client.request("thread/resume", {
+            threadId: activeThreadId,
+            ...threadParams
+          });
+        } else {
+          const result = await client.request<{ thread?: { id?: string | null } }>("thread/start", threadParams);
+          activeThreadId = typeof result?.thread?.id === "string" ? result.thread.id : null;
+          startedEphemeralThread = options.ephemeralThread === true && Boolean(activeThreadId);
+          if (activeThreadId && !startedEphemeralThread) currentThreadId = activeThreadId;
+        }
+
+        if (!activeThreadId) {
+          throw new Error("codex app-server did not return a thread id");
+        }
+
+        if (browserRun && store) {
+          if (!releaseThread) claimThread(activeThreadId);
+          // Persisted before the turn is issued; a failure here means no turn at all.
+          attempt = await store.begin(instructionNamespace, activeThreadId, browserRun.update.state);
+        }
+
+        turnResult = await client.request<{ turn?: { id?: string | null } }>("turn/start", {
           threadId: activeThreadId,
-          ...threadParams
+          input: buildPromptInput(input, runOptions?.images),
+          cwd: options.cwd ?? process.cwd(),
+          approvalPolicy: "never",
+          sandboxPolicy,
+          ...(options.model?.id ? { model: options.model.id } : {}),
+          ...(runConfig ? { config: runConfig } : {}),
+          ...(attempt?.sendUpdate && browserRun
+            ? { additionalContext: { [BROWSER_INSTRUCTION_CONTEXT_KEY]: { kind: "application", value: browserRun.update.text } } }
+            : {})
         });
-      } else {
-        const result = await client.request<{ thread?: { id?: string | null } }>("thread/start", threadParams);
-        activeThreadId = typeof result?.thread?.id === "string" ? result.thread.id : null;
-        startedEphemeralThread = options.ephemeralThread === true && Boolean(activeThreadId);
-      }
-
-      if (!activeThreadId) {
+      } catch (error) {
+        // The update may have reached the model even though the call failed: never fall back to "already sent".
+        await settleUnknown();
+        releaseAll();
+        runOptions?.signal?.removeEventListener("abort", abortHandler);
         closeClient();
-        throw new Error("codex app-server did not return a thread id");
+        throw error;
       }
-
-      const turnResult = await client.request<{ turn?: { id?: string | null } }>("turn/start", {
-        threadId: activeThreadId,
-        input: buildPromptInput(input, runOptions?.images),
-        cwd: options.cwd ?? process.cwd(),
-        approvalPolicy: "never",
-        sandboxPolicy,
-        ...(options.model?.id ? { model: options.model.id } : {}),
-        ...(runConfig ? { config: runConfig } : {})
-      });
       activeTurnId = typeof turnResult?.turn?.id === "string" ? turnResult.turn.id : null;
       const steer = async (text: string, images?: PromptImage[]) => {
         if (closed || runOptions?.signal?.aborted || !activeTurnId) {
@@ -470,6 +593,19 @@ export async function createCodexThreadFromAppServer(options: {
               if (steerActiveTurn === steer) steerActiveTurn = null;
               const turn = params.turn && typeof params.turn === "object" ? params.turn as Record<string, unknown> : {};
               const status = typeof turn.status === "string" ? turn.status : "failed";
+              if (attempt && store) {
+                if (!interruptedForCompaction) store.setCompactionInterrupts(instructionNamespace, activeThreadId!, 0);
+                if (status === "completed" && !compactionSeen && !runOptions?.signal?.aborted) {
+                  attemptSettled = true;
+                  await store.confirm(attempt);
+                } else {
+                  await settleUnknown();
+                }
+              }
+              if (interruptedForCompaction && status === "interrupted") {
+                yield { type: "turn.failed", error: { message: BROWSER_COMPACTION_STOP_MESSAGE } };
+                return;
+              }
               if (status === "completed") {
                 return;
               }
@@ -536,6 +672,9 @@ export async function createCodexThreadFromAppServer(options: {
           if (runOptions?.signal) {
             runOptions.signal.removeEventListener("abort", abortHandler);
           }
+          // Connection loss or an abandoned consumer ends here without a settled attempt.
+          await settleUnknown();
+          releaseAll();
           if (startedEphemeralThread && activeThreadId) {
             await client.request("thread/archive", {
               threadId: activeThreadId
@@ -566,7 +705,9 @@ export class AgentRuntime {
     ephemeralThread?: boolean;
     serviceName?: string;
     environment?: Record<string, string>;
+    instructionStore?: BrowserInstructionStateStore;
   }) => Promise<Thread>;
+  private readonly instructionStore?: BrowserInstructionStateStore;
   private readonly authService: Pick<ClaudeAuthService, "getState" | "getApiKey">;
   private readonly logger: Logger;
   private readonly workspaceDir?: string;
@@ -635,6 +776,7 @@ export class AgentRuntime {
     homeDir,
     schedulerBridge,
     browserSupport,
+    instructionStore,
     platform = process.platform,
     logger = createLogger("agent")
   }: {
@@ -653,7 +795,9 @@ export class AgentRuntime {
       ephemeralThread?: boolean;
       serviceName?: string;
       environment?: Record<string, string>;
+      instructionStore?: BrowserInstructionStateStore;
     }) => Promise<Thread>;
+    instructionStore?: BrowserInstructionStateStore;
     authService: Pick<ClaudeAuthService, "getState" | "getApiKey">;
     workspaceDir?: string;
     codexHomeDir?: string;
@@ -672,6 +816,7 @@ export class AgentRuntime {
     this.homeDir = homeDir;
     this.schedulerBridge = schedulerBridge;
     this.browserSupport = browserSupport;
+    this.instructionStore = instructionStore;
     this.platform = platform;
   }
 
@@ -769,7 +914,8 @@ export class AgentRuntime {
       config: options.threadOptions.config,
       ephemeralThread: options.ephemeralThread,
       serviceName: options.serviceName,
-      environment: options.environment
+      environment: options.environment,
+      instructionStore: this.instructionStore
     });
     const session = { signature, thread };
     if (!options.freshContext) {
@@ -809,8 +955,27 @@ export class AgentRuntime {
     if (hooks?.conversationId && hooks.mode !== "heartbeat" && !hooks.freshContext) {
       this.activeConversationRuns.set(hooks.conversationId, activeRun);
     }
-    let browserRunEnd: (() => void) | null = null;
+    let browserRunEnd = null as (() => void) | null; // assigned from a closure below
     try {
+      // Classify by the effective options (after auxiliary-thread resolution), not by what hooks happened to omit.
+      const browserManaged = Boolean(this.browserSupport && hooks?.conversationId && hooks.mode !== "heartbeat" && !hooks.freshContext
+        && options.ephemeralThread !== true && options.serviceName !== AUXILIARY_THREAD_SERVICE_NAME);
+      let browserRun: BrowserRunOptions | undefined;
+      let browserRevision = 0;
+      const resolveBrowserRun = (): BrowserRunOptions => {
+        const support = this.browserSupport!;
+        browserRevision = support.policyRevision();
+        const decision = support.resolve({ conversationId: hooks!.conversationId!, requestId: hooks!.requestId });
+        if (decision.kind === "unavailable") {
+          // ON (or mid-change) but no capability: never fall back to OFF, never start a turn, never touch the record.
+          throw new Error(decision.reason === "settings-changing"
+            ? "ブラウザ設定を適用中のため、実行を開始できませんでした。少し待ってから再送信してください。"
+            : "埋め込みブラウザ連携が有効ですが、利用できる状態ではありません。連携の起動に失敗した可能性があります。設定を確認して再送信してください。");
+        }
+        browserRunEnd = decision.kind === "on" ? decision.end : null;
+        return { update: decision.update, ...(decision.kind === "on" ? { launch: decision.launch } : {}) };
+      };
+      if (browserManaged) browserRun = resolveBrowserRun();
       const session = await this.ensureSession({
         ...options,
         environment: getSessionProxyEnvironment(providerSettings),
@@ -827,15 +992,17 @@ export class AgentRuntime {
       }
 
       const prompt = hooks?.mode === "heartbeat" ? text : augmentPromptForScheduler(text);
-      // Regular conversations (and scheduler follow-ups attributed to one) only; never heartbeat/internal threads.
-      const browserLease = hooks?.mode !== "heartbeat" && hooks?.conversationId
-        ? this.browserSupport?.begin({ conversationId: hooks.conversationId, requestId: hooks.requestId }) ?? null
-        : null;
-      browserRunEnd = browserLease ? () => browserLease.end() : null;
+      // A setting that changed while this run was preparing invalidates the snapshot: prepare again.
+      if (browserRun && this.browserSupport!.policyRevision() !== browserRevision) {
+        browserRunEnd?.();
+        browserRunEnd = null;
+        browserRun = resolveBrowserRun();
+        if (this.browserSupport!.policyRevision() !== browserRevision) throw new Error("ブラウザ設定が変更されたため、実行を開始できませんでした。再送信してください。");
+      }
       const streamed = await session.thread.runStreamed(prompt, {
         signal: abortController.signal,
         images: hooks?.images,
-        ...(browserLease ? { browserRun: { launch: browserLease.launch, developerInstructions: browserLease.developerInstructions } } : {})
+        ...(browserRun ? { browserRun } : {})
       });
       activeRun.resolve(session.thread);
       const state = {

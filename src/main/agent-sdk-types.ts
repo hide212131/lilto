@@ -1,5 +1,5 @@
 import type { PromptImage } from "../shared/prompt-images";
-import type { BrowserMcpLaunch } from "./agent-sdk-config";
+import type { BrowserInstructionUpdate, BrowserMcpLaunch } from "./agent-sdk-config";
 export type CodexConfig = Record<string, unknown>;
 
 export type SessionThreadOptions = {
@@ -23,8 +23,12 @@ export type RuntimeModel = {
   baseUrl?: string;
 };
 
-/** Run-scoped browser capability. Built per run so cached threads never hold a token. */
-export type BrowserRunOptions = { launch: BrowserMcpLaunch; developerInstructions: string };
+/**
+ * Browser context of one managed (regular conversation) run. Absent = the run is outside this feature.
+ * `update` is the state lilto must have announced to the thread; `launch` is the run-scoped capability and
+ * exists only while the browser is ON, so cached threads never hold a token.
+ */
+export type BrowserRunOptions = { update: BrowserInstructionUpdate; launch?: BrowserMcpLaunch };
 
 export type RunStreamedOptions = { signal?: AbortSignal; images?: PromptImage[]; browserRun?: BrowserRunOptions };
 

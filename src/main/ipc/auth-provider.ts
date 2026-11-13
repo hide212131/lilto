@@ -124,6 +124,9 @@ export function registerAuthAndProviderIpcHandlers({
       if (onSettingsSaved) {
         onSettingsSaved(result.state);
       }
+    } else {
+      // prepare() may already have stopped issuing; re-apply the unchanged settings so runs can start again.
+      await browserSettingsFlow?.commit(current).catch(() => {});
     }
     return result;
   });

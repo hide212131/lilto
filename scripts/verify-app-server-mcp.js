@@ -73,15 +73,15 @@ async function main() {
   const startThread = async (lease) => {
     const out = await client.request("thread/start", {
       cwd: ws, approvalPolicy: "never", sandbox: "danger-full-access", serviceName: "lilto-smoke",
-      config: withBrowserMcpConfig(undefined, lease.launch), developerInstructions: lease.developerInstructions
+      config: withBrowserMcpConfig(undefined, lease.launch)
     }, 30000);
     return out.thread.id;
   };
-  const leaseA = support.begin({ conversationId: "A", requestId: "ra" });
-  const leaseB = support.begin({ conversationId: "B", requestId: "rb" });
+  const leaseA = support.resolve({ conversationId: "A", requestId: "ra" });
+  const leaseB = support.resolve({ conversationId: "B", requestId: "rb" });
   const threadA = await startThread(leaseA);
   const threadB = await startThread(leaseB);
-  check("thread/start accepts config.mcp_servers + developerInstructions", Boolean(threadA && threadB && threadA !== threadB));
+  check("thread/start accepts config.mcp_servers (instructions travel on turn/start additionalContext)", Boolean(threadA && threadB && threadA !== threadB));
 
   const status = await client.request("mcpServerStatus/list", { threadId: threadA, serverName: "lilto_browser" }, 30000);
   const entry = (status.data || []).find((s) => s.name === "lilto_browser");
@@ -126,13 +126,13 @@ async function main() {
   check("evaluate OFF: a direct browser_evaluate call is refused by Main (EVALUATE_DISABLED, effect none)", offEval.ok === false && offEval.error.code === "EVALUATE_DISABLED" && offEval.error.effect === "none", JSON.stringify(offEval));
   leaseB.end();
   await controller.applySettings({ enabled: true, autoOpenOnToolUse: true, evaluateEnabled: true });
-  const leaseC = support.begin({ conversationId: "C", requestId: "rc" });
+  const leaseC = support.resolve({ conversationId: "C", requestId: "rc" });
   const threadC = await startThread(leaseC);
   const statusC = await client.request("mcpServerStatus/list", { threadId: threadC, serverName: "lilto_browser" }, 30000);
   const toolsC = Object.keys((statusC.data || []).find((x) => x.name === "lilto_browser")?.tools || {});
   check("evaluate ON: bundled App Server discovers 17 tools including browser_evaluate", toolsC.length === 17 && toolsC.includes("browser_evaluate"), JSON.stringify(toolsC));
-  const instructions = leaseC.developerInstructions ?? "";
-  check("evaluate ON: developer instructions mention browser_evaluate; OFF guidance did not", /browser_evaluate/.test(instructions) && !/browser_evaluate/.test(leaseA.developerInstructions ?? ""));
+  const instructions = leaseC.update.text ?? "";
+  check("evaluate ON: state text carries the evaluate rules; the evaluate-OFF text says it is unavailable", /browser_evaluate/.test(instructions) && /browser_evaluate is disabled/.test(leaseA.update.text) && !/\[browser_evaluate\]/.test(leaseA.update.text));
   window.focus();
   const cAcq = sc(await call(threadC, "browser_acquire", { url: base }));
   check("evaluate ON: acquire", cAcq.ok === true, JSON.stringify(cAcq));

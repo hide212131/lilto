@@ -1,5 +1,11 @@
 # Lessons
 
+## 2026-11-13 Verify interrupt timing with the server in a separate process, and never stop on every compaction
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| 圧縮開始で `turn/interrupt` して状態を再送する継続性対策（#43）を実装・検証した。 | 記録サーバーを検証対象の Electron main と同じプロセスに置くと、main を止めた時間がサーバーの時刻にも乗り、interrupt が間に合うかを測れない。また圧縮のたびに停止すると、圧縮が破棄された大きなスレッドで毎ターン同じ停止が繰り返される（トークン見積もりは通常応答でしか更新されない）。 | 遅延耐性の検証は、遅延を与える側と観測するサーバーを別プロセスにする。割り込み系の対策は「同じ状態で再試行しても進む」ことを実 App Server で確かめ、2 回目は停止しない。 |
+
 ## 2026-11-05 Expose manual update checks in the app menu
 
 | Change | Mistake/Context | Rule to repeat |
@@ -713,3 +719,9 @@
 | Fixed truncated `tools/list` output (cut at 8192 bytes) from the stdio MCP server. | The server called `process.exit(0)` on stdin `end`; replies still queued on a pipe were dropped, so large JSON-RPC responses were truncated under load and the isolated-layout test failed only sometimes. | A stdio server must drain stdout before exiting: `process.stdout.write("", () => process.exit(0))`. Never `process.exit()` right after writing to a pipe. |
 | Live Electron verification scripts mixed up the machine's own environment with the app's behaviour. | `verify-app-server-mcp.js` flagged the user's own Chrome as an "external Chromium", the bundled codex path was Linux-only, and `evaluate` is gated on window focus, which another app can steal during a live run. | Live scripts must scope process checks to their own descendants, resolve platform binaries per platform, and re-focus the window before focus-gated calls. Take `documentEpoch` from `ownership.epochs`/tool-result `state`, not from the panel state. |
 | The work tree handed over for this round was based on v0.1.14 and lacked the embedded-browser base files, so `tsc` failed. | Only the files changed by the feature were transferred; base files it depends on (browser-ownership, browser-bounds, browser-page-runtime, ...) were missing. | Before building a transferred work tree, compare it with the intended base (`git diff <base>`) and restore missing base files first; report the base mismatch explicitly. |
+
+## 2026-11-13 Verification harness cleanup on CI
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| Fixed `dispose()` of `scripts/helpers/instruction-lifecycle-lab.js` failing on CI (Windows `EBUSY`, macOS `ENOTEMPTY`). | A fixed 150 ms sleep after `kill()` was assumed to be enough for the App Server to stop; the temp CODEX_HOME was removed while the child still held/wrote it, and a throw in `finally` turned a cleanup problem into scenario failures. | Wait for the child's `exit` (SIGKILL after a grace period) before removing its directories, retry the removal, and downgrade a leftover temp dir to a warning so cleanup never decides the check result. |
