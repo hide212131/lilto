@@ -1248,20 +1248,19 @@ export class EmbeddedBrowserController {
       // no restore of the window. A page whose frames cannot be produced fails explicitly.
       this.unwrap(await this.page("settleFrames", {}));
       ctx.check();
-      // win32-only: a minimized window's compositor can silently stop presenting new frames, which makes
-      // capturePage succeed with a stale image instead of erroring. Confirm at least one frame was actually
-      // presented after this point before trusting the capture; otherwise fail explicitly rather than risk stale data.
-      if (process.platform === "win32" && !(await this.awaitFramePresented(wc, SCREENSHOT_CAPTURE_MS))) {
-        throw new BrowserError("SCREENSHOT_UNAVAILABLE", "No new frame was presented before the deadline");
-      }
-      ctx.check();
       let image: ImageLike;
-      try {
-        let timer: NodeJS.Timeout | undefined;
-        const limit = new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error("capture timed out")), SCREENSHOT_CAPTURE_MS); });
-        image = await Promise.race([wc.capturePage(undefined, { stayHidden: true }), limit]).finally(() => clearTimeout(timer));
-      } catch {
-        throw new BrowserError("SCREENSHOT_UNAVAILABLE", "The page surface could not be captured");
+      if (process.platform === "win32" && wc.beginFrameSubscription) {
+        // win32-only: a minimized window's compositor can silently stop presenting new frames, which makes
+        // capturePage() succeed with a stale image instead of erroring — and on CI's software compositor,
+        // capturePage() can even return a stale surface right after beginFrameSubscription confirms a fresh
+        // one was presented, because the two draw from different pipelines. So on win32 we capture the exact
+        // bitmap handed to the subscription callback instead of calling capturePage() at all; that bitmap is
+        // the presented frame, not a separate (possibly-stale) read of it.
+        const presented = await this.awaitFramePresented(wc, SCREENSHOT_CAPTURE_MS);
+        if (!presented) throw new BrowserError("SCREENSHOT_UNAVAILABLE", "No new frame was presented before the deadline");
+        image = presented;
+      } else {
+        image = await this.capturePageWithTimeout(wc, SCREENSHOT_CAPTURE_MS);
       }
       ctx.check();
       if (!image.getSize().width || !image.getSize().height) throw new BrowserError("SCREENSHOT_UNAVAILABLE", "The page surface could not be captured");
@@ -1282,13 +1281,19 @@ export class EmbeddedBrowserController {
     });
   }
 
-  /** Resolves true once `wc` presents a frame, or false if none arrives within `timeoutMs` (win32 freshness gate). */
-  private awaitFramePresented(wc: WebContentsLike, timeoutMs: number): Promise<boolean> {
+  /**
+   * Resolves with the bitmap of the second frame `wc` presents, or `undefined` if that doesn't happen within
+   * `timeoutMs` (win32 freshness gate). The first callback is skipped: it may carry a frame that was already
+   * in flight before the subscription started and can predate the content this call is trying to capture; the
+   * second is guaranteed to have been composited after we started listening.
+   */
+  private awaitFramePresented(wc: WebContentsLike, timeoutMs: number): Promise<ImageLike | undefined> {
     const begin = wc.beginFrameSubscription;
-    if (!begin) return Promise.resolve(true);
+    if (!begin) return Promise.resolve(undefined);
     return new Promise((resolve) => {
       let settled = false;
-      const finish = (presented: boolean) => {
+      let frames = 0;
+      const finish = (image: ImageLike | undefined) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
@@ -1297,15 +1302,28 @@ export class EmbeddedBrowserController {
         } catch {
           /* subscription may already be gone with the page */
         }
-        resolve(presented);
+        resolve(image);
       };
-      const timer = setTimeout(() => finish(false), timeoutMs);
+      const timer = setTimeout(() => finish(undefined), timeoutMs);
       try {
-        begin.call(wc, false, () => finish(true));
+        begin.call(wc, false, (image) => {
+          frames += 1;
+          if (frames >= 2) finish(image);
+        });
       } catch {
-        finish(false);
+        finish(undefined);
       }
     });
+  }
+
+  private async capturePageWithTimeout(wc: WebContentsLike, timeoutMs: number): Promise<ImageLike> {
+    try {
+      let timer: NodeJS.Timeout | undefined;
+      const limit = new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error("capture timed out")), timeoutMs); });
+      return await Promise.race([wc.capturePage(undefined, { stayHidden: true }), limit]).finally(() => clearTimeout(timer));
+    } catch {
+      throw new BrowserError("SCREENSHOT_UNAVAILABLE", "The page surface could not be captured");
+    }
   }
 
   wait(run: BrowserRunHandle, args: {
