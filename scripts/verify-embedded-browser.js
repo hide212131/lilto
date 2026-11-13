@@ -550,7 +550,13 @@ async function main() {
   const o1Acq = await acquireRetry(o1.handle, `${base}/minimized`);
   check("min: first acquire while minimized auto-opens logically and prepares an operable surface without restoring", o1Acq.ok && o1Acq.state.panelVisible === false && o1Acq.state.operationReady === true && controller.getState().panelRequested === true && window.isMinimized(), JSON.stringify(o1Acq).slice(0, 300));
   const o1Snap = await controller.snapshot(o1.handle, { leaseId: o1Acq.result?.leaseId });
-  check("min: snapshot after a minimized auto-open", o1Snap.ok && o1Snap.result.viewport.width > 0, JSON.stringify(o1Snap).slice(0, 200));
+  // Windows (measured on a real desktop, Electron 44.9.3): a view first created under a minimized
+  // window receives real native bounds, but Chromium does not lay the page out until the window is
+  // restored, so the page viewport legitimately reports 0x0 while minimized. Accept 0 only in that
+  // exact case (win32 + still minimized); the recovery check below then requires the viewport to
+  // become real after restore. Everywhere else the viewport must be positive.
+  const o1ViewportZeroPlatformCase = process.platform === "win32" && o1Snap.state?.windowMinimized === true && o1Snap.result?.viewport.width === 0;
+  check("min: snapshot after a minimized auto-open", o1Snap.ok && (o1Snap.result.viewport.width > 0 || o1ViewportZeroPlatformCase), JSON.stringify(o1Snap).slice(0, 200));
   // Measured (macOS, Electron 44.9.3): a document loaded while the window is minimized is never painted.
   // The invariant is "never a stale image": the screenshot is either current or an explicit SCREENSHOT_UNAVAILABLE.
   await mWc().executeJavaScript("window.setGen(41)");
@@ -558,6 +564,12 @@ async function main() {
   const o1Outcome = o1Shot.ok ? (colorNear(shotPixel(o1Shot), genColor(41)) ? "fresh" : "STALE") : o1Shot.error.code;
   report.screenshotAfterMinimizedAcquire = o1Outcome;
   check(`min: screenshot of a document first loaded while minimized is current or explicitly unavailable, never stale (outcome: ${o1Outcome})`, o1Outcome === "fresh" || o1Outcome === "SCREENSHOT_UNAVAILABLE", o1Outcome);
+  // Recovery: restoring the window must lay the page out (its viewport becomes real) on every platform.
+  await restoreNow();
+  let o1Snap2 = null;
+  for (let i = 0; i < 15; i++) { o1Snap2 = await controller.snapshot(o1.handle, { leaseId: o1Acq.result?.leaseId }); if (o1Snap2.ok && o1Snap2.result.viewport.width > 0) break; await sleep(200); }
+  check("min: after restore, the auto-opened page gains a real viewport", Boolean(o1Snap2?.ok && o1Snap2.result.viewport.width > 0), JSON.stringify(o1Snap2).slice(0, 200));
+  await minimizeNow();
   controller.ownership.revokeAllRuns();
   await sleep(300);
   await controller.applySettings({ enabled: true, autoOpenOnToolUse: false, evaluateEnabled: true });
