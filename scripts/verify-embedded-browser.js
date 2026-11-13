@@ -24,6 +24,16 @@ const check = (name, condition, detail) => {
   if (!condition) console.error(`FAIL ${name} ${detail ?? ""}`);
 };
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// fill() resolves once the input is dispatched, not once the page has applied it; poll instead of reading once.
+const waitForValue = async (read, expected, timeoutMs = 5000) => {
+  const deadline = Date.now() + timeoutMs;
+  let value = await read();
+  while (value !== expected && Date.now() < deadline) {
+    await sleep(50);
+    value = await read();
+  }
+  return value;
+};
 
 function startServer() {
   const form = fs.readFileSync(path.join(root, "test/fixtures/browser/form.html"));
@@ -150,13 +160,18 @@ async function main() {
   check("file input refused", !fileClick.ok && fileClick.error.code === "UNSUPPORTED_TARGET");
 
   const fill = (name, text, role = "textbox") => controller.fill(a.handle, { leaseId: lease, snapshotId: S.snapshotId, ref: ref(role, name), text });
-  check("fill Japanese into input", (await fill("メールアドレス", "こんにちは世界")).ok && await wc().executeJavaScript("document.getElementById('email').value") === "こんにちは世界");
-  check("fill replaces existing text", (await fill("メールアドレス", "b@example.com")).ok && await wc().executeJavaScript("document.getElementById('email').value") === "b@example.com");
-  check("fill textarea", (await fill("お問い合わせ内容", "一行目\n二行目")).ok && await wc().executeJavaScript("document.getElementById('msg').value") === "一行目\n二行目");
-  check("fill drives controlled input handlers", (await fill("制御入力", "xyz")).ok && await wc().executeJavaScript("document.getElementById('mirror').textContent") === "state:xyz");
-  check("fill empty clears", (await fill("メールアドレス", "")).ok && await wc().executeJavaScript("document.getElementById('email').value") === "");
+  const fillOk = await fill("メールアドレス", "こんにちは世界");
+  check("fill Japanese into input", fillOk.ok && await waitForValue(() => wc().executeJavaScript("document.getElementById('email').value"), "こんにちは世界") === "こんにちは世界");
+  const fillOk2 = await fill("メールアドレス", "b@example.com");
+  check("fill replaces existing text", fillOk2.ok && await waitForValue(() => wc().executeJavaScript("document.getElementById('email').value"), "b@example.com") === "b@example.com");
+  const fillOk3 = await fill("お問い合わせ内容", "一行目\n二行目");
+  check("fill textarea", fillOk3.ok && await waitForValue(() => wc().executeJavaScript("document.getElementById('msg').value"), "一行目\n二行目") === "一行目\n二行目");
+  const fillOk4 = await fill("制御入力", "xyz");
+  check("fill drives controlled input handlers", fillOk4.ok && await waitForValue(() => wc().executeJavaScript("document.getElementById('mirror').textContent"), "state:xyz") === "state:xyz");
+  const fillOk5 = await fill("メールアドレス", "");
+  check("fill empty clears", fillOk5.ok && await waitForValue(() => wc().executeJavaScript("document.getElementById('email').value"), "") === "");
   const ce = await fill("メモ", "メモ内容");
-  check("fill contenteditable", ce.ok && (await wc().executeJavaScript("document.getElementById('ce').innerText")).trim() === "メモ内容", JSON.stringify(ce));
+  check("fill contenteditable", ce.ok && (await waitForValue(() => wc().executeJavaScript("document.getElementById('ce').innerText").then((t) => t.trim()), "メモ内容")) === "メモ内容", JSON.stringify(ce));
   check("fill password allowed without echoing the value", (await fill("パスワード", "np-secret")).ok && !JSON.stringify(await controller.snapshot(a.handle, { leaseId: lease })).includes("np-secret"));
   snap = await controller.snapshot(a.handle, { leaseId: lease }); S = snap.result;
 
@@ -398,13 +413,18 @@ async function main() {
   check("min: planned input did not take over", controller.ownership.getOwner().kind === "agent");
   check("min: still minimized after the click (nothing restored the window)", window.isMinimized());
   const mFill = (name, text, role = "textbox") => controller.fill(m.handle, { leaseId: mLease, snapshotId: MS.snapshotId, ref: mref(role, name), text });
-  check("min: fill Japanese", (await mFill("名前", "こんにちは世界")).ok && await mWc().executeJavaScript("document.getElementById('name').value") === "こんにちは世界");
-  check("min: fill replaces", (await mFill("名前", "abc")).ok && await mWc().executeJavaScript("document.getElementById('name').value") === "abc");
-  check("min: fill textarea with newline", (await mFill("メモ欄", "一行目\n二行目")).ok && await mWc().executeJavaScript("document.getElementById('memo').value") === "一行目\n二行目");
-  check("min: fill controlled input drives handlers", (await mFill("制御入力", "xyz")).ok && await mWc().executeJavaScript("document.getElementById('mirror').textContent") === "state:xyz");
+  const mFillOk1 = await mFill("名前", "こんにちは世界");
+  check("min: fill Japanese", mFillOk1.ok && await waitForValue(() => mWc().executeJavaScript("document.getElementById('name').value"), "こんにちは世界") === "こんにちは世界");
+  const mFillOk2 = await mFill("名前", "abc");
+  check("min: fill replaces", mFillOk2.ok && await waitForValue(() => mWc().executeJavaScript("document.getElementById('name').value"), "abc") === "abc");
+  const mFillOk3 = await mFill("メモ欄", "一行目\n二行目");
+  check("min: fill textarea with newline", mFillOk3.ok && await waitForValue(() => mWc().executeJavaScript("document.getElementById('memo').value"), "一行目\n二行目") === "一行目\n二行目");
+  const mFillOk4 = await mFill("制御入力", "xyz");
+  check("min: fill controlled input drives handlers", mFillOk4.ok && await waitForValue(() => mWc().executeJavaScript("document.getElementById('mirror').textContent"), "state:xyz") === "state:xyz");
   const mCe = await mFill("自由記述", "メモ内容");
-  check("min: fill contenteditable", mCe.ok && (await mWc().executeJavaScript("document.getElementById('ce').innerText")).trim() === "メモ内容", JSON.stringify(mCe));
-  check("min: fill empty clears", (await mFill("名前", "")).ok && await mWc().executeJavaScript("document.getElementById('name').value") === "");
+  check("min: fill contenteditable", mCe.ok && (await waitForValue(() => mWc().executeJavaScript("document.getElementById('ce').innerText").then((t) => t.trim()), "メモ内容")) === "メモ内容", JSON.stringify(mCe));
+  const mFillOk5 = await mFill("名前", "");
+  check("min: fill empty clears", mFillOk5.ok && await waitForValue(() => mWc().executeJavaScript("document.getElementById('name').value"), "") === "");
   await mFill("名前", "abc");
   await mClear();
   const mBack = await controller.press(m.handle, { leaseId: mLease, snapshotId: MS.snapshotId, ref: mref("textbox", "名前"), key: "Backspace" });
