@@ -19,6 +19,7 @@
     "verify:release": "node scripts/verify-release-artifacts.js",
     "verify:embedded-browser": "npm run build && electron scripts/verify-embedded-browser.js",
     "probe:minimized-browser": "electron scripts/probe-minimized-browser.js --soak-ms 60000",
+    "probe:win-capture": "electron scripts/probe-win-capture.js",
     "verify:minimized-browser": "npm run build:unit && electron scripts/verify-embedded-browser.js",
     "verify:minimized-ui": "npm run build && node scripts/verify-minimized-ui.js",
     "verify:instruction-lifecycle": "node scripts/verify-instruction-lifecycle.js",
