@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><title>fixture-minimized</title>
+<style>body{margin:0;padding:8px;font:14px sans-serif}.row{margin:6px 0}#mark{position:fixed;right:0;bottom:0;width:300px;height:300px;background:#000}</style></head>
+<body>
+<h1>最小化フィクスチャ</h1>
+<div class="row"><label for="name">名前</label> <input id="name" type="text"></div>
+<div class="row"><label for="memo">メモ欄</label> <textarea id="memo"></textarea></div>
+<div class="row"><div id="ce" contenteditable="true" aria-label="自由記述" style="border:1px solid #999;min-height:24px;width:200px"></div></div>
+<div class="row"><label for="ctl">制御入力</label> <input id="ctl" type="text"> <span id="mirror"></span></div>
+<div class="row"><select id="sel" aria-label="色"><option value="r">赤</option><option value="b">青</option></select></div>
+<div class="row"><button id="go">実行</button> <span id="out"></span></div>
+<div class="row"><a id="lnk" href="/next">次へ</a></div>
+<div id="mark"></div>
+<div style="height:2400px">長いページ</div>
+<script>
+window.__events = [];
+for (const type of ["mousedown", "mouseup", "click", "keydown", "keyup", "input"]) {
+  addEventListener(type, (e) => window.__events.push({ type, trusted: e.isTrusted, target: e.target && e.target.id, key: e.key, shift: e.shiftKey }), true);
+}
+document.getElementById("ctl").addEventListener("input", (e) => { document.getElementById("mirror").textContent = "state:" + e.target.value; });
+document.getElementById("go").addEventListener("click", () => { document.getElementById("out").textContent = "clicked"; });
+window.__ticks = 0; setInterval(() => { window.__ticks += 1; }, 50);
+window.__raf = 0; (function f() { window.__raf += 1; requestAnimationFrame(f); })();
+/** Generation marker: a distinct colour per generation, readable from a screenshot. */
+window.genColor = (n) => [(n * 37) % 256, (n * 91 + 40) % 256, (n * 53 + 100) % 256];
+window.setGen = (n) => { document.getElementById("mark").style.background = "rgb(" + window.genColor(n).join(",") + ")"; return n; };
+</script>
+</body></html>

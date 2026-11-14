@@ -22,7 +22,7 @@ async function makeBrowser({ evaluateEnabled = false, logger = silent } = {}) {
   const host = new FakeHost();
   const controller = new EmbeddedBrowserController(host, { enabled: true, autoOpenOnToolUse: true, evaluateEnabled });
   controller.beginRendererEpoch();
-  controller.onState((s) => { if (s.panelRequested && !s.panelVisible && host.attached.size > 0) setImmediate(() => presentPanel(controller)); });
+  controller.onState((s) => { if (s.panelRequested && !s.operationReady && host.attached.size > 0) setImmediate(() => presentPanel(controller)); });
   const bridge = new BrowserBridgeServer(controller, logger);
   cleanups.push(() => bridge.stop());
   await bridge.start();

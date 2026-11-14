@@ -17,7 +17,7 @@ async function fixture() {
   const host = new FakeHost();
   const controller = new EmbeddedBrowserController(host, { enabled: true, autoOpenOnToolUse: true });
   controller.beginRendererEpoch();
-  controller.onState((s) => { if (s.panelRequested && !s.panelVisible) setImmediate(() => presentPanel(controller)); });
+  controller.onState((s) => { if (s.panelRequested && !s.operationReady) setImmediate(() => presentPanel(controller)); });
   const bridge = new BrowserBridgeServer(controller, silent);
   cleanups.push(() => bridge.stop());
   await bridge.start();
@@ -104,20 +104,29 @@ test("tools/call returns structured content + JSON text; business errors set isE
   c.kill(); f.bridge.stop();
 });
 
+/** The controller (and its win32 frame-presentation gate) actually runs in this process, not the spawned child. */
+function withPlatform(value, fn) {
+  const original = Object.getOwnPropertyDescriptor(process, "platform");
+  Object.defineProperty(process, "platform", { value, configurable: true });
+  return fn().finally(() => Object.defineProperty(process, "platform", original));
+}
+
 test("screenshot arrives as MCP image content and the base64 is not duplicated in structuredContent", async () => {
   const f = await fixture();
   const c = startChild(f.env);
   const acquire = await c.request("tools/call", { name: "browser_acquire", arguments: { url: "https://example.com/" } });
   const leaseId = acquire.result.structuredContent.result.leaseId;
   f.host.views[0].webContents.pageHandlers.viewport = async () => ({ ok: true, width: 480, height: 700, readyState: "complete" });
-  const shot = await c.request("tools/call", { name: "browser_screenshot", arguments: { leaseId } });
-  assert.equal(shot.result.isError, false);
-  const image = shot.result.content.find((x) => x.type === "image");
-  assert.equal(image.mimeType, "image/png");
-  assert.equal(Buffer.from(image.data, "base64").length, 1000);
-  assert.equal("imageBase64" in shot.result.structuredContent.result, false);
-  assert.equal(shot.result.structuredContent.result.width, 1280);
-  assert.equal(JSON.stringify(shot.result.content[0]).includes(image.data), false);
+  await withPlatform("darwin", async () => {
+    const shot = await c.request("tools/call", { name: "browser_screenshot", arguments: { leaseId } });
+    assert.equal(shot.result.isError, false);
+    const image = shot.result.content.find((x) => x.type === "image");
+    assert.equal(image.mimeType, "image/png");
+    assert.equal(Buffer.from(image.data, "base64").length, 1000);
+    assert.equal("imageBase64" in shot.result.structuredContent.result, false);
+    assert.equal(shot.result.structuredContent.result.width, 1280);
+    assert.equal(JSON.stringify(shot.result.content[0]).includes(image.data), false);
+  });
   c.kill(); f.bridge.stop();
 });
 

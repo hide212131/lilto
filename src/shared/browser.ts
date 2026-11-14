@@ -52,6 +52,10 @@ export const BROWSER_ERROR_CODES = [
   "LEASE_EXPIRED",
   "PANEL_CLOSED",
   "PANEL_OCCLUDED",
+  "PANEL_NOT_READY",
+  "SYSTEM_LOCKED",
+  "SYSTEM_SUSPENDED",
+  "SCREENSHOT_UNAVAILABLE",
   "WINDOW_NOT_FOCUSED",
   "USER_INTERRUPTED",
   "STALE_REF",
@@ -79,7 +83,11 @@ export type BrowserToolState = {
   url: string;
   title: string;
   documentEpoch: number;
+  /** The panel is shown to the user: view displayed and the host window neither hidden nor minimized. */
   panelVisible: boolean;
+  /** Tools can operate on the page now (panel requested, view prepared, environment gate open), even while minimized. */
+  operationReady: boolean;
+  windowMinimized: boolean;
   loading: boolean;
 };
 
@@ -173,8 +181,12 @@ export type BrowserPanelState = {
   autoOpenOnToolUse: boolean;
   /** Panel is requested open by the user or by an auto-open. */
   panelRequested: boolean;
-  /** The native view is actually shown. */
+  /** The native view is shown to the user (false while the window is minimized or hidden). */
   panelVisible: boolean;
+  /** Tools can operate on the page (may be true while panelVisible is false, e.g. minimized). */
+  operationReady: boolean;
+  /** The host window is minimized, as observed by Main. */
+  windowMinimized: boolean;
   url: string;
   title: string;
   loading: boolean;

@@ -141,3 +141,27 @@ test("parseBrowsableUrl は http(s) のみ・認証情報なし・長さ上限",
     assert.equal(parseBrowsableUrl(bad), null, String(bad).slice(0, 40));
   }
 });
+
+test("tool state schema carries operationReady and windowMinimized; new error codes exist; no focus requirement is advertised (Issue #42)", () => {
+  const { BROWSER_ERROR_CODES } = require("../dist/shared/browser.js");
+  for (const code of ["PANEL_NOT_READY", "SYSTEM_LOCKED", "SYSTEM_SUSPENDED", "SCREENSHOT_UNAVAILABLE", "WINDOW_NOT_FOCUSED"]) assert.ok(BROWSER_ERROR_CODES.includes(code), code);
+  const status = listBrowserTools({ evaluateEnabled: false }).find((t) => t.name === "browser_status");
+  assert.match(status.description, /minimized, unfocused or covered/);
+  assert.match(status.description, /operationReady/);
+  const evaluateTool = listBrowserTools({ evaluateEnabled: true }).find((t) => t.name === "browser_evaluate");
+  assert.doesNotMatch(evaluateTool.description, /window unfocused/);
+  assert.match(evaluateTool.description, /minimized, unfocused or covered/);
+});
+
+test("Codex instructions: background operation is allowed, explicit refusals are respected, no WINDOW_NOT_FOCUSED rule remains", () => {
+  const { resolveBrowserInstructionUpdate } = require("../dist/main/agent-sdk-config.js");
+  for (const evaluateEnabled of [false, true]) {
+    const { text } = resolveBrowserInstructionUpdate({ enabled: true, evaluateEnabled });
+    assert.match(text, /minimized, unfocused or covered/);
+    assert.match(text, /panelVisible=false alone is no reason to stop/);
+    assert.match(text, /SYSTEM_\*/);
+    assert.doesNotMatch(text, /WINDOW_NOT_FOCUSED/);
+    // Codex truncates a developer item above ~4000 chars (it cuts the middle): the wrapped state text must stay below that.
+    assert.ok(text.length + 50 <= 4000, `state text is ${text.length} chars`);
+  }
+});

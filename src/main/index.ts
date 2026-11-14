@@ -18,7 +18,7 @@ import { APP_UPDATE_OPEN_CHANNEL, APP_UPDATE_STATE_CHANNEL } from "../shared/app
 import { AppUpdateService } from "./app-update-service";
 import { registerAppUpdateIpcHandlers } from "./ipc/app-update";
 import { installLinkNavigation } from "./link-navigation";
-import { attachControllerToWindow } from "./embedded-browser-electron";
+import { attachControllerToPowerMonitor, attachControllerToWindow, hideWindowExplicitly } from "./embedded-browser-electron";
 import type { BrowserBridgeServer } from "./browser-bridge";
 import type { EmbeddedBrowserController } from "./embedded-browser";
 
@@ -38,6 +38,7 @@ let heartbeatAssistant: HeartbeatAssistantService | null = null;
 let appUpdateService: AppUpdateService | null = null;
 let browserController: EmbeddedBrowserController | null = null;
 let browserBridge: BrowserBridgeServer | null = null;
+let detachBrowserPowerMonitor: (() => void) | null = null;
 
 const notificationService = new NotificationService();
 
@@ -90,7 +91,7 @@ function createWindow(): void {
   mainWindow.on("close", (event) => {
     if (isQuitting) return;
     event.preventDefault();
-    mainWindow?.hide();
+    if (mainWindow) hideWindowExplicitly(browserController, mainWindow);
   });
 
   mainWindow.on("closed", () => {
@@ -161,6 +162,7 @@ if (hasSingleInstanceLock) {
     heartbeatAssistant = runtime.heartbeatAssistant;
     browserController = runtime.browserController;
     browserBridge = runtime.browserBridge;
+    detachBrowserPowerMonitor = browserController ? attachControllerToPowerMonitor(browserController) : null;
     appUpdateService = new AppUpdateService({
       logger: createLogger("app-update"),
       currentVersion: app.getVersion(),
@@ -270,6 +272,8 @@ app.on("before-quit", () => {
   schedulerBridge = null;
   browserBridge?.stop();
   browserBridge = null;
+  detachBrowserPowerMonitor?.();
+  detachBrowserPowerMonitor = null;
   browserController?.dispose();
   browserController = null;
   heartbeatAssistant = null;

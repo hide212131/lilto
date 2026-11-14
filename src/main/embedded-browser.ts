@@ -35,9 +35,18 @@ export type WebContentsLike = EventEmitter & {
   executeJavaScriptInIsolatedWorld(worldId: number, scripts: Array<{ code: string }>): Promise<unknown>;
   sendInputEvent(event: Record<string, unknown>): void;
   insertText(text: string): Promise<void>;
-  capturePage(): Promise<ImageLike>;
+  capturePage(rect?: undefined, options?: { stayHidden?: boolean; stayAwake?: boolean }): Promise<ImageLike>;
+  setBackgroundThrottling(allowed: boolean): void;
   setWindowOpenHandler(handler: (details: { url: string }) => { action: "deny" }): void;
+  /** Real Electron API; used only on win32 to confirm a frame was actually presented before trusting a capture. */
+  beginFrameSubscription?(onlyDirty: boolean, callback: (image: ImageLike, dirtyRect: DirtyRectLike) => void): void;
+  endFrameSubscription?(): void;
+  /** Real Electron API; used only on win32 to nudge the compositor into presenting a fresh frame after subscribing. */
+  invalidate?(): void;
 };
+
+/** Electron's Rectangle shape, as handed to beginFrameSubscription's callback. */
+export type DirtyRectLike = { x: number; y: number; width: number; height: number };
 
 export type ImageLike = {
   getSize(): { width: number; height: number };
@@ -51,14 +60,32 @@ export type ViewLike = {
   setVisible(visible: boolean): void;
 };
 
+export type BrowserWindowState = {
+  /** A live window exists. */
+  present: boolean;
+  /** Electron's isVisible(): false while hidden, and false while minimized on macOS. */
+  visible: boolean;
+  minimized: boolean;
+  /** Informational only (diagnostics); never an operation condition. */
+  focused: boolean;
+};
+
 export interface BrowserHost {
   createView(): ViewLike;
   attachView(view: ViewLike): void;
   detachView(view: ViewLike): void;
   getContentSize(): { width: number; height: number };
+  /**
+   * A content-size estimate derived from the window's normal (restored) bounds, for use only when
+   * `getContentSize()` has collapsed (observed on Windows while minimized). Null when no real,
+   * non-minimized measurement has ever been taken to derive the window chrome offset from.
+   */
+  getNormalContentSize(): { width: number; height: number } | null;
   getZoomFactor(): number;
-  isWindowVisible(): boolean;
-  isWindowFocused(): boolean;
+  /** One consistent read of the host window: operation permission never depends on OS focus. */
+  getWindowState(): BrowserWindowState;
+  /** Background throttling of the host renderer (the Lit UI that reports the panel layout). */
+  setHostBackgroundThrottling(allowed: boolean): void;
   sendToRenderer(channel: string, payload: unknown): void;
   openExternal(url: string): void;
   clearSessionData(): Promise<void>;
@@ -66,12 +93,37 @@ export interface BrowserHost {
 }
 
 export type BrowserRunHandle = { runId: string; conversationId: string; signal: AbortSignal };
+type SystemBlock = "locked" | "suspended" | null;
 type Ctx = { check: () => void; signal: AbortSignal; deadlineSignal: AbortSignal; effect: "none" | "possible" | "applied"; deadline: number };
 export type BrowserControllerSettings = { enabled: boolean; autoOpenOnToolUse: boolean; evaluateEnabled?: boolean };
 type Waiter = { resolve: () => void; reject: (error: unknown) => void };
 
 const POLL_MS = 100;
 const AUTO_OPEN_WAIT_MS = 3000;
+const SCREENSHOT_CAPTURE_MS = 3000;
+
+/**
+ * winfix7: true only when a dirtyRect is present and interpretable (has numeric width/height) *and* reports
+ * no changed area. Anything uninterpretable (missing, not an object, non-numeric fields) is deliberately
+ * treated as "not empty" so a frame is never rejected just because the caller didn't model dirtyRect.
+ */
+function isDirtyRectEmpty(dirtyRect: DirtyRectLike | null | undefined): boolean {
+  if (!dirtyRect || typeof dirtyRect.width !== "number" || typeof dirtyRect.height !== "number") return false;
+  return dirtyRect.width <= 0 || dirtyRect.height <= 0;
+}
+
+/** winfix7 instrumentation: opt-in via LILTO_SCREENSHOT_DEBUG=1, silent otherwise, never affects behavior. */
+function logScreenshotDebug(image: ImageLike, dirtyRect: DirtyRectLike | null | undefined): void {
+  if (process.env.LILTO_SCREENSHOT_DEBUG !== "1") return;
+  try {
+    const size = image.getSize();
+    console.error(`[lilto screenshot debug] image=${size.width}x${size.height} dirtyRect=${JSON.stringify(dirtyRect ?? null)}`);
+  } catch {
+    /* diagnostics must never throw */
+  }
+}
+/** The window is closed to the tray or hidden by the user: the one visibility state that still refuses operations. */
+const WINDOW_HIDDEN_MESSAGE = "The Lilto window is explicitly hidden or unavailable";
 const KEY_CODES: Record<string, { keyCode: string; char?: string }> = {
   Enter: { keyCode: "Enter", char: "\r" }, Tab: { keyCode: "Tab" }, Escape: { keyCode: "Escape" }, Backspace: { keyCode: "Backspace" },
   Delete: { keyCode: "Delete" }, ArrowUp: { keyCode: "Up" }, ArrowDown: { keyCode: "Down" }, ArrowLeft: { keyCode: "Left" },
@@ -105,7 +157,18 @@ export class EmbeddedBrowserController {
   private presentation: BrowserPresentation = { open: false, occluded: false, resizing: false };
   private panelRequested = false;
   private lastBounds: IntRect | null = null;
+  /** Last real measurement, kept across a renderer reload (unlike lastBounds) for the minimized fallback (W1). */
+  private savedBounds: IntRect | null = null;
   private visibleNow = false;
+  /** The view is prepared and shown natively (also while the host window is minimized). */
+  private surfaceReady = false;
+  /** Explicit hide (close-to-tray); a minimize never sets this. */
+  private windowHidden = false;
+  private locked = false;
+  private suspended = false;
+  /** Host window content size / zoom at the last accepted measurement (to detect a changed layout on restore). */
+  private measured: { width: number; height: number; zoom: number } | null = null;
+  private throttlingOff = false;
   private error: string | null = null;
   private snapshotCounter = 0;
   private latestSnapshot: { id: string; ownershipEpoch: number; documentEpoch: number; at: number } | null = null;
@@ -121,6 +184,7 @@ export class EmbeddedBrowserController {
     this.ownership.setIssuing(settings.enabled);
     this.ownership.onChange = () => {
       this.latestSnapshot = null;
+      this.syncThrottling();
       this.publish();
     };
   }
@@ -140,6 +204,8 @@ export class EmbeddedBrowserController {
       autoOpenOnToolUse: this.autoOpen,
       panelRequested: this.panelRequested,
       panelVisible: this.visibleNow,
+      operationReady: this.operationReady(),
+      windowMinimized: this.host.getWindowState().minimized,
       url: wc?.getURL() ?? "",
       title: wc?.getTitle() ?? "",
       loading: wc?.isLoading() ?? false,
@@ -160,6 +226,8 @@ export class EmbeddedBrowserController {
       title: wc?.getTitle() ?? "",
       documentEpoch: this.ownership.epochs.documentEpoch,
       panelVisible: this.visibleNow,
+      operationReady: this.operationReady(),
+      windowMinimized: this.host.getWindowState().minimized,
       loading: wc?.isLoading() ?? false
     };
   }
@@ -170,7 +238,7 @@ export class EmbeddedBrowserController {
     const state = this.getState();
     this.host.sendToRenderer(BROWSER_IPC.stateChanged, state);
     for (const listener of this.listeners) listener(state);
-    if (this.visibleNow || !this.panelRequested) this.flushWaiters();
+    if (this.operationReady() || !this.panelRequested || this.environmentError()) this.flushWaiters();
   }
 
   private flushWaiters(): void {
@@ -224,6 +292,7 @@ export class EmbeddedBrowserController {
       this.ownership.bumpInteraction();
       this.view?.setVisible(false);
       this.visibleNow = false;
+      this.surfaceReady = false;
       // A viewport message already carries a fresh measurement; only a bare presentation change needs one.
       if (!this.presentation.occluded && !this.presentation.resizing && !options.measured) {
         this.layoutRevision += 1;
@@ -242,10 +311,24 @@ export class EmbeddedBrowserController {
 
   updateViewport(update: BrowserViewportUpdate): boolean {
     if (!this.gate.accept(update)) return false;
+    const content = this.host.getContentSize();
+    // A minimized window may report a collapsed viewport, and on Windows the host's own content size
+    // can also collapse to zero while minimized: either way, adopt the panel state but keep the last
+    // known-good surface instead of destroying it with an unusable measurement.
+    const collapsed =
+      update.viewport.width <= 0 || update.viewport.height <= 0 || update.hostViewport.width <= 0 || update.hostViewport.height <= 0 ||
+      content.width <= 0 || content.height <= 0;
+    const knownGood = this.lastBounds ?? this.savedBounds;
+    if (collapsed && update.panelOpen && knownGood !== null && this.host.getWindowState().minimized) {
+      this.adoptPresentation({ open: update.panelOpen, occluded: update.occluded, resizing: update.resizing }, { measured: true });
+      this.lastBounds = knownGood;
+      this.applyView();
+      this.publish();
+      return true;
+    }
     this.adoptPresentation({ open: update.panelOpen, occluded: update.occluded, resizing: update.resizing }, { measured: true });
     // Only a measurement taken against the current layoutRevision satisfies a pending relayout.
     if (update.layoutRevision >= this.layoutRevision) this.needsRelayout = false;
-    const content = this.host.getContentSize();
     const zoom = this.host.getZoomFactor();
     const clamped = {
       x: update.viewport.x,
@@ -254,6 +337,8 @@ export class EmbeddedBrowserController {
       height: Math.min(update.viewport.height, update.hostViewport.height)
     };
     this.lastBounds = computeViewBounds(clamped, zoom, content);
+    if (this.lastBounds) this.savedBounds = this.lastBounds;
+    this.measured = { width: content.width, height: content.height, zoom };
     this.applyView();
     this.publish();
     return true;
@@ -263,34 +348,124 @@ export class EmbeddedBrowserController {
     const view = this.view;
     if (!view || view.webContents.isDestroyed()) {
       this.visibleNow = false;
+      this.surfaceReady = false;
       return;
     }
-    const show = this.enabled && this.panelRequested && !this.presentation.occluded && !this.presentation.resizing &&
-      !this.needsRelayout && this.host.isWindowVisible() && this.lastBounds !== null;
-    if (show && this.lastBounds) {
+    const win = this.host.getWindowState();
+    // The view stays displayed natively while the window is minimized: only the user-visible panelVisible differs.
+    const ready = this.environmentError() === null && this.panelRequested && !this.needsRelayout && this.lastBounds !== null;
+    if (ready && this.lastBounds) {
       view.setBounds(this.lastBounds);
       view.setVisible(true);
     } else {
       view.setVisible(false);
     }
-    this.visibleNow = show;
+    this.surfaceReady = ready;
+    this.visibleNow = ready && win.visible && !win.minimized;
+  }
+
+  /** Tools may touch the page: surface prepared and the environment gate open. Independent of the minimized state. */
+  private operationReady(): boolean {
+    return this.surfaceReady && this.environmentError() === null;
+  }
+
+  /**
+   * Disable background throttling of the page and of the host renderer while an agent holds the browser,
+   * so timers, rAF and the panel layout report keep running when the window is minimized or covered.
+   * Electron has no getter; the restored value is the default (true). powerSaveBlocker is never used.
+   */
+  private syncThrottling(): void {
+    const want = this.enabled && !this.disposed && this.ownership.getOwner().kind === "agent";
+    const wc = this.liveContents();
+    if (want) {
+      wc?.setBackgroundThrottling(false);
+      if (!this.throttlingOff) this.host.setHostBackgroundThrottling(false);
+      this.throttlingOff = true;
+    } else if (this.throttlingOff) {
+      this.throttlingOff = false;
+      this.host.setHostBackgroundThrottling(true);
+      wc?.setBackgroundThrottling(true);
+    }
   }
 
   /* ------------------------------------------------------- window events */
 
+  /**
+   * Measures and caches the window-chrome offset (host.getContentSize()'s side effect) as early as
+   * possible, while the window is still guaranteed not minimized — a window can be minimized before
+   * any resize/relayout event ever fires, and the offset is only measurable while not minimized. Safe
+   * to call at any time; it has no effect on layout state (unlike onWindowGeometryChanged).
+   */
+  primeChromeOffset(): void {
+    this.host.getContentSize();
+  }
+
   onWindowGeometryChanged(): void {
+    // Shrinking caused by minimizing is not a layout change; restore compares the real geometry.
+    if (this.host.getWindowState().minimized) return;
     this.requestRelayout();
   }
 
+  /** Explicit hide (close button => tray): operations stop and the lease ends. A minimize does not come here. */
   onWindowHidden(): void {
+    this.windowHidden = true;
     this.ownership.expireLease({ interrupted: false });
-    this.view?.setVisible(false);
-    this.visibleNow = false;
+    this.applyView();
     this.publish();
   }
 
+  /** The window was minimized: nothing about the lease, the view or the layout changes. */
+  onWindowMinimized(): void {
+    this.applyView();
+    this.publish();
+  }
+
+  /** Restored from minimized: keep the lease; measure again only if the real geometry differs. */
+  onWindowRestored(): void {
+    const content = this.host.getContentSize();
+    const zoom = this.host.getZoomFactor();
+    const same = this.measured && this.measured.width === content.width && this.measured.height === content.height && this.measured.zoom === zoom;
+    if (same) {
+      this.applyView();
+      this.publish();
+    } else {
+      this.requestRelayout();
+    }
+  }
+
+  /** Shown after an explicit hide (or first show): the old lease is never revived. */
   onWindowShown(): void {
+    this.windowHidden = false;
     this.requestRelayout();
+  }
+
+  onSystemLocked(): void {
+    this.locked = true;
+    this.systemBlocked();
+  }
+
+  onSystemUnlocked(): void {
+    this.locked = false;
+    this.applyView();
+    this.publish();
+  }
+
+  onSystemSuspend(): void {
+    this.suspended = true;
+    this.systemBlocked();
+  }
+
+  onSystemResume(): void {
+    this.suspended = false;
+    this.applyView();
+    this.publish();
+  }
+
+  /** Screen lock / suspend: stop delivery and end the lease; it is never resumed automatically. */
+  private systemBlocked(): void {
+    this.ownership.expireLease({ interrupted: false });
+    this.applyView();
+    this.publish();
   }
 
   /* --------------------------------------------------------- user actions */
@@ -414,8 +589,9 @@ export class EmbeddedBrowserController {
   dispose(): void {
     this.ownership.revokeAllRuns();
     this.closeView();
-    this.flushWaiters();
     this.disposed = true;
+    this.syncThrottling();
+    this.flushWaiters();
   }
 
   /* ------------------------------------------------------------------ view */
@@ -436,6 +612,7 @@ export class EmbeddedBrowserController {
     this.wireView(view);
     this.host.attachView(view);
     view.setVisible(false);
+    if (this.throttlingOff) view.webContents.setBackgroundThrottling(false);
     // An already-open, already-measured panel must show the replacement view immediately.
     this.applyView();
     this.publish();
@@ -448,6 +625,7 @@ export class EmbeddedBrowserController {
     this.view = null;
     this.viewConversationId = null;
     this.visibleNow = false;
+    this.surfaceReady = false;
     this.ownership.bumpView();
     this.latestSnapshot = null;
     this.frames.clear();
@@ -555,6 +733,7 @@ export class EmbeddedBrowserController {
       this.ownership.expireLease({ interrupted: false });
       this.ownership.bumpView();
       this.visibleNow = false;
+      this.surfaceReady = false;
       this.publish();
     });
     wc.on("before-input-event", (...args: unknown[]) => {
@@ -636,18 +815,56 @@ export class EmbeddedBrowserController {
 
   /* ------------------------------------------------------------ tool core */
 
-  private presentableError(): BrowserError | null {
+  /**
+   * The environment gate shared by every tool: settings, teardown, an explicitly hidden window, screen lock /
+   * suspend, and in-app modal / resize. A minimized, unfocused or covered window is NOT a reason to refuse.
+   */
+  private environmentError(): BrowserError | null {
     if (!this.enabled) return new BrowserError("BROWSER_DISABLED", "The embedded browser is disabled in settings");
-    if (this.disposed || !this.host.isWindowVisible()) return new BrowserError("BROWSER_UNAVAILABLE", "The Lilto window is hidden or minimized");
+    const win = this.disposed ? null : this.host.getWindowState();
+    if (!win || !win.present || this.windowHidden || (!win.visible && !win.minimized)) return new BrowserError("BROWSER_UNAVAILABLE", WINDOW_HIDDEN_MESSAGE);
+    if (this.suspended) return new BrowserError("SYSTEM_SUSPENDED", "The computer is suspending or has just resumed; call a tool again later", { retryable: true });
+    if (this.locked) return new BrowserError("SYSTEM_LOCKED", "The screen is locked; browser operations are paused until it is unlocked", { retryable: true });
     if (this.presentation.occluded || this.presentation.resizing) return new BrowserError("PANEL_OCCLUDED", "A dialog or resize is covering the browser panel", { retryable: true });
     return null;
   }
 
-  /** Make sure the panel is shown (auto-open) before touching the page. */
-  private async ensurePresentable(signal: AbortSignal, timeoutMs: number): Promise<void> {
-    const blocked = this.presentableError();
+  /**
+   * On some platforms (observed on Windows) a minimized window's renderer never completes a layout
+   * measurement, so the real report that normally satisfies `needsRelayout` never arrives. Only once the
+   * wait has actually timed out, and only while minimized, fall back to the last known-good surface size
+   * (this epoch's `lastBounds`, else the last `savedBounds` across a reload, else the full host content
+   * area) so operations are not permanently blocked. A real measurement on restore still re-validates it.
+   */
+  private applyMinimizedFallbackLayout(): boolean {
+    if (!this.needsRelayout) return false;
+    if (!this.host.getWindowState().minimized) return false;
+    let fallback = this.lastBounds ?? this.savedBounds;
+    if (!fallback) {
+      const content = this.host.getContentSize();
+      if (content.width > 0 && content.height > 0) {
+        fallback = { x: 0, y: 0, width: content.width, height: content.height };
+      } else {
+        // Windows can report a collapsed content size while minimized even on the very first
+        // measurement, with no prior real bounds to fall back to; the window's own measured normal
+        // (restored) bounds are still real geometry, not a guess.
+        const normal = this.host.getNormalContentSize();
+        if (normal && normal.width > 0 && normal.height > 0) fallback = { x: 0, y: 0, width: normal.width, height: normal.height };
+      }
+    }
+    if (!fallback) return false;
+    this.lastBounds = fallback;
+    this.needsRelayout = false;
+    this.applyView();
+    this.publish();
+    return true;
+  }
+
+  /** Prepare the operation surface (auto-open the panel logically, even while minimized) before touching the page. */
+  private async ensureOperable(signal: AbortSignal, timeoutMs: number): Promise<void> {
+    const blocked = this.environmentError();
     if (blocked) throw blocked;
-    if (this.visibleNow) return;
+    if (this.operationReady()) return;
     if (!this.panelRequested) {
       if (!this.autoOpen) throw new BrowserError("PANEL_CLOSED", "The browser panel is closed. Ask the user to open it.");
       this.panelRequested = true;
@@ -655,7 +872,10 @@ export class EmbeddedBrowserController {
     }
     await new Promise<void>((resolve, reject) => {
       const waiter: Waiter = { resolve: () => done(null), reject: (error) => done(error) };
-      const timer = setTimeout(() => done(new BrowserError("PANEL_CLOSED", "The browser panel could not be shown", { retryable: true })), Math.min(timeoutMs, AUTO_OPEN_WAIT_MS));
+      const timer = setTimeout(() => {
+        if (this.applyMinimizedFallbackLayout()) done(null);
+        else done(new BrowserError("PANEL_NOT_READY", "The browser panel did not report a usable layout in time", { retryable: true }));
+      }, Math.min(timeoutMs, AUTO_OPEN_WAIT_MS));
       const onAbort = () => done(new BrowserError("CANCELLED", "The operation was cancelled"));
       const done = (error: unknown | null) => {
         if (!this.waiters.delete(waiter)) return;
@@ -663,23 +883,24 @@ export class EmbeddedBrowserController {
         signal.removeEventListener("abort", onAbort);
         if (error) reject(error);
         else {
-          const blockedNow = this.presentableError();
+          const blockedNow = this.environmentError();
           if (blockedNow) reject(blockedNow);
-          else if (!this.visibleNow) reject(new BrowserError("PANEL_CLOSED", "The browser panel was closed"));
+          else if (!this.panelRequested) reject(new BrowserError("PANEL_CLOSED", "The browser panel was closed"));
+          else if (!this.operationReady()) reject(new BrowserError("PANEL_NOT_READY", "The browser panel is not ready", { retryable: true }));
           else resolve();
         }
       };
       this.waiters.add(waiter);
       signal.addEventListener("abort", onAbort, { once: true });
       if (signal.aborted) onAbort();
-      else if (this.visibleNow) done(null);
+      else if (this.operationReady()) done(null);
     });
   }
 
   private async run<T>(
     run: BrowserRunHandle,
     leaseId: string,
-    options: { timeoutMs?: number; needsFocus?: boolean; snapshotId?: string; sharedDeadline?: boolean; documentEpoch?: number },
+    options: { timeoutMs?: number; snapshotId?: string; sharedDeadline?: boolean; documentEpoch?: number },
     body: (ctx: Ctx) => Promise<T>
   ): Promise<BrowserResult<T>> {
     const timeoutMs = options.timeoutMs ?? BROWSER_LIMITS.timeoutDefaultMs;
@@ -688,8 +909,10 @@ export class EmbeddedBrowserController {
     try {
       if (!this.enabled) throw new BrowserError("BROWSER_DISABLED", "The embedded browser is disabled in settings");
       if (options.sharedDeadline && !this.evaluateEnabled) throw new BrowserError("EVALUATE_DISABLED", "Page JavaScript execution is disabled in settings");
+      const blockedNow = this.environmentError();
+      if (blockedNow) throw blockedNow;
       this.ownership.assertLease(run.runId, leaseId);
-      await this.ensurePresentable(run.signal, timeoutMs);
+      await this.ensureOperable(run.signal, timeoutMs);
       // One deadline for the whole request (panel wait + queue + run), not a fresh budget per stage.
       const remainingMs = options.sharedDeadline ? Math.max(1, timeoutMs - (this.now() - startedAt)) : timeoutMs;
       if (options.documentEpoch !== undefined && options.documentEpoch !== this.ownership.epochs.documentEpoch) {
@@ -706,6 +929,9 @@ export class EmbeddedBrowserController {
         set effect(value) { effect = value; },
         deadline: this.now() + remainingMs,
         check: () => {
+          // Hide, lock, suspend and modal/resize end delivery here too; the effect so far is kept.
+          const env = this.enabled ? this.environmentError() : null;
+          if (env) throw new BrowserError(env.code, env.message, { retryable: env.retryable && effect === "none", effect });
           if (signal.aborted || !this.ownership.isRunActive(run.runId)) throw new BrowserError("CANCELLED", "The operation was cancelled", { effect });
           if (expired) throw new BrowserError("TIMEOUT", "The operation timed out", { retryable: false, effect });
           this.ownership.assertLease(run.runId, leaseId);
@@ -718,7 +944,6 @@ export class EmbeddedBrowserController {
         }
       };
       if (options.snapshotId !== undefined) this.assertSnapshot(options.snapshotId);
-      if (options.needsFocus && !this.host.isWindowFocused()) throw new BrowserError("WINDOW_NOT_FOCUSED", "Lilto is not the focused window; ask the user to bring it to the front", { retryable: true });
       let timer: NodeJS.Timeout | undefined;
       const timeout = new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => {
@@ -774,20 +999,23 @@ export class EmbeddedBrowserController {
 
   status(): BrowserResult<Record<string, unknown>> {
     const wc = this.liveContents();
-    const blocked = this.presentableError();
+    const blocked = this.environmentError();
     return {
       ok: true,
       state: this.toolState(),
       result: {
         enabled: this.enabled,
-        available: this.enabled && this.host.isWindowVisible() && !this.disposed,
+        // Occlusion/resizing and a minimized window do not make the browser unavailable; the diagnosis is in blockedReason.
+        available: blocked === null || blocked.code === "PANEL_OCCLUDED",
         owner: this.ownership.ownerView(),
         panelOpen: this.panelRequested,
         panelVisible: this.visibleNow,
+        operationReady: this.operationReady(),
+        windowMinimized: this.host.getWindowState().minimized,
         evaluateEnabled: this.isEvaluateEnabled(),
         canGoBack: wc?.navigationHistory.canGoBack() ?? false,
         canGoForward: wc?.navigationHistory.canGoForward() ?? false,
-        blockedReason: blocked && blocked.code !== "PANEL_OCCLUDED" ? blocked.code : this.presentation.occluded ? "PANEL_OCCLUDED" : null
+        blockedReason: blocked?.code ?? null
       }
     };
   }
@@ -799,7 +1027,7 @@ export class EmbeddedBrowserController {
       if (!this.enabled) throw new BrowserError("BROWSER_DISABLED", "The embedded browser is disabled in settings");
       const url = parseBrowsableUrl(args.url);
       if (!url) throw new BrowserError("NAVIGATION_BLOCKED", "Only http(s) URLs without credentials are allowed");
-      const early = this.presentableError();
+      const early = this.environmentError();
       if (early) throw early;
       const acquired = this.ownership.acquire(run.runId);
       leaseId = acquired.leaseId;
@@ -946,11 +1174,10 @@ export class EmbeddedBrowserController {
   }
 
   click(run: BrowserRunHandle, args: { leaseId: string; snapshotId: string; ref: string; button?: "left" | "right"; clickCount?: 1 | 2; timeoutMs?: number }) {
-    return this.run(run, args.leaseId, { timeoutMs: args.timeoutMs, needsFocus: true, snapshotId: args.snapshotId }, async (ctx) => {
+    return this.run(run, args.leaseId, { timeoutMs: args.timeoutMs, snapshotId: args.snapshotId }, async (ctx) => {
       ctx.check();
       const target = this.unwrap(await this.page<{ x: number; y: number }>("prepareClick", { snapshotId: args.snapshotId, ref: args.ref }));
       ctx.check();
-      if (!this.host.isWindowFocused()) throw new BrowserError("WINDOW_NOT_FOCUSED", "Lilto is not the focused window", { retryable: true });
       const wc = this.liveContents()!;
       const button = args.button ?? "left";
       const count = args.clickCount ?? 1;
@@ -969,11 +1196,10 @@ export class EmbeddedBrowserController {
   }
 
   fill(run: BrowserRunHandle, args: { leaseId: string; snapshotId: string; ref: string; text: string; timeoutMs?: number }) {
-    return this.run(run, args.leaseId, { timeoutMs: args.timeoutMs, needsFocus: true, snapshotId: args.snapshotId }, async (ctx) => {
+    return this.run(run, args.leaseId, { timeoutMs: args.timeoutMs, snapshotId: args.snapshotId }, async (ctx) => {
       ctx.check();
       const prepared = this.unwrap(await this.page<{ empty: boolean }>("prepareFill", { snapshotId: args.snapshotId, ref: args.ref }));
       ctx.check();
-      if (!this.host.isWindowFocused()) throw new BrowserError("WINDOW_NOT_FOCUSED", "Lilto is not the focused window", { retryable: true });
       const wc = this.liveContents()!;
       ctx.effect = "possible";
       if (args.text.length > 0) {
@@ -1003,11 +1229,10 @@ export class EmbeddedBrowserController {
   press(run: BrowserRunHandle, args: { leaseId: string; snapshotId: string; ref: string; key: string; modifiers?: string[]; timeoutMs?: number }) {
     const key = KEY_CODES[args.key];
     if (!key) return Promise.resolve(this.failure(new BrowserError("INTERNAL_ERROR", "Unsupported key")));
-    return this.run(run, args.leaseId, { timeoutMs: args.timeoutMs, needsFocus: true, snapshotId: args.snapshotId }, async (ctx) => {
+    return this.run(run, args.leaseId, { timeoutMs: args.timeoutMs, snapshotId: args.snapshotId }, async (ctx) => {
       ctx.check();
       this.unwrap(await this.page("prepareFocus", { snapshotId: args.snapshotId, ref: args.ref }));
       ctx.check();
-      if (!this.host.isWindowFocused()) throw new BrowserError("WINDOW_NOT_FOCUSED", "Lilto is not the focused window", { retryable: true });
       const wc = this.liveContents()!;
       const modifiers = this.modifiersOf(args.modifiers);
       ctx.effect = "possible";
@@ -1045,8 +1270,31 @@ export class EmbeddedBrowserController {
       ctx.check();
       const wc = this.liveContents();
       if (!wc) throw new BrowserError("PAGE_CRASHED", "The page is not available");
-      let image = await wc.capturePage();
+      // Current frame only: wait for the page to paint, then capture while hidden-safe (design 7). No cached image,
+      // no restore of the window. A page whose frames cannot be produced fails explicitly.
+      let image: ImageLike;
+      if (process.platform === "win32" && wc.beginFrameSubscription) {
+        // win32-only: a minimized window's compositor can silently stop presenting new frames, which makes
+        // capturePage() succeed with a stale image instead of erroring — and on CI's software compositor,
+        // capturePage() can even return a stale surface right after beginFrameSubscription confirms a fresh
+        // one was presented, because the two draw from different pipelines. So on win32 we capture the exact
+        // bitmap handed to the subscription callback instead of calling capturePage() at all; that bitmap is
+        // the presented frame, not a separate (possibly-stale) read of it. Extra conditions on top of "take
+        // the first presented frame" were tried and dropped after real Windows runs: requiring a *second*
+        // post-settle frame, and requiring the frame to arrive *after* settleFrames resolves, both discarded
+        // the only frame a static page ever presents, turning every such screenshot into a false
+        // SCREENSHOT_UNAVAILABLE. settleFrames still runs first so the frame it produces is in flight before
+        // the subscription starts.
+        this.unwrap(await this.page("settleFrames", {}));
+        ctx.check();
+        image = await this.awaitPresentedFrame(wc, SCREENSHOT_CAPTURE_MS);
+      } else {
+        this.unwrap(await this.page("settleFrames", {}));
+        ctx.check();
+        image = await this.capturePageWithTimeout(wc, SCREENSHOT_CAPTURE_MS);
+      }
       ctx.check();
+      if (!image.getSize().width || !image.getSize().height) throw new BrowserError("SCREENSHOT_UNAVAILABLE", "The page surface could not be captured");
       const { width, height } = image.getSize();
       const edge = Math.max(width, height);
       let outWidth = width;
@@ -1062,6 +1310,75 @@ export class EmbeddedBrowserController {
       const viewport = this.unwrap(await this.page<{ width: number; height: number }>("viewport", {}));
       return { mimeType: "image/png" as const, width: outWidth, height: outHeight, viewportWidth: viewport.width, viewportHeight: viewport.height, imageBase64: png.toString("base64") };
     });
+  }
+
+  /**
+   * win32 freshness gate (Issue #42 W2/W7). Called after settleFrames has already resolved; starts the frame
+   * subscription and trusts the first bitmap handed to its callback as the presented frame, without calling
+   * capturePage() at all. Rejects with SCREENSHOT_UNAVAILABLE if no frame arrives within `timeoutMs`.
+   *
+   * winfix7: on CI's software compositor a minimized window can keep delivering the *pre-existing* surface
+   * to a fresh subscription instead of erroring, so "the first frame handed to the callback" is not always
+   * fresh. Electron also reports which region of the frame actually changed via `dirtyRect`; a frame whose
+   * dirtyRect is empty (no changed pixels) is treated as a repeat of a stale surface and skipped in favor of
+   * the next callback, bounded by the same deadline. A dirtyRect that is missing or not in the expected shape
+   * (older Electron versions, or a test fake that only models the image) is *not* treated as empty — it is
+   * passed through unchanged, so real desktops and existing fakes keep today's behavior.
+   */
+  private awaitPresentedFrame(wc: WebContentsLike, timeoutMs: number): Promise<ImageLike> {
+    const begin = wc.beginFrameSubscription;
+    if (!begin) {
+      return Promise.reject(new BrowserError("SCREENSHOT_UNAVAILABLE", "No new frame was presented before the deadline"));
+    }
+    return new Promise<ImageLike>((resolve, reject) => {
+      let settled = false;
+      const cleanup = () => {
+        settled = true;
+        clearTimeout(timer);
+        try {
+          wc.endFrameSubscription?.();
+        } catch {
+          /* subscription may already be gone with the page */
+        }
+      };
+      const finishResolve = (image: ImageLike) => {
+        if (settled) return;
+        cleanup();
+        resolve(image);
+      };
+      const finishReject = (err: unknown) => {
+        if (settled) return;
+        cleanup();
+        reject(err);
+      };
+      const timer = setTimeout(() => finishReject(new BrowserError("SCREENSHOT_UNAVAILABLE", "No new frame was presented before the deadline")), timeoutMs);
+      try {
+        begin.call(wc, false, (image, dirtyRect) => {
+          logScreenshotDebug(image, dirtyRect);
+          if (isDirtyRectEmpty(dirtyRect)) return;
+          finishResolve(image);
+        });
+        // winfix7: a best-effort nudge for the compositor to present a new frame now that the subscription
+        // is active; harmless if the real desktop already presents on its own (candidate A's primary path).
+        try {
+          wc.invalidate?.();
+        } catch {
+          /* optional API; a failure here must not affect the capture */
+        }
+      } catch {
+        finishReject(new BrowserError("SCREENSHOT_UNAVAILABLE", "No new frame was presented before the deadline"));
+      }
+    });
+  }
+
+  private async capturePageWithTimeout(wc: WebContentsLike, timeoutMs: number): Promise<ImageLike> {
+    try {
+      let timer: NodeJS.Timeout | undefined;
+      const limit = new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error("capture timed out")), timeoutMs); });
+      return await Promise.race([wc.capturePage(undefined, { stayHidden: true }), limit]).finally(() => clearTimeout(timer));
+    } catch {
+      throw new BrowserError("SCREENSHOT_UNAVAILABLE", "The page surface could not be captured");
+    }
   }
 
   wait(run: BrowserRunHandle, args: {
@@ -1131,7 +1448,7 @@ export class EmbeddedBrowserController {
   }
 
   evaluate(run: BrowserRunHandle, args: { leaseId: string; documentEpoch: number; script: string; frameId?: string; timeoutMs?: number }): Promise<BrowserResult<BrowserEvaluateResult>> {
-    return this.run(run, args.leaseId, { timeoutMs: args.timeoutMs, needsFocus: true, sharedDeadline: true, documentEpoch: args.documentEpoch }, async (ctx) => {
+    return this.run(run, args.leaseId, { timeoutMs: args.timeoutMs, sharedDeadline: true, documentEpoch: args.documentEpoch }, async (ctx) => {
       const gate = () => {
         if (ctx.signal.aborted) {
           // The most specific reason wins (e.g. the user took over), with the effect known so far.
@@ -1147,7 +1464,6 @@ export class EmbeddedBrowserController {
       gate();
       const epochs = this.ownership.epochs;
       if (epochs.documentEpoch !== args.documentEpoch) throw new BrowserError("STALE_DOCUMENT", "The page changed since documentEpoch was observed; read the current state first");
-      if (!this.host.isWindowFocused()) throw new BrowserError("WINDOW_NOT_FOCUSED", "Lilto is not the focused window; ask the user to bring it to the front", { retryable: true });
       checkScriptSyntax(args.script);
       const wc = this.liveContents();
       if (!wc) throw new BrowserError("PAGE_CRASHED", "The page is not available");

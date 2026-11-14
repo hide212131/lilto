@@ -33,12 +33,14 @@ type Presentation = { open: boolean; occluded: boolean; resizing: boolean };
 
 /**
  * Measures the page viewport placeholder and reports it to Main. Measurements are
- * coalesced to one per animation frame, deduplicated, and tagged with the renderer
+ * coalesced to one per animation frame (with a timer fallback when frames are not produced), deduplicated, and tagged with the renderer
  * epoch / monotonically increasing seq / latest layout revision (design 6).
  */
 export class BrowserLayoutSync {
+  static readonly FALLBACK_MS = 200;
   private seq = 0;
   private frame = 0;
+  private fallbackTimer: ReturnType<typeof setTimeout> | null = null;
   private epoch = "";
   private layoutRevision = 0;
   private lastSent = "";
@@ -68,8 +70,14 @@ export class BrowserLayoutSync {
     window.visualViewport?.removeEventListener("scroll", this.onChange);
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
+    this.cancelPending();
+  }
+
+  private cancelPending(): void {
     if (this.frame) cancelAnimationFrame(this.frame);
     this.frame = 0;
+    if (this.fallbackTimer !== null) clearTimeout(this.fallbackTimer);
+    this.fallbackTimer = null;
   }
 
   /** Main reset the epoch (renderer reload) or asked for a fresh measurement. */
@@ -84,9 +92,14 @@ export class BrowserLayoutSync {
     this.observeViewport();
     if (this.frame) return;
     this.frame = requestAnimationFrame(() => {
-      this.frame = 0;
+      this.cancelPending();
       this.flush();
     });
+    // A minimized or covered window may not run animation frames: a bounded timer still reports the layout (design 4.3).
+    this.fallbackTimer = setTimeout(() => {
+      this.cancelPending();
+      this.flush();
+    }, BrowserLayoutSync.FALLBACK_MS);
   }
 
   private observeViewport(): void {

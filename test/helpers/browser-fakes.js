@@ -72,7 +72,7 @@ class FakeWebContents extends EventEmitter {
     this.inputs = [];
     this.history = [];
     this.index = -1;
-    this.pageHandlers = {};
+    this.pageHandlers = { settleFrames: async () => ({ ok: true }) };
     this.loadBehavior = (url) => ({ url });
     this.windowOpenHandler = null;
     this.frameList = [];
@@ -80,6 +80,8 @@ class FakeWebContents extends EventEmitter {
     this.frameList.push(this.mainFrame);
     this.closeOptions = null;
     this.destroyDelayMs = 0;
+    /** Like a real desktop compositor: frames are presented unless a test says otherwise. */
+    this.framePresents = true;
     this.navigationHistory = {
       canGoBack: () => this.index > 0,
       canGoForward: () => this.index >= 0 && this.index < this.history.length - 1,
@@ -139,7 +141,8 @@ class FakeWebContents extends EventEmitter {
   }
   sendInputEvent(event) { this.inputs.push(event); }
   async insertText(text) { this.inputs.push({ type: "insertText", text }); }
-  async capturePage() {
+  setBackgroundThrottling(allowed) { this.throttling = allowed; this.calls.push(`throttling:${allowed}`); }
+  makeImage() {
     const size = this.shot || { width: 2000, height: 1000, bytes: 1000 };
     const image = {
       getSize: () => ({ width: size.width, height: size.height }),
@@ -147,6 +150,39 @@ class FakeWebContents extends EventEmitter {
       toPNG: () => Buffer.alloc(size.bytes, 1)
     };
     return image;
+  }
+  async capturePage(rect, options) {
+    this.captureOptions = options ?? null;
+    if (this.captureError) throw new Error(this.captureError);
+    return this.makeImage();
+  }
+  /**
+   * Real Electron API; tests simulate "no frame presented" by setting `framePresents = false`.
+   * Defaults to true, like a real desktop: production code starts this subscription after settleFrames
+   * has already resolved and trusts the very first callback it delivers.
+   *
+   * `dirtyRectSequence`, if set, is an array of dirtyRect values (or a function returning one) delivered
+   * one per callback, each on its own setImmediate tick, to simulate a compositor that first redelivers a
+   * stale surface (empty dirtyRect) before presenting a fresh one. Defaults to `{}` (uninterpretable, so
+   * winfix7's gate passes it through unchanged — matching every test written before that gate existed).
+   */
+  beginFrameSubscription(onlyDirty, callback) {
+    this.frameSubscriptionCallback = callback;
+    if (this.framePresents === false) return;
+    const sequence = this.dirtyRectSequence || [{}];
+    let i = 0;
+    const deliverNext = () => {
+      if (this.frameSubscriptionCallback !== callback) return;
+      if (i >= sequence.length) return;
+      const rect = sequence[i];
+      i += 1;
+      callback(this.makeImage(), typeof rect === "function" ? rect() : rect);
+      if (i < sequence.length) setImmediate(deliverNext);
+    };
+    setImmediate(deliverNext);
+  }
+  endFrameSubscription() {
+    this.frameSubscriptionCallback = null;
   }
 }
 
@@ -156,11 +192,18 @@ class FakeHost {
     this.views = [];
     this.attached = new Set();
     this.windowVisible = true;
+    this.windowMinimized = false;
+    this.windowPresent = true;
     this.windowFocused = true;
+    this.hostThrottling = true;
     this.external = [];
     this.cleared = 0;
     this.zoom = 1;
     this.content = { width: 1200, height: 800 };
+    /** Simulates the real Windows bug: getContentBounds() collapses to 0x0 while minimized (Issue #42 W1). */
+    this.collapseContentWhenMinimized = false;
+    /** Simulates BrowserWindow.getNormalBounds() converted to a content-size estimate; null until a real (non-minimized) measurement has been taken, like the real host's cached chrome offset. */
+    this.normalContent = null;
   }
   createView() {
     const view = { webContents: new FakeWebContents(), bounds: null, visible: false, setBounds(b) { this.bounds = b; }, setVisible(v) { this.visible = v; } };
@@ -169,16 +212,25 @@ class FakeHost {
   }
   attachView(view) { this.attached.add(view); }
   detachView(view) { this.attached.delete(view); }
-  getContentSize() { return this.content; }
+  getContentSize() {
+    if (this.collapseContentWhenMinimized && this.windowMinimized) return { width: 0, height: 0 };
+    if (!this.windowMinimized) this.normalContent = { ...this.content };
+    return this.content;
+  }
+  getNormalContentSize() { return this.normalContent; }
   getZoomFactor() { return this.zoom; }
-  isWindowVisible() { return this.windowVisible; }
-  isWindowFocused() { return this.windowFocused; }
+  getWindowState() { return { present: this.windowPresent, visible: this.windowVisible && !this.windowMinimized, minimized: this.windowMinimized, focused: this.windowFocused }; }
+  setHostBackgroundThrottling(allowed) { this.hostThrottling = allowed; }
+  /** Like Electron: a minimized window is not "visible" on macOS but still shown logically. */
+  minimize() { this.windowMinimized = true; }
+  restore() { this.windowMinimized = false; }
   sendToRenderer(channel, payload) { this.sent.push({ channel, payload }); }
   openExternal(url) { this.external.push(url); }
   async clearSessionData() { this.cleared += 1; }
   focusHost() {}
 }
 
+/** Fakes must be able to express `panelVisible=false && operationReady=true` (a minimized, prepared panel). */
 /** Open the panel with a valid layout so the view becomes visible. */
 function presentPanel(controller, overrides = {}) {
   const epoch = controller.getState().rendererEpoch || controller.beginRendererEpoch();
