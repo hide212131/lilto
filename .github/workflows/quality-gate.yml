@@ -139,6 +139,14 @@ jobs:
   minimized-browser-operations:
     name: Minimized browser operations (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # Owner decision (2026-11-14): the Windows leg is informational only. On GitHub-hosted Windows runners a
+    # minimized window's compositor presents frozen frames (the capture stays at the pre-change pixels no matter
+    # what the page does), so the screenshot-freshness checks cannot pass there even though the same build passes
+    # 146/146 on an interactive Windows desktop. Frame arrival and dirtyRect cannot distinguish the frozen runner
+    # surface from a live one (fix rounds 4-7, PR #45). The authoritative Windows gate is therefore the
+    # interactive real-machine verification; this leg still runs and uploads its evidence on every change.
+    # The macOS leg remains a required gate.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     timeout-minutes: 25
     strategy:
       fail-fast: false
