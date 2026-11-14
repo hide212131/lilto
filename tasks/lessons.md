@@ -1,5 +1,11 @@
 # Lessons
 
+## 2026-11-14 Lit component DOM assertions need a real-Chromium verify script, not node --test
+
+| Change | Mistake/Context | Rule to repeat |
+|---|---|---|
+| Issue #47（実行中は未読ドットを抑止し、実行終了時に出す）で chat-history.ts の `.unread-dot` 表示を一覧・アクティビティ両方で回帰検証した。 | `npm run test:unit` は `node --test` の素の Node 上で動き、jsdom/happy-dom も無く DOM・customElements が存在しない。既存の chat-history 関連テストは全て `fs.readFileSync` でソース文字列を正規表現検証する characterization test で、Lit コンポーネントを実際にレンダリングして shadowRoot を検証した前例がなかった。安易に文字列照合だけで済ませると private メソッドの再実装を検証するだけになり、「hasUnread は変えずに実行終了だけで表示が変わる」という本質的な契約を実際には確認できない。 | Lit コンポーネントの実 DOM 契約（`.unread-dot` の有無など）を検証したいときは、既存の `electron scripts/verify-*.js` 規約に倣い、esbuild で対象 `.ts` を直接バンドルして実 Electron（Chromium）上でレンダリングし shadowRoot を問い合わせる専用スクリプトを作る。`node --test` の文字列照合テストで代用しない。文字列照合の既存 characterization test は、実装側の条件式が変わったら同じコミットで更新する（放置すると偽失敗する）。 |
+
 ## 2026-11-13 Verify background rendering with the display state recorded, and keep injected instructions under Codex's truncation limit
 
 | Change | Mistake/Context | Rule to repeat |
