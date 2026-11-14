@@ -18,6 +18,7 @@
     "verify:dist": "node scripts/verify-dist-artifacts.js",
     "verify:release": "node scripts/verify-release-artifacts.js",
     "verify:embedded-browser": "npm run build && electron scripts/verify-embedded-browser.js",
+    "verify:chat-history-unread-dot": "electron scripts/verify-chat-history-unread-dot.js",
     "probe:minimized-browser": "electron scripts/probe-minimized-browser.js --soak-ms 60000",
     "probe:win-capture": "electron scripts/probe-win-capture.js",
     "repro:min-acquire": "npm run build:unit && electron scripts/repro-min-acquire.js",
