@@ -388,6 +388,91 @@ async function verifySidebarCategories(page) {
   }
 }
 
+// Issue #48: pinning via the real pin button (mouse hover + real click, and keyboard),
+// the pinned group's placement in both list and activity mode, and search excluding an
+// unmatched pinned session. Exercises the real conversations:setPinned IPC round trip
+// (not a reimplementation): fixture IDs are not real backend threads, but the session-pin
+// store itself does not require one, so this still proves the full renderer->IPC->store path.
+async function verifySidebarPins(page) {
+  const original = await page.evaluate(() => {
+    const app = document.querySelector("lilt-app");
+    const saved = { sessions: app.sessions, schedules: app.schedules, sidebarOpen: app.sidebarOpen, activeSessionId: app.activeSessionId, sidebarActivityMode: app.sidebarActivityMode };
+    const now = Date.now();
+    app.sessions = [
+      { id: "pin-e2e-a", title: "ピン留め対象A", createdAt: now - 3000, updatedAt: now - 3000, messages: [] },
+      { id: "pin-e2e-b", title: "ピン留め対象B", createdAt: now - 2000, updatedAt: now - 2000, messages: [] },
+      { id: "pin-e2e-c", title: "検索対象のみ一致する会話", createdAt: now - 1000, updatedAt: now - 1000, messages: [] }
+    ];
+    app.schedules = [];
+    app.activeSessionId = null;
+    app.sidebarOpen = true;
+    app.sidebarActivityMode = false;
+    return saved;
+  });
+  const history = page.locator("lilt-chat-history");
+  const sessions = history.locator('section[aria-labelledby="sessions"]');
+  try {
+    await sessions.getByRole("heading", { name: "セッション" }).waitFor();
+    assert.equal(await history.locator('section[aria-labelledby="pinned"]').count(), 0, "no pinned section before any pin");
+
+    // Real mouse hover + real click pins A.
+    const rowA = history.locator('[data-session-id="pin-e2e-a"]');
+    await rowA.hover();
+    await rowA.locator(".pin-btn").click();
+    await page.waitForFunction(() => document.querySelector("lilt-app").sessions.find((s) => s.id === "pin-e2e-a")?.isPinned === true);
+
+    // Real keyboard: Tab to B's pin button and press Enter.
+    const rowB = history.locator('[data-session-id="pin-e2e-b"]');
+    await rowB.hover();
+    await rowB.locator(".pin-btn").focus();
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => document.querySelector("lilt-app").sessions.find((s) => s.id === "pin-e2e-b")?.isPinned === true);
+
+    const pinned = history.locator('section[aria-labelledby="pinned"]');
+    await pinned.getByRole("heading", { name: "ピン留め" }).waitFor();
+    assert.deepEqual(await pinned.locator(".session-title").allTextContents(), ["ピン留め対象B", "ピン留め対象A"], "B pinned after A, so it sorts first by updatedAt desc");
+    assert.equal(await sessions.locator(".session-item").count(), 1, "pinned sessions leave セッション");
+
+    // Switching to activity mode keeps the pinned group first.
+    await page.evaluate(() => { document.querySelector("lilt-app").sidebarActivityMode = true; });
+    const activityPinned = history.locator('section[aria-labelledby="pinned"]');
+    await activityPinned.locator('.activity-item[data-session-id="pin-e2e-b"]').waitFor();
+    assert.deepEqual(
+      await history.locator(".activity-item").evaluateAll((els) => els.map((el) => el.dataset.sessionId)),
+      ["pin-e2e-b", "pin-e2e-a", "pin-e2e-c"]
+    );
+    await page.evaluate(() => { document.querySelector("lilt-app").sidebarActivityMode = false; });
+
+    // Search: a pinned session that doesn't match the keyword must not appear.
+    const searchInput = history.locator('input[type="search"]');
+    await searchInput.fill("検索対象のみ");
+    await page.waitForFunction(() => {
+      const root = document.querySelector("lilt-app").shadowRoot.querySelector("lilt-chat-history").shadowRoot;
+      return root.querySelectorAll("[data-session-id]").length === 1;
+    });
+    assert.deepEqual(
+      await history.locator("[data-session-id]").evaluateAll((els) => els.map((el) => el.dataset.sessionId)),
+      ["pin-e2e-c"],
+      "unmatched pinned sessions must not leak into search results"
+    );
+    await searchInput.fill("");
+
+    // Unpin B: it must leave the pinned group without touching A.
+    await rowB.locator(".pin-btn").click();
+    await page.waitForFunction(() => document.querySelector("lilt-app").sessions.find((s) => s.id === "pin-e2e-b")?.isPinned === false);
+    assert.deepEqual(await pinned.locator(".session-title").allTextContents(), ["ピン留め対象A"]);
+
+    console.log("✓ Sidebar pin button: real hover/click/keyboard pin, pinned group in both modes, search exclusion, unpin");
+  } finally {
+    await page.evaluate((saved) => Object.assign(document.querySelector("lilt-app"), saved), original);
+    // The fixture IDs were pinned through the real IPC; clear them from the on-disk store too.
+    await page.evaluate(async () => {
+      await window.lilto.setConversationPinned("pin-e2e-a", false);
+      await window.lilto.setConversationPinned("pin-e2e-b", false);
+    });
+  }
+}
+
 async function clickSettingsButton(page) {
   await resolveNamedLocator(page, "settingsButton").click();
 }
@@ -663,6 +748,7 @@ async function main() {
     await verifyConversationTimestamps(page);
     await verifyToolGroups(page);
     await verifySidebarCategories(page);
+    await verifySidebarPins(page);
 
     const initialStatus = await waitForStatus(page, [
       "待機中",

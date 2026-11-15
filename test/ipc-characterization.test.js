@@ -17,6 +17,7 @@ const EXPECTED_HANDLE_CHANNELS = [
   "conversations:rename",
   "conversations:archive",
   "conversations:delete",
+  "conversations:setPinned",
   "auth:getState",
   "auth:startClaudeOauth",
   "auth:submitCode",
@@ -63,11 +64,11 @@ function extractMatches(content, pattern) {
   return [...content.matchAll(pattern)].map((match) => match[1]).sort();
 }
 
-test("main ipc と preload invoke は同じ 49 チャネルを公開する", () => {
+test("main ipc と preload invoke は同じ 50 チャネルを公開する", () => {
   const mainChannels = extractMatches(ipcContent, /ipcMain\.handle\("([^"]+)"/g);
   const preloadChannels = [...new Set(extractMatches(preloadContent, /ipcRenderer\.invoke\("([^"]+)"/g))].sort();
 
-  assert.equal(mainChannels.length, 49);
+  assert.equal(mainChannels.length, 50);
   assert.deepEqual(mainChannels, EXPECTED_HANDLE_CHANNELS);
   assert.deepEqual(preloadChannels, EXPECTED_HANDLE_CHANNELS);
 });

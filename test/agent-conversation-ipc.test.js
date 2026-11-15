@@ -9,7 +9,33 @@ function deferred() {
   return { promise, resolve };
 }
 
-function setup({ conversationHistory = {}, scheduler = { listSchedules: async () => [] }, running = () => false, listPlugins = async () => ({ ok: false }), submitPrompt = async () => ({ ok: true, text: "done" }) } = {}) {
+/** In-memory fake mirroring the real SessionPinStore's async contract, for IPC-layer tests. */
+function fakeSessionPinStore(initial = []) {
+  const pinned = new Set(initial);
+  return {
+    pinned,
+    async getPinnedIds() { return new Set(pinned); },
+    async isPinned(_ns, id) { return pinned.has(id); },
+    async setPinned(_ns, id, desired) {
+      if (desired) pinned.add(id); else pinned.delete(id);
+      return { ok: true, isPinned: desired };
+    },
+    async removePinOnSuccess(_ns, id) {
+      pinned.delete(id);
+      return { ok: true };
+    }
+  };
+}
+
+function setup({
+  conversationHistory = {},
+  scheduler = { listSchedules: async () => [] },
+  running = () => false,
+  listPlugins = async () => ({ ok: false }),
+  submitPrompt = async () => ({ ok: true, text: "done" }),
+  sessionPinStore = fakeSessionPinStore(),
+  sessionPinNamespace = "ns"
+} = {}) {
   const handlers = new Map();
   const events = [];
   const aborted = [];
@@ -34,9 +60,9 @@ function setup({ conversationHistory = {}, scheduler = { listSchedules: async ()
   exported.registerAgentConversationIpcHandlers({
     agentRuntime: { submitPrompt, isConversationRunning: running, forgetConversation: (id) => forgotten.push(id), abort: (id) => aborted.push(id), steerPrompt: async (text, id) => { steered.push([text, id]); return { ok: true }; } },
     providerSettingsService: { getState: () => ({}) }, notificationService: {},
-    pluginService: { listPlugins }, conversationHistory, scheduler
+    pluginService: { listPlugins }, conversationHistory, scheduler, sessionPinStore, sessionPinNamespace
   });
-  return { invoke: (name, payload) => handlers.get(name)(null, payload), events, aborted, steered, forgotten };
+  return { invoke: (name, payload) => handlers.get(name)(null, payload), events, aborted, steered, forgotten, sessionPinStore };
 }
 
 test("IPC はプラグイン準備中の会話も予約し、別会話は待たずに実行する", async () => {
@@ -229,5 +255,139 @@ for (const [channel, kind, failCode] of [["conversations:archive", "archive", "C
     await ipc.invoke(channel, { conversationId: "t1" });
     assert.equal((await ipc.invoke(channel, { conversationId: "t1" })).error.code, "CONVERSATION_UNAVAILABLE");
     assert.equal(calls.length, 1);
+  });
+}
+
+// --- U5: conversations:list / read / create attach isPinned -----------------
+
+test("conversations:list attaches isPinned from the store, keyed by backend session ID", async () => {
+  const conversationHistory = {
+    listConversations: async () => [
+      { id: "ui-1", backendSessionId: "backend-1", title: "a", createdAt: 1, updatedAt: 1, messages: [] },
+      { id: "ui-2", backendSessionId: "backend-2", title: "b", createdAt: 1, updatedAt: 1, messages: [] }
+    ]
+  };
+  const ipc = setup({ conversationHistory, sessionPinStore: fakeSessionPinStore(["backend-1"]) });
+  const result = await ipc.invoke("conversations:list", undefined);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.conversations.map((c) => [c.id, c.isPinned]), [["ui-1", true], ["ui-2", false]]);
+});
+
+test("conversations:read attaches isPinned", async () => {
+  const conversationHistory = { readConversation: async () => ({ id: "t1", backendSessionId: "t1", title: "a", createdAt: 1, updatedAt: 1, messages: [] }) };
+  const ipc = setup({ conversationHistory, sessionPinStore: fakeSessionPinStore(["t1"]) });
+  const result = await ipc.invoke("conversations:read", { conversationId: "t1" });
+  assert.equal(result.ok, true);
+  assert.equal(result.conversation.isPinned, true);
+});
+
+test("conversations:create always returns isPinned:false for the new conversation", async () => {
+  const conversationHistory = { createConversation: async () => ({ id: "new", backendSessionId: "new", title: "untitled", createdAt: 1, updatedAt: 1, messages: [] }) };
+  const ipc = setup({ conversationHistory, sessionPinStore: fakeSessionPinStore(["new"]) });
+  const result = await ipc.invoke("conversations:create", { title: "untitled" });
+  assert.equal(result.ok, true);
+  assert.equal(result.conversation.isPinned, false);
+});
+
+// --- U5: conversations:setPinned ---------------------------------------------
+
+test("conversations:setPinned: payload validation", async () => {
+  const ipc = setup();
+  for (const payload of [null, undefined, "x", {}, { conversationId: 1, isPinned: true }, { conversationId: "t1" }, { conversationId: "t1", isPinned: "true" }]) {
+    assert.equal((await ipc.invoke("conversations:setPinned", payload)).error.code, "INVALID_REQUEST");
+  }
+});
+
+test("conversations:setPinned: Heartbeat IDs are CONVERSATION_UNSUPPORTED", async () => {
+  const ipc = setup();
+  for (const id of ["heartbeat-assistant", "heartbeat-assistant:2026-11-12"]) {
+    assert.equal((await ipc.invoke("conversations:setPinned", { conversationId: id, isPinned: true })).error.code, "CONVERSATION_UNSUPPORTED");
+  }
+});
+
+test("conversations:setPinned: running conversations and schedule-referenced conversations may still be pinned", async () => {
+  const ipc = setup({ running: () => true, scheduler: { listSchedules: async () => [{ id: "s", kind: "cron", sessionId: "t1" }] } });
+  const result = await ipc.invoke("conversations:setPinned", { conversationId: "t1", isPinned: true });
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { ok: true, isPinned: true });
+});
+
+test("conversations:setPinned: desired state true/false round-trips and the response carries the result", async () => {
+  const ipc = setup();
+  assert.deepEqual(JSON.parse(JSON.stringify(await ipc.invoke("conversations:setPinned", { conversationId: "t1", isPinned: true }))), { ok: true, isPinned: true });
+  assert.equal(await ipc.sessionPinStore.isPinned("ns", "t1"), true);
+  assert.deepEqual(JSON.parse(JSON.stringify(await ipc.invoke("conversations:setPinned", { conversationId: "t1", isPinned: false }))), { ok: true, isPinned: false });
+  assert.equal(await ipc.sessionPinStore.isPinned("ns", "t1"), false);
+});
+
+test("conversations:setPinned: a removed conversation is CONVERSATION_UNAVAILABLE", async () => {
+  const conversationHistory = { archiveConversation: async () => {} };
+  const ipc = setup({ conversationHistory });
+  await ipc.invoke("conversations:archive", { conversationId: "t1" });
+  assert.equal((await ipc.invoke("conversations:setPinned", { conversationId: "t1", isPinned: true })).error.code, "CONVERSATION_UNAVAILABLE");
+});
+
+test("conversations:setPinned: competing with an in-flight archive/delete on the same ID is CONVERSATION_BUSY", async () => {
+  const gate = deferred();
+  const conversationHistory = { archiveConversation: async () => { await gate.promise; } };
+  const ipc = setup({ conversationHistory });
+  const archiving = ipc.invoke("conversations:archive", { conversationId: "t1" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal((await ipc.invoke("conversations:setPinned", { conversationId: "t1", isPinned: true })).error.code, "CONVERSATION_BUSY");
+  gate.resolve();
+  await archiving;
+});
+
+test("conversations:setPinned: a duplicate request for the same ID while one is in flight is CONVERSATION_BUSY", async () => {
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  const sessionPinStore = fakeSessionPinStore();
+  const realSetPinned = sessionPinStore.setPinned.bind(sessionPinStore);
+  sessionPinStore.setPinned = async (...args) => { await held; return realSetPinned(...args); };
+  const ipc = setup({ sessionPinStore });
+  const first = ipc.invoke("conversations:setPinned", { conversationId: "t1", isPinned: true });
+  await new Promise((resolve) => setImmediate(resolve));
+  const second = await ipc.invoke("conversations:setPinned", { conversationId: "t1", isPinned: true });
+  assert.equal(second.error.code, "CONVERSATION_BUSY");
+  release();
+  assert.deepEqual(JSON.parse(JSON.stringify(await first)), { ok: true, isPinned: true });
+});
+
+// --- U6: archive/delete clears the pin; cleanup failure is a warning --------
+
+for (const [channel, kind] of [["conversations:archive", "archive"], ["conversations:delete", "delete"]]) {
+  test(`${channel}: a successful removal also unpins the conversation`, async () => {
+    const conversationHistory = { archiveConversation: async () => {}, deleteConversation: async () => {} };
+    const sessionPinStore = fakeSessionPinStore(["t1"]);
+    const ipc = setup({ conversationHistory, sessionPinStore });
+    const result = await ipc.invoke(channel, { conversationId: "t1" });
+    assert.deepEqual(JSON.parse(JSON.stringify(result)), { ok: true });
+    assert.equal(sessionPinStore.pinned.has("t1"), false);
+  });
+
+  test(`${channel}: cleanup save failure is reported as a warning, backend is not retried`, async () => {
+    let archiveCalls = 0;
+    let deleteCalls = 0;
+    const conversationHistory = {
+      archiveConversation: async () => { archiveCalls += 1; },
+      deleteConversation: async () => { deleteCalls += 1; }
+    };
+    const sessionPinStore = fakeSessionPinStore(["t1"]);
+    sessionPinStore.removePinOnSuccess = async () => ({ ok: true, warning: { code: "SESSION_PIN_CLEANUP_FAILED", message: "disk full" } });
+    const ipc = setup({ conversationHistory, sessionPinStore });
+    const result = await ipc.invoke(channel, { conversationId: "t1" });
+    assert.deepEqual(JSON.parse(JSON.stringify(result)), { ok: true, warning: { code: "SESSION_PIN_CLEANUP_FAILED", message: "disk full" } });
+    assert.equal(archiveCalls + deleteCalls, 1, "the backend archive/delete call ran exactly once");
+    assert.deepEqual([...ipc.forgotten], ["t1"], "normal success-after processing still ran once");
+  });
+
+  test(`${channel}: a cancelled/rejected/failed removal leaves the pin untouched`, async () => {
+    const conversationHistory = {
+      archiveConversation: async () => { throw new Error("boom"); },
+      deleteConversation: async () => { throw new Error("boom"); }
+    };
+    const sessionPinStore = fakeSessionPinStore(["t1"]);
+    const ipc = setup({ conversationHistory, sessionPinStore });
+    await ipc.invoke(channel, { conversationId: "t1" });
+    assert.equal(sessionPinStore.pinned.has("t1"), true);
   });
 }
