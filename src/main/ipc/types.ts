@@ -21,6 +21,7 @@ export type RegisterAgentIpcHandlersOptions = {
   workspaceDir: string;
   homeDir: string;
   codexHomeDir: string;
+  userDataDir: string;
   notificationService: NotificationService;
   scheduler: SchedulerClient;
   heartbeatAssistant: HeartbeatAssistantService;

@@ -120,6 +120,7 @@ export class LiltApp extends LitElement {
   @property() activeSessionId: string | null = null;
   @property({ type: Boolean }) sidebarActivityMode = false;
   @property({ attribute: false }) private _busySessionIds: string[] = [];
+  @property({ attribute: false }) private _pinningSessionIds: string[] = [];
   @property() private _sessionActionError = "";
   @property({ attribute: false }) activityPreviews: Record<string, ActivityPreview> = {};
   @property({ attribute: false }) browserState: BrowserPanelState | null = null;
@@ -419,6 +420,7 @@ export class LiltApp extends LitElement {
       return {
         ...normalized,
         hasUnread: existing?.hasUnread ?? normalized.hasUnread,
+        isPinned: existing?.isPinned ?? normalized.isPinned,
         messages: existing?.messages ?? normalized.messages
       };
     });
@@ -462,6 +464,7 @@ export class LiltApp extends LitElement {
       createdAt,
       updatedAt,
       hasUnread: session.hasUnread === true,
+      isPinned: session.isPinned === true,
       historyPage: session.historyPage,
       backendSessionId: typeof session.backendSessionId === "string" ? session.backendSessionId : undefined,
       messages: Array.isArray(session.messages)
@@ -491,6 +494,7 @@ export class LiltApp extends LitElement {
     return {
       ...hydratedSession,
       hasUnread: localSession.hasUnread,
+      isPinned: localSession.isPinned,
       messages: this._mergeSessionMessages(hydratedSession.messages,
         hydratedSession.historyPage ? localSession.messages.filter((message) => !message.persisted
           || hydratedSession.messages.some((entry) => entry.id === message.id)) : localSession.messages)
@@ -703,6 +707,7 @@ export class LiltApp extends LitElement {
           .activeSessionId=${this.activeSessionId}
           .runningSessionIds=${[...this._conversationRuns.keys()]}
           .busySessionIds=${this._busySessionIds}
+          .pinningSessionIds=${this._pinningSessionIds}
           .actionError=${this._sessionActionError}
           .activityMode=${this.sidebarActivityMode}
           .activityPreviews=${this.activityPreviews}
@@ -713,6 +718,7 @@ export class LiltApp extends LitElement {
           @rename-session=${this._onRenameSession}
           @archive-session=${(e: CustomEvent<{ sessionId: string }>) => this._onSessionAction("archive", e)}
           @delete-session=${(e: CustomEvent<{ sessionId: string }>) => this._onSessionAction("delete", e)}
+          @set-session-pinned=${(e: CustomEvent<{ sessionId: string; isPinned: boolean }>) => void this._onSetSessionPinned(e.detail)}
           @dismiss-session-action-error=${() => { this._sessionActionError = ""; }}
         ></lilt-chat-history>
         ${this.sidebarOpen ? html`
@@ -1104,6 +1110,26 @@ export class LiltApp extends LitElement {
 
   private _onSessionAction(kind: SessionActionKind, e: CustomEvent<{ sessionId: string }>) {
     void this._sessionActions.run(kind, e.detail.sessionId);
+  }
+
+  private async _onSetSessionPinned({ sessionId, isPinned }: { sessionId: string; isPinned: boolean }) {
+    if (this._pinningSessionIds.includes(sessionId) || isHeartbeatAssistantSessionId(sessionId)) return;
+    const session = this.sessions.find((s) => s.id === sessionId);
+    if (!session) return;
+    this._pinningSessionIds = [...this._pinningSessionIds, sessionId];
+    try {
+      const backendId = session.backendSessionId ?? session.id;
+      const result = await window.lilto.setConversationPinned(backendId, isPinned);
+      if (!result.ok) {
+        this._sessionActionError = `「${session.title}」のピン状態を変更できません: ${result.error.message}（${result.error.code}）`;
+        return;
+      }
+      // Update only the matching session by ID: late responses must not revive a removed conversation
+      // or clobber title/body/updatedAt/hasUnread/selection/draft changes made in the meantime.
+      this.sessions = this.sessions.map((s) => s.id === sessionId ? { ...s, isPinned: result.isPinned } : s);
+    } finally {
+      this._pinningSessionIds = this._pinningSessionIds.filter((id) => id !== sessionId);
+    }
   }
 
   /** Shared post-processing for a successful archive/delete. */

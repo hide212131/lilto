@@ -3,7 +3,9 @@ import type { SchedulerScheduleSummary } from "../shared/scheduler.js";
 import type { Session } from "./types.js";
 
 export type SessionActionKind = "archive" | "delete";
-export type SessionActionResult = { ok: true } | { ok: false; error: { code: string; message: string } };
+export type SessionActionResult =
+  | { ok: true; warning?: { code: string; message: string } }
+  | { ok: false; error: { code: string; message: string } };
 
 const ACTION_LABEL: Record<SessionActionKind, string> = { archive: "アーカイブ", delete: "削除" };
 const UNTITLED = "名称未設定の会話";
@@ -23,6 +25,11 @@ export function deleteConfirmMessage(title: string): string {
 
 export function sessionActionFailureMessage(kind: SessionActionKind, title: string, reason: string, code: string): string {
   return `「${formatSessionTitle(title)}」を${ACTION_LABEL[kind]}できません: ${reason}（${code}）`;
+}
+
+/** Backend archive/delete already succeeded; this reports only that the pin cleanup save failed. */
+export function sessionActionWarningMessage(kind: SessionActionKind, title: string, warning: { code: string; message: string }): string {
+  return `「${formatSessionTitle(title)}」の${ACTION_LABEL[kind]}は完了しましたが、ピン状態を保存できませんでした: ${warning.message}（${warning.code}）`;
 }
 
 export function hasScheduleReference(session: Session, schedules: SchedulerScheduleSummary[]): boolean {
@@ -108,6 +115,10 @@ export class SessionActionRunner {
         // The backend already succeeded: never retry it, only report the partial cleanup failure.
         const reason = error instanceof Error ? error.message : String(error);
         this.deps.onFailure(`会話の${ACTION_LABEL[kind]}は完了しましたが、後処理に失敗しました: ${reason}`);
+        return;
+      }
+      if (result.warning) {
+        this.deps.onFailure(sessionActionWarningMessage(kind, session.title, result.warning));
       }
     } finally {
       this.inFlight.delete(sessionId);

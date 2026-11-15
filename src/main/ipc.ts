@@ -6,6 +6,7 @@ import { registerBrowserIpcHandlers } from "./ipc/browser";
 import { registerSchedulerSystemIpcHandlers } from "./ipc/scheduler-system";
 import { registerSkillsAndPluginIpcHandlers } from "./ipc/skills-plugins";
 import type { RegisterAgentIpcHandlersOptions } from "./ipc/types";
+import { buildSessionPinNamespace, SessionPinStore } from "./session-pin-store";
 
 export function registerAgentIpcHandlers({
   agentRuntime,
@@ -16,6 +17,7 @@ export function registerAgentIpcHandlers({
   workspaceDir,
   homeDir,
   codexHomeDir,
+  userDataDir,
   notificationService,
   scheduler,
   heartbeatAssistant,
@@ -35,13 +37,17 @@ export function registerAgentIpcHandlers({
     homeDir,
     codexHomeDir
   });
+  const sessionPinStore = new SessionPinStore({ filePath: path.join(userDataDir, "session-pins.json") });
+  const sessionPinNamespace = buildSessionPinNamespace(codexHomeDir, workspaceDir);
   registerAgentConversationIpcHandlers({
     agentRuntime,
     providerSettingsService,
     notificationService,
     pluginService,
     conversationHistory,
-    scheduler
+    scheduler,
+    sessionPinStore,
+    sessionPinNamespace
   });
 
   registerAuthAndProviderIpcHandlers({

@@ -4,6 +4,7 @@ import type { Session } from "../types.js";
 import { extractActivityPreview, type ActivityPreview } from "../sidebar-activity.js";
 import type { SchedulerScheduleSummary } from "../../shared/scheduler.js";
 import { isHeartbeatAssistantSessionId } from "../../shared/heartbeat-assistant.js";
+import { isSessionPinned, projectActivityGroups, projectListGroups } from "../../shared/session-pins.js";
 
 @customElement("lilt-chat-history")
 export class LiltChatHistory extends LitElement {
@@ -12,6 +13,7 @@ export class LiltChatHistory extends LitElement {
   @property({ type: Array }) schedules: SchedulerScheduleSummary[] = [];
   @property() activeSessionId: string | null = null;
   @property({ attribute: false }) busySessionIds: string[] = [];
+  @property({ attribute: false }) pinningSessionIds: string[] = [];
   @property() actionError = "";
   @property({ type: Boolean }) activityMode = false;
   @property({ attribute: false }) activityPreviews: Record<string, ActivityPreview> = {};
@@ -24,6 +26,8 @@ export class LiltChatHistory extends LitElement {
   private _searchGeneration = 0;
   private _searchTimer?: ReturnType<typeof setTimeout>;
   private _searchContent = new Map<string, { updatedAt: number; text: string }>();
+  /** Set when a pin button that currently has focus is clicked; used to restore focus after the group move. */
+  private _pendingPinFocusId: string | null = null;
 
   private async _loadSearchContent() {
     const generation = this._searchGeneration;
@@ -106,6 +110,15 @@ export class LiltChatHistory extends LitElement {
     this.renderRoot.querySelectorAll<HTMLElement>(".activity-item[data-session-id]").forEach((item) => {
       this._activityObserver?.observe(item);
     });
+
+    if (this._pendingPinFocusId && changed.has("sessions")) {
+      const id = this._pendingPinFocusId;
+      this._pendingPinFocusId = null;
+      void this.updateComplete.then(() => {
+        this.renderRoot.querySelector<HTMLElement>(`[data-session-id="${CSS.escape(id)}"] .pin-btn`)
+          ?.focus({ preventScroll: true });
+      });
+    }
   }
 
   static styles = css`
@@ -168,7 +181,9 @@ export class LiltChatHistory extends LitElement {
     .activity-toggle { width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: 8px; background: transparent; color: var(--muted, #6b7280); cursor: pointer; }
     .activity-toggle:hover, .activity-toggle[aria-pressed="true"] { background: #f1f3f5; color: var(--text, #1f2328); }
     .activity-toggle:focus-visible, .activity-item:focus-visible, .retry-preview:focus-visible { outline: 2px solid #2f6df6; outline-offset: 2px; }
-    .activity-item { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; margin: 2px 4px; border-radius: 8px; cursor: pointer; }
+    .activity-item { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; margin: 2px 4px; border-radius: 8px; }
+    .activity-row { display: flex; align-items: flex-start; gap: 4px; }
+    .activity-row .activity-main { flex: 1; min-width: 0; cursor: pointer; }
     .activity-item:hover { background: #f5f5f5; }
     .activity-topline { display: flex; align-items: center; gap: 8px; }
     .activity-title { flex: 1; min-width: 0; font-size: 14px; font-weight: 550; color: var(--text, #1f2328); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -333,6 +348,44 @@ export class LiltChatHistory extends LitElement {
     .action-error button { flex-shrink: 0; border: 0; border-radius: 6px; padding: 2px 6px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
     .action-error button:focus-visible { outline: 2px solid #2f6df6; }
     .menu-btn:disabled { cursor: default; }
+    .pin-btn {
+      flex-shrink: 0;
+      width: 24px;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: none;
+      border-radius: 6px;
+      background: transparent;
+      cursor: pointer;
+      color: var(--muted, #6b7280);
+      opacity: 0;
+      padding: 0;
+      transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
+    }
+    .session-item:hover .pin-btn,
+    .session-item:focus-within .pin-btn,
+    .activity-row:hover .pin-btn,
+    .activity-row:focus-within .pin-btn,
+    .pin-btn:focus-visible,
+    .pin-btn.pinned {
+      opacity: 1;
+    }
+    .pin-btn:hover {
+      background: #e6e7eb;
+      color: var(--text, #1f2328);
+    }
+    .pin-btn.pinned {
+      color: #f4a300;
+    }
+    .pin-btn:focus-visible {
+      outline: 2px solid #2f6df6;
+      outline-offset: 1px;
+    }
+    .pin-btn:disabled {
+      cursor: default;
+    }
     .dropdown-item.danger {
       color: #f87171;
     }
@@ -349,13 +402,8 @@ export class LiltChatHistory extends LitElement {
       || (this._searchContent.get(session.id)?.updatedAt === session.updatedAt
         && this._searchContent.get(session.id)!.text.includes(keyword))) : this.sessions;
 
-    const cronSessionIds = new Set(
-      this.schedules.filter((schedule) => schedule.kind === "cron").map((schedule) => schedule.sessionId)
-    );
-    const isScheduled = (session: Session) => cronSessionIds.has(session.id)
-      || (!!session.backendSessionId && cronSessionIds.has(session.backendSessionId));
-    const scheduledSessions = sessions.filter(isScheduled);
-    const regularSessions = sessions.filter((session) => !isScheduled(session));
+    const { pinned, scheduled: scheduledSessions, regular: regularSessions } = projectListGroups(sessions, this.schedules);
+    const { pinned: activityPinned, rest: activityRest } = projectActivityGroups(sessions);
     return html`
       <div class="sidebar-header">
         <h2 class="sidebar-heading">${this.activityMode ? "アクティビティ" : "チャット"}</h2>
@@ -388,8 +436,14 @@ export class LiltChatHistory extends LitElement {
           : this.activityMode
           ? this.sessions.length === 0
             ? html`<div class="empty">まだアクティビティがありません</div>`
-            : sessions.map((session) => this._renderActivityItem(session))
+            : html`
+                ${activityPinned.length
+                  ? this._renderCategory("pinned", "ピン留め", activityPinned, "", (session) => this._renderActivityItem(session))
+                  : ""}
+                ${activityRest.map((session) => this._renderActivityItem(session))}
+              `
           : html`
+              ${pinned.length ? this._renderCategory("pinned", "ピン留め", pinned, "") : ""}
               ${this._renderCategory("scheduled", "定期タスク", scheduledSessions, keyword ? "一致する定期タスクはありません" : "定期タスクはありません")}
               ${this._renderCategory("sessions", "セッション", regularSessions, keyword ? "一致するセッションはありません" : "まだ会話がありません")}
             `}
@@ -405,17 +459,56 @@ export class LiltChatHistory extends LitElement {
     const date = new Date(session.updatedAt);
     return html`
       <div class="activity-item" data-session-id=${session.id}>
-        <div class="activity-main" role="button" tabindex="0" aria-label=${`${session.title}: ${text ?? ""}`}
-          @click=${() => this._selectSession(session)}
-          @keydown=${(event: KeyboardEvent) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); this._selectSession(session); } }}>
-        <div class="activity-topline"><span class="activity-title">${session.title}</span><time class="activity-date" title=${date.toLocaleString()}>${this._formatDate(date)}</time>
-          ${this._renderRunStatus(session.id)}
-          ${this._shouldShowUnreadDot(session) && session.id !== this.activeSessionId ? html`<span class="unread-dot" aria-label="未読"></span>` : ""}</div>
-        <div class="activity-preview">${text || (matchingPreview?.status === "error" ? "内容を取得できませんでした" : matchingPreview?.status === "empty" ? "まだメッセージがありません" : "読み込み中…")}</div>
+        <div class="activity-row">
+          <div class="activity-main" role="button" tabindex="0" aria-label=${`${session.title}: ${text ?? ""}`}
+            @click=${() => this._selectSession(session)}
+            @keydown=${(event: KeyboardEvent) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); this._selectSession(session); } }}>
+          <div class="activity-topline"><span class="activity-title">${session.title}</span><time class="activity-date" title=${date.toLocaleString()}>${this._formatDate(date)}</time>
+            ${this._renderRunStatus(session.id)}
+            ${this._shouldShowUnreadDot(session) && session.id !== this.activeSessionId ? html`<span class="unread-dot" aria-label="未読"></span>` : ""}</div>
+          <div class="activity-preview">${text || (matchingPreview?.status === "error" ? "内容を取得できませんでした" : matchingPreview?.status === "empty" ? "まだメッセージがありません" : "読み込み中…")}</div>
+          </div>
+          ${this._renderPinButton(session)}
         </div>
         ${matchingPreview?.status === "error" ? html`<button class="retry-preview" @click=${(event: Event) => { event.stopPropagation(); this.dispatchEvent(new CustomEvent("activity-preview-retry", { detail: { session }, bubbles: true, composed: true })); }}>再試行</button>` : ""}
       </div>
     `;
+  }
+
+  private _renderPinButton(session: Session) {
+    if (isHeartbeatAssistantSessionId(session.id)) return "";
+    const pinned = isSessionPinned(session);
+    const disabled = this.pinningSessionIds.includes(session.id) || this.busySessionIds.includes(session.id);
+    const label = pinned ? `「${session.title}」のピン留めを解除` : `「${session.title}」をピン留めする`;
+    return html`
+      <button
+        type="button"
+        class="pin-btn ${pinned ? "pinned" : ""}"
+        data-pin-btn
+        aria-pressed=${String(pinned)}
+        title=${label}
+        aria-label=${label}
+        ?disabled=${disabled}
+        @click=${(e: Event) => this._onPinButtonClick(e, session)}
+      >
+        <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" fill=${pinned ? "currentColor" : "none"} stroke="currentColor" stroke-width="1.8">
+          <path d="M14 3l7 7-3.5 3.5L19 16l-3-1-5 5-1-1 5-5-1-3 2.5-2.5L9 3z" />
+        </svg>
+      </button>
+    `;
+  }
+
+  private _onPinButtonClick(e: Event, session: Session) {
+    e.stopPropagation();
+    const button = e.currentTarget as HTMLElement;
+    if (this.renderRoot.activeElement === button) {
+      this._pendingPinFocusId = session.id;
+    }
+    this.dispatchEvent(new CustomEvent("set-session-pinned", {
+      detail: { sessionId: session.id, isPinned: !isSessionPinned(session) },
+      bubbles: true,
+      composed: true
+    }));
   }
 
   private _requestPreview(session: Session) {
@@ -435,13 +528,19 @@ export class LiltChatHistory extends LitElement {
     return Boolean(session.hasUnread) && !this.runningSessionIds.includes(session.id);
   }
 
-  private _renderCategory(id: string, title: string, sessions: Session[], emptyText: string) {
+  private _renderCategory(
+    id: string,
+    title: string,
+    sessions: Session[],
+    emptyText: string,
+    renderItem: (session: Session) => unknown = (session) => this._renderItem(session)
+  ) {
     return html`
       <section class="category" aria-labelledby=${id}>
         <h2 class="category-title" id=${id}>${title}</h2>
         ${sessions.length === 0
           ? html`<div class="empty">${emptyText}</div>`
-          : sessions.map((session) => this._renderItem(session))}
+          : sessions.map(renderItem)}
       </section>
     `;
   }
@@ -481,6 +580,7 @@ export class LiltChatHistory extends LitElement {
         ${this._shouldShowUnreadDot(session) && !isActive && !isEditing
           ? html`<span class="unread-dot" aria-label="未読"></span>`
           : ""}
+        ${!isEditing ? this._renderPinButton(session) : ""}
         ${!isEditing && hasMenu ? html`
           <button
             class="menu-btn ${menuOpen ? "open" : ""}"

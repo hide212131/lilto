@@ -203,6 +203,7 @@ if (hasSingleInstanceLock) {
       workspaceDir: runtime.skillRuntime.workspaceDir,
       homeDir: runtime.skillRuntime.appDataDir,
       codexHomeDir: runtime.skillRuntime.codexHomeDir,
+      userDataDir: app.getPath("userData"),
       browserSettingsFlow: runtime.browserSettingsFlow,
       browserController: runtime.browserController,
       getMainWindow: () => mainWindow,
