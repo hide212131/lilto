@@ -201,3 +201,17 @@ test("app: 共通後処理は選択解除の後に下書きを破棄し、previe
   const composer = read("src/renderer/components/composer.ts");
   assert.match(composer, /discardDraft\(sessionId: string\)/);
 });
+
+test("後処理 success + warning はピン保存失敗の文言を failures に残すが removed/onSuccess は通常通り動く", async () => {
+  const h = harness({ invoke: async () => ({ ok: true, warning: { code: "SESSION_PIN_CLEANUP_FAILED", message: "disk full" } }) });
+  await h.runner.run("archive", "a");
+  assert.deepEqual(h.log.removed, ["a"]);
+  assert.equal(h.runner.isRemoved("a"), true);
+  assert.deepEqual(h.log.failures, ["「title-a」のアーカイブは完了しましたが、ピン状態を保存できませんでした: disk full（SESSION_PIN_CLEANUP_FAILED）"]);
+});
+
+test("後処理 success に warning が無ければ failures は追加されない", async () => {
+  const h = harness();
+  await h.runner.run("archive", "a");
+  assert.deepEqual(h.log.failures, []);
+});

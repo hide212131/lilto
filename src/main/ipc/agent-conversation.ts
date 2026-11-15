@@ -13,6 +13,7 @@ import { isHeartbeatAssistantSessionId } from "../../shared/heartbeat-assistant"
 import type { PluginService } from "../plugin-service";
 import type { ProviderSettingsService } from "../provider-settings";
 import type { SchedulerClient } from "../scheduler";
+import type { SessionPinStore } from "../session-pin-store";
 import { broadcastLoopEvent, openConversationWindow } from "./utils";
 
 async function normalizePromptPluginMentions(text: string, pluginService: PluginService): Promise<string> {
@@ -34,7 +35,9 @@ export function registerAgentConversationIpcHandlers({
   notificationService,
   pluginService,
   conversationHistory,
-  scheduler
+  scheduler,
+  sessionPinStore,
+  sessionPinNamespace
 }: {
   agentRuntime: AgentRuntime;
   providerSettingsService: ProviderSettingsService;
@@ -42,6 +45,8 @@ export function registerAgentConversationIpcHandlers({
   pluginService: PluginService;
   conversationHistory: ConversationHistoryService;
   scheduler: SchedulerClient;
+  sessionPinStore: SessionPinStore;
+  sessionPinNamespace: string;
 }): void {
   const logger = createLogger("ipc");
   const preparingRuns = new Map<string, { aborted: boolean; ready: Promise<void>; resolve: () => void }>();
@@ -189,7 +194,14 @@ export function registerAgentConversationIpcHandlers({
   ipcMain.handle("conversations:list", async () => {
     try {
       const conversations = await conversationHistory.listConversations();
-      return { ok: true, conversations };
+      const pinnedIds = await sessionPinStore.getPinnedIds(sessionPinNamespace);
+      return {
+        ok: true,
+        conversations: conversations.map((conversation) => ({
+          ...conversation,
+          isPinned: pinnedIds.has(conversation.backendSessionId ?? conversation.id)
+        }))
+      };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return { ok: false, error: { code: "CONVERSATIONS_LIST_FAILED", message } };
@@ -211,7 +223,8 @@ export function registerAgentConversationIpcHandlers({
       if (!conversation) {
         return { ok: false, error: { code: "CONVERSATION_NOT_FOUND", message: "会話が見つかりません" } };
       }
-      return { ok: true, conversation };
+      const isPinned = await sessionPinStore.isPinned(sessionPinNamespace, conversation.backendSessionId ?? conversation.id);
+      return { ok: true, conversation: { ...conversation, isPinned } };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return { ok: false, error: { code: "CONVERSATION_READ_FAILED", message } };
@@ -224,7 +237,7 @@ export function registerAgentConversationIpcHandlers({
       : undefined;
     try {
       const conversation = await conversationHistory.createConversation(title);
-      return { ok: true, conversation };
+      return { ok: true, conversation: { ...conversation, isPinned: false } };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return { ok: false, error: { code: "CONVERSATION_CREATE_FAILED", message } };
@@ -254,6 +267,7 @@ export function registerAgentConversationIpcHandlers({
 
   const removing = new Set<string>();
   const removed = new Set<string>();
+  const pinning = new Set<string>();
   const removeConversation = async (kind: "archive" | "delete", payload: unknown) => {
     const fail = (code: string, message: string) => ({ ok: false as const, error: { code, message } });
     const conversationId = payload && typeof payload === "object" ? (payload as { conversationId?: unknown }).conversationId : undefined;
@@ -266,7 +280,7 @@ export function registerAgentConversationIpcHandlers({
     if (removed.has(conversationId)) {
       return fail("CONVERSATION_UNAVAILABLE", "この会話は既に除去されています");
     }
-    if (removing.has(conversationId)) {
+    if (removing.has(conversationId) || pinning.has(conversationId)) {
       return fail("CONVERSATION_BUSY", "この会話は別の操作を処理中です");
     }
     if (preparingRuns.has(conversationId) || agentRuntime.isConversationRunning(conversationId)) {
@@ -297,7 +311,8 @@ export function registerAgentConversationIpcHandlers({
       }
       removed.add(conversationId);
       agentRuntime.forgetConversation(conversationId);
-      return { ok: true as const };
+      const cleanup = await sessionPinStore.removePinOnSuccess(sessionPinNamespace, conversationId);
+      return "warning" in cleanup ? { ok: true as const, warning: cleanup.warning } : { ok: true as const };
     } finally {
       removing.delete(conversationId);
     }
@@ -305,4 +320,33 @@ export function registerAgentConversationIpcHandlers({
 
   ipcMain.handle("conversations:archive", (_event, payload: unknown) => removeConversation("archive", payload));
   ipcMain.handle("conversations:delete", (_event, payload: unknown) => removeConversation("delete", payload));
+
+  ipcMain.handle("conversations:setPinned", async (_event, payload: unknown) => {
+    const fail = (code: string, message: string) => ({ ok: false as const, error: { code, message } });
+    if (!payload || typeof payload !== "object") {
+      return fail("INVALID_REQUEST", "リクエストが不正です");
+    }
+    const conversationId = (payload as { conversationId?: unknown }).conversationId;
+    const desired = (payload as { isPinned?: unknown }).isPinned;
+    if (typeof conversationId !== "string" || !conversationId.trim() || typeof desired !== "boolean") {
+      return fail("INVALID_REQUEST", "conversationId と isPinned は必須です");
+    }
+    if (isHeartbeatAssistantSessionId(conversationId)) {
+      return fail("CONVERSATION_UNSUPPORTED", "この会話はピン留めできません");
+    }
+    if (removed.has(conversationId)) {
+      return fail("CONVERSATION_UNAVAILABLE", "この会話は既に除去されています");
+    }
+    if (removing.has(conversationId) || pinning.has(conversationId)) {
+      return fail("CONVERSATION_BUSY", "この会話は別の操作を処理中です");
+    }
+    pinning.add(conversationId);
+    try {
+      const result = await sessionPinStore.setPinned(sessionPinNamespace, conversationId, desired);
+      if (!result.ok) return fail(result.error.code, result.error.message);
+      return { ok: true as const, isPinned: result.isPinned };
+    } finally {
+      pinning.delete(conversationId);
+    }
+  });
 }

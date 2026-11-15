@@ -150,6 +150,7 @@ export type Session = {
   createdAt: number;
   updatedAt: number;
   hasUnread?: boolean;
+  isPinned?: boolean;
   backendSessionId?: string;
   messages: Message[];
 };
@@ -188,11 +189,15 @@ declare global {
         | { ok: false; error: { code: string; message: string } }
       >;
       archiveConversation: (conversationId: string) => Promise<
-        | { ok: true }
+        | { ok: true; warning?: { code: string; message: string } }
         | { ok: false; error: { code: string; message: string } }
       >;
       deleteConversation: (conversationId: string) => Promise<
-        | { ok: true }
+        | { ok: true; warning?: { code: string; message: string } }
+        | { ok: false; error: { code: string; message: string } }
+      >;
+      setConversationPinned: (conversationId: string, isPinned: boolean) => Promise<
+        | { ok: true; isPinned: boolean }
         | { ok: false; error: { code: string; message: string } }
       >;
       getAgentsFile: () => Promise<{ ok: true; path: string; exists: boolean }>;
