@@ -91,8 +91,15 @@ test("lilt-app が非表示 session の assistant 系更新を unread にする"
 test("chat-history が active 以外の unread dot と updatedAt 表示を持つ", () => {
   const content = fs.readFileSync("src/renderer/components/chat-history.ts", "utf8");
   assert.match(content, /const date = new Date\(session\.updatedAt\);/);
-  assert.match(content, /session\.hasUnread && !isActive && !isEditing/);
+  assert.match(content, /this\._shouldShowUnreadDot\(session\) && !isActive && !isEditing/);
   assert.match(content, /class="unread-dot"/);
+});
+
+test("chat-history は一覧・アクティビティの両方で同じ未読ドット判定（実行中は抑止）を使う (Issue #47)", () => {
+  const content = fs.readFileSync("src/renderer/components/chat-history.ts", "utf8");
+  assert.match(content, /_shouldShowUnreadDot\(session: Session\): boolean \{\s*return Boolean\(session\.hasUnread\) && !this\.runningSessionIds\.includes\(session\.id\);\s*\}/);
+  assert.match(content, /this\._shouldShowUnreadDot\(session\) && session\.id !== this\.activeSessionId/);
+  assert.match(content, /this\._shouldShowUnreadDot\(session\) && !isActive && !isEditing/);
 });
 
 test("message-list が user 左 / assistant・error 右の timestamp を描画する", () => {

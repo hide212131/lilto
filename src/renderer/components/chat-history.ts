@@ -410,7 +410,7 @@ export class LiltChatHistory extends LitElement {
           @keydown=${(event: KeyboardEvent) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); this._selectSession(session); } }}>
         <div class="activity-topline"><span class="activity-title">${session.title}</span><time class="activity-date" title=${date.toLocaleString()}>${this._formatDate(date)}</time>
           ${this._renderRunStatus(session.id)}
-          ${session.hasUnread && session.id !== this.activeSessionId ? html`<span class="unread-dot" aria-label="未読"></span>` : ""}</div>
+          ${this._shouldShowUnreadDot(session) && session.id !== this.activeSessionId ? html`<span class="unread-dot" aria-label="未読"></span>` : ""}</div>
         <div class="activity-preview">${text || (matchingPreview?.status === "error" ? "内容を取得できませんでした" : matchingPreview?.status === "empty" ? "まだメッセージがありません" : "読み込み中…")}</div>
         </div>
         ${matchingPreview?.status === "error" ? html`<button class="retry-preview" @click=${(event: Event) => { event.stopPropagation(); this.dispatchEvent(new CustomEvent("activity-preview-retry", { detail: { session }, bubbles: true, composed: true })); }}>再試行</button>` : ""}
@@ -428,6 +428,11 @@ export class LiltChatHistory extends LitElement {
     return this.runningSessionIds.includes(sessionId)
       ? html`<span class="run-status" aria-label="実行中">実行中</span>`
       : "";
+  }
+
+  /** Issue #47: suppress the unread dot while the session is running; it reappears once the run ends. */
+  private _shouldShowUnreadDot(session: Session): boolean {
+    return Boolean(session.hasUnread) && !this.runningSessionIds.includes(session.id);
   }
 
   private _renderCategory(id: string, title: string, sessions: Session[], emptyText: string) {
@@ -473,7 +478,7 @@ export class LiltChatHistory extends LitElement {
         </div>
         ${this._renderRunStatus(session.id)}
         ${busy ? html`<span class="run-status" role="status">処理中…</span>` : ""}
-        ${session.hasUnread && !isActive && !isEditing
+        ${this._shouldShowUnreadDot(session) && !isActive && !isEditing
           ? html`<span class="unread-dot" aria-label="未読"></span>`
           : ""}
         ${!isEditing && hasMenu ? html`
